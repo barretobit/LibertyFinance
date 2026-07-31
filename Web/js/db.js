@@ -1,11 +1,16 @@
 /* ===== File-based Data Layer ===== */
 
 const DB = (() => {
+  const DATA_FILE = new URLSearchParams(window.location.search).get('file');
   let data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [] };
   let loaded = false;
 
+  function api(path) {
+    return DATA_FILE ? path + '?file=' + encodeURIComponent(DATA_FILE) : path;
+  }
+
   async function load() {
-    const res = await fetch('/api/data');
+    const res = await fetch(api('/api/data'));
     if (!res.ok) throw new Error('Failed to load data');
     data = await res.json();
     data.custodians = data.custodians || [];
@@ -20,7 +25,7 @@ const DB = (() => {
   }
 
   async function persist() {
-    const res = await fetch('/api/data', {
+    const res = await fetch(api('/api/data'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -101,5 +106,5 @@ const DB = (() => {
     await persist();
   }
 
-  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll };
+  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, get currentFile() { return DATA_FILE || ''; } };
 })();

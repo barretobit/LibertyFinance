@@ -7,6 +7,16 @@ const App = {
   _charts: {},
 
   async init() {
+    const file = new URLSearchParams(window.location.search).get('file');
+    if (!file) {
+      const last = localStorage.getItem('liberty-finance-last-file');
+      window.location.replace(last ? 'app.html?file=' + encodeURIComponent(last) : 'index.html');
+      return;
+    }
+
+    const navProfile = document.getElementById('nav-profile');
+    if (navProfile) navProfile.textContent = file.replace(/\.json$/i, '');
+
     await DB.open();
     this._modals = {
       custodian: new bootstrap.Modal(document.getElementById('modal-custodian')),
@@ -830,7 +840,8 @@ const App = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'liberty-finance-backup-' + todayStr() + '.json';
+    const base = (DB.currentFile || 'liberty-finance').replace(/\.json$/i, '');
+    a.download = base + '-backup-' + todayStr() + '.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

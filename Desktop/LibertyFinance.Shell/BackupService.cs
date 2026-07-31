@@ -4,24 +4,30 @@ public static class BackupService
 {
     public static void Run(AppConfig config)
     {
-        var dataFile = Path.Combine(config.DataRoot, "liberty-finance.json");
-        if (!File.Exists(dataFile)) return;
+        var dataRoot = config.DataRoot;
+        if (!Directory.Exists(dataRoot)) return;
 
-        var backupsDir = Path.Combine(config.DataRoot, "Backups");
+        var dataFiles = Directory.GetFiles(dataRoot, "*.json");
+        if (dataFiles.Length == 0) return;
+
+        var backupsDir = Path.Combine(dataRoot, "Backups");
         Directory.CreateDirectory(backupsDir);
 
         var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmssfff");
-        var target = Path.Combine(backupsDir, $"liberty-finance-{stamp}.json");
-        File.Copy(dataFile, target);
-
         var max = Math.Max(config.Backups.MaxFiles, 1);
-        var files = Directory.GetFiles(backupsDir, "liberty-finance-*.json")
-            .OrderByDescending(f => f, StringComparer.OrdinalIgnoreCase)
-            .ToList();
 
-        foreach (var file in files.Skip(max))
+        foreach (var dataFile in dataFiles)
         {
-            try { File.Delete(file); } catch { /* best effort */ }
+            var baseName = Path.GetFileNameWithoutExtension(dataFile);
+            File.Copy(dataFile, Path.Combine(backupsDir, $"{baseName}-{stamp}.json"));
+
+            var pattern = $"{baseName}-*.json";
+            foreach (var old in Directory.GetFiles(backupsDir, pattern)
+                .OrderByDescending(f => f, StringComparer.OrdinalIgnoreCase)
+                .Skip(max))
+            {
+                try { File.Delete(old); } catch { /* best effort */ }
+            }
         }
     }
 }

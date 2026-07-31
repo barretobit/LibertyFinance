@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 namespace LibertyFinance.Shell;
 
@@ -28,9 +29,13 @@ public sealed class EmbeddedServer : IDisposable
         "{\"custodians\":[],\"portfolios\":[],\"accounts\":[],\"transactions\":[]," +
         "\"incomes\":[],\"expenses\":[],\"debts\":[],\"goals\":[]}";
 
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private readonly AppConfig _config;
     private readonly string _webRoot;
-    private readonly string _dataFile;
     private HttpListener? _listener;
     private CancellationTokenSource? _cts;
 
@@ -40,7 +45,6 @@ public sealed class EmbeddedServer : IDisposable
         _webRoot = string.IsNullOrWhiteSpace(config.WebRoot)
             ? Path.Combine(config.DataRoot, "Web")
             : config.WebRoot;
-        _dataFile = Path.Combine(config.DataRoot, "liberty-finance.json");
     }
 
     public string RootUrl { get; private set; } = "";
@@ -132,6 +136,12 @@ public sealed class EmbeddedServer : IDisposable
                 return;
             }
 
+            if (path.Equals("/api/files", StringComparison.OrdinalIgnoreCase))
+            {
+                await HandleFiles(ctx);
+                return;
+            }
+
             await HandleStatic(ctx, path);
         }
         catch
@@ -146,11 +156,13 @@ public sealed class EmbeddedServer : IDisposable
 
     private async Task HandleData(HttpListenerContext ctx)
     {
+        var dataFile = ResolveDataFile(GetFileParam(ctx));
+
         if (ctx.Request.HttpMethod == "GET")
         {
-            if (File.Exists(_dataFile))
+            if (File.Exists(dataFile))
             {
-                var bytes = await File.ReadAllBytesAsync(_dataFile);
+                var bytes = await File.ReadAllBytesAsync(dataFile);
                 Write(ctx.Response, bytes, "application/json", 200);
             }
             else
@@ -168,15 +180,88 @@ public sealed class EmbeddedServer : IDisposable
                 body = await reader.ReadToEndAsync();
             }
 
-            var dir = Path.GetDirectoryName(_dataFile);
+            var dir = Path.GetDirectoryName(dataFile);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(_dataFile, body, Encoding.UTF8);
+            await File.WriteAllTextAsync(dataFile, body, Encoding.UTF8);
 
             Write(ctx.Response, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json", 200);
             return;
         }
 
         Write(ctx.Response, null, null, 405);
+    }
+
+    private async Task HandleFiles(HttpListenerContext ctx)
+    {
+        var method = ctx.Request.HttpMethod;
+
+        if (method == "GET")
+        {
+            var files = new List<DataFileInfo>();
+            if (Directory.Exists(_config.DataRoot))
+            {
+                foreach (var filePath in Directory.GetFiles(_config.DataRoot, "*.json"))
+                {
+                    var info = new FileInfo(filePath);
+                    files.Add(new DataFileInfo(info.Name, info.Length, info.LastWriteTimeUtc.ToString("o")));
+                }
+            }
+            files.Sort((a, b) => string.CompareOrdinal(b.Modified, a.Modified));
+            var json = JsonSerializer.Serialize(new { files }, JsonOptions);
+            Write(ctx.Response, Encoding.UTF8.GetBytes(json), "application/json", 200);
+            return;
+        }
+
+        if (method == "POST")
+        {
+            var dataFile = ResolveDataFile(GetFileParam(ctx));
+            var dir = Path.GetDirectoryName(dataFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            if (!File.Exists(dataFile))
+                await File.WriteAllTextAsync(dataFile, EmptyData, Encoding.UTF8);
+            Write(ctx.Response, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json", 200);
+            return;
+        }
+
+        if (method == "DELETE")
+        {
+            var dataFile = ResolveDataFile(GetFileParam(ctx));
+            if (File.Exists(dataFile))
+            {
+                try { File.Delete(dataFile); } catch { /* best effort */ }
+            }
+            Write(ctx.Response, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json", 200);
+            return;
+        }
+
+        Write(ctx.Response, null, null, 405);
+    }
+
+    private static string? GetFileParam(HttpListenerContext ctx)
+    {
+        var query = ctx.Request.Url?.Query;
+        if (string.IsNullOrEmpty(query)) return null;
+
+        foreach (var pair in query.TrimStart('?').Split('&'))
+        {
+            var eq = pair.IndexOf('=');
+            if (eq <= 0) continue;
+            if (pair[..eq].Equals("file", StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(pair[(eq + 1)..]);
+        }
+        return null;
+    }
+
+    private string ResolveDataFile(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) fileName = "liberty-finance.json";
+        var safe = Path.GetFileName(fileName);
+        if (!string.Equals(safe, fileName, StringComparison.Ordinal) ||
+            !Path.GetExtension(safe).Equals(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Invalid data file name.");
+        }
+        return Path.Combine(_config.DataRoot, safe);
     }
 
     private async Task HandleStatic(HttpListenerContext ctx, string path)
@@ -229,4 +314,6 @@ public sealed class EmbeddedServer : IDisposable
         tcp.Stop();
         return port;
     }
+
+    private sealed record DataFileInfo(string Name, long Size, string Modified);
 }
