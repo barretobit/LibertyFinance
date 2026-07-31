@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/Desktop/">
+    <Project Path="Desktop/LibertyFinance.Shell/LibertyFinance.Shell.csproj" />
+  </Folder>
+  <Folder Name="/Web/">
+    <File Path="Web/index.html" />
+    <File Path="Web/app.html" />
+    <File Path="Web/server.js" />
+  </Folder>
+  <Folder Name="/Web/css/">
+    <File Path="Web/css/style.css" />
+  </Folder>
+  <Folder Name="/Web/js/">
+    <File Path="Web/js/app.js" />
+    <File Path="Web/js/db.js" />
+    <File Path="Web/js/pages.js" />
+    <File Path="Web/js/utils.js" />
+  </Folder>
+</Solution>
