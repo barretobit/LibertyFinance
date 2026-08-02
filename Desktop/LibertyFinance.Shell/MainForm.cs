@@ -13,9 +13,10 @@ public sealed class MainForm : Form
 
     private readonly WebView2 _webView = new();
     private readonly StatusStrip _statusStrip = new();
+    private readonly ToolStripStatusLabel _labelVersion;
     private readonly ToolStripStatusLabel _labelStatus = new() { Spring = true, TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
-    private readonly ToolStripButton _btnCheckUpdates = new("Check for updates");
-    private readonly ToolStripButton _btnOpenData = new("Open data folder");
+    private readonly ToolStripButton _btnCheckUpdates = new("Check for Updates");
+    private readonly ToolStripButton _btnOpenData = new("Open Data Folder");
     private bool _updating;
 
     public MainForm(AppConfig config, EmbeddedServer server)
@@ -23,8 +24,10 @@ public sealed class MainForm : Form
         _config = config;
         _server = server;
         _update = new UpdateService(config);
+        _labelVersion = new ToolStripStatusLabel(GetVersion()) { ForeColor = Color.Lime };
 
         Text = "Liberty Finance";
+        Icon = CreateAppIcon(GetWebRoot());
         StartPosition = FormStartPosition.CenterScreen;
         WindowState = FormWindowState.Maximized;
         Size = new Size(1280, 820);
@@ -40,6 +43,7 @@ public sealed class MainForm : Form
         _btnCheckUpdates.Click += OnCheckForUpdatesClick;
         _btnOpenData.Click += OnOpenDataClick;
 
+        _statusStrip.Items.Add(_labelVersion);
         _statusStrip.Items.Add(_labelStatus);
         _statusStrip.Items.Add(_btnOpenData);
         _statusStrip.Items.Add(_btnCheckUpdates);
@@ -60,6 +64,83 @@ public sealed class MainForm : Form
     {
         button.ForeColor = Color.Lime;
         button.Margin = new Padding(4, 1, 4, 1);
+    }
+
+    private string GetWebRoot()
+    {
+        return string.IsNullOrWhiteSpace(_config.WebRoot)
+            ? Path.Combine(_config.DataRoot, "Web")
+            : _config.WebRoot;
+    }
+
+    private string GetVersion()
+    {
+        try
+        {
+            var versionFile = Path.Combine(GetWebRoot(), "version.txt");
+            if (File.Exists(versionFile))
+            {
+                var text = File.ReadAllText(versionFile).Trim();
+                if (!string.IsNullOrEmpty(text)) return text;
+            }
+        }
+        catch { }
+        return "v1.0";
+    }
+
+    private static Icon CreateAppIcon(string webRoot)
+    {
+        try
+        {
+            var logoPath = Path.Combine(webRoot, "logo.png");
+            if (File.Exists(logoPath))
+            {
+                using var logoBmp = new Bitmap(logoPath);
+                if (logoBmp.Width > 0 && logoBmp.Height > 0)
+                    return Icon.FromHandle(logoBmp.GetHicon());
+            }
+        }
+        catch
+        {
+            // fall back to the drawn icon below
+        }
+
+        using var bmp = new Bitmap(256, 256);
+        using var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+        g.Clear(Color.FromArgb(8, 12, 8));
+
+        using var penGreen = new Pen(Color.FromArgb(51, 255, 51), 4);
+        using var penDimGreen = new Pen(Color.FromArgb(26, 122, 26), 2);
+        g.DrawRectangle(penGreen, 12, 12, 232, 232);
+        g.DrawRectangle(penDimGreen, 20, 20, 216, 216);
+
+        g.DrawLine(penGreen, 12, 36, 12, 12);
+        g.DrawLine(penGreen, 12, 12, 36, 12);
+        g.DrawLine(penGreen, 244, 36, 244, 12);
+        g.DrawLine(penGreen, 244, 12, 220, 12);
+        g.DrawLine(penGreen, 12, 220, 12, 244);
+        g.DrawLine(penGreen, 12, 244, 36, 244);
+        g.DrawLine(penGreen, 244, 220, 244, 244);
+        g.DrawLine(penGreen, 244, 244, 220, 244);
+
+        using var trendPen = new Pen(Color.FromArgb(51, 255, 51), 5);
+        g.DrawLines(trendPen, new Point[] {
+            new(60, 160),
+            new(100, 110),
+            new(140, 130),
+            new(200, 75)
+        });
+        using var brushGreen = new SolidBrush(Color.FromArgb(51, 255, 51));
+        g.FillEllipse(brushGreen, 194, 69, 12, 12);
+
+        using var font = new Font("Segoe UI", 72, FontStyle.Bold);
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString("LF", font, brushGreen, new RectangleF(0, 40, 256, 180), sf);
+
+        var hIcon = bmp.GetHicon();
+        return Icon.FromHandle(hIcon);
     }
 
     private sealed class DarkColorTable : ProfessionalColorTable
@@ -126,14 +207,14 @@ public sealed class MainForm : Form
         {
             await EnsureWebView2Runtime();
 
-            _labelStatus.Text = "Backing up data...";
+            _labelStatus.Text = "Backing up Data...";
             await Task.Run(() => BackupService.Run(_config));
 
-            _labelStatus.Text = "Checking for updates...";
+            _labelStatus.Text = "Checking for Updates...";
             await _webView.EnsureCoreWebView2Async();
 
             var message = await _update.CheckAndUpdateAsync(_ => { });
-            _labelStatus.Text = message ?? "Up to date.";
+            _labelStatus.Text = message ?? "Updated.";
 
             _webView.CoreWebView2.Navigate(_server.RootUrl);
         }
@@ -151,16 +232,16 @@ public sealed class MainForm : Form
 
         try
         {
-            _labelStatus.Text = "Checking for updates...";
+            _labelStatus.Text = "Checking for Updates...";
             var message = await _update.CheckAndUpdateAsync(_ => { });
-            _labelStatus.Text = message ?? "Up to date.";
+            _labelStatus.Text = message ?? "Updated.";
 
             if (message is not null && _webView.CoreWebView2 is not null)
                 _webView.CoreWebView2.Navigate(_server.RootUrl);
         }
         catch (Exception ex)
         {
-            _labelStatus.Text = "Update failed: " + ex.Message;
+            _labelStatus.Text = "Update Failed: " + ex.Message;
         }
         finally
         {

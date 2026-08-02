@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Liberty Finance</title>
+  <link rel="icon" type="image/png" href="logo.png" />
   <link rel="stylesheet" href="css/style.css?v=3" />
 </head>
 <body>
@@ -12,7 +13,7 @@
     <div class="landing-content">
       <div class="landing-badge">LCN-87.3</div>
       <h1 class="landing-title">LIBERTY<br />FINANCE</h1>
-      <p class="landing-subtitle">WEALTH MANAGEMENT SYSTEM v1.0</p>
+      <p class="landing-subtitle">WEALTH MANAGEMENT SYSTEM <span id="app-version">v1.0</span></p>
       <div class="landing-status" id="landing-status">SELECT A DATA FILE</div>
 
       <div id="file-list" class="file-list"></div>
@@ -128,7 +129,23 @@
       if (selected) enterFile(selected);
     });
 
+    async function loadVersion() {
+      try {
+        const res = await fetch('version.txt');
+        if (res.ok) {
+          const ver = (await res.text()).trim();
+          if (ver) {
+            const el = document.getElementById('app-version');
+            if (el) el.textContent = ver;
+          }
+        }
+      } catch (e) {
+        // fallback to v1.0
+      }
+    }
+
     loadFiles();
+    loadVersion();
   </script>
 </body>
 </html>

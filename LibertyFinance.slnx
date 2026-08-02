@@ -6,6 +6,7 @@
     <File Path="Web/index.html" />
     <File Path="Web/app.html" />
     <File Path="Web/server.js" />
+    <File Path="Web/version.txt" />
   </Folder>
   <Folder Name="/Web/css/">
     <File Path="Web/css/style.css" />

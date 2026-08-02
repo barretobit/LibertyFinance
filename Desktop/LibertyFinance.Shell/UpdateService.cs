@@ -41,7 +41,7 @@ public sealed class UpdateService
     public async Task<string?> CheckAndUpdateAsync(Action<string>? progress = null)
     {
         if (!string.IsNullOrWhiteSpace(_config.WebRoot))
-            return "Development mode: using repository Web folder";
+            return "Development Mode: using repository Web folder";
 
         var gh = _config.GitHub;
         if (string.IsNullOrWhiteSpace(gh.Owner) || string.IsNullOrWhiteSpace(gh.Repo))
