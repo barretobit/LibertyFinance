@@ -24,6 +24,7 @@ const App = {
       account: new bootstrap.Modal(document.getElementById('modal-account')),
       transaction: new bootstrap.Modal(document.getElementById('modal-transaction')),
       valuation: new bootstrap.Modal(document.getElementById('modal-valuation')),
+      metal: new bootstrap.Modal(document.getElementById('modal-metal')),
       income: new bootstrap.Modal(document.getElementById('modal-income')),
       expense: new bootstrap.Modal(document.getElementById('modal-expense')),
       debt: new bootstrap.Modal(document.getElementById('modal-debt')),
@@ -112,6 +113,9 @@ const App = {
         break;
       case 'valuation':
         this._showValuationModal(args[0]);
+        break;
+      case 'metal':
+        this._showMetalModal(args[0], args[1]);
         break;
       case 'income':
         this._showIncomeModal(args[0]);
@@ -308,18 +312,19 @@ const App = {
       const cur = a ? a.currency || 'CHF' : 'CHF';
       symbol.textContent = cur;
       pgSymbol.textContent = cur;
-      if (a && a.currentValue) amountField.value = a.currentValue;
-
-      // Show price/gram only for Precious Metal accounts
       if (a && a.accountType === 'Precious Metal') {
+        // Show price/gram and pre-fill from the account's current price
         priceGramGroup.style.display = 'block';
-        // Pre-fill with last known price per gram
-        DB.getByIndex('transactions', 'accountId', accountId).then(txs => {
-          const last = [...txs].filter(t => t.type === 'valuation' && t.pricePerGram).sort((a,b) => (b.date||'').localeCompare(a.date||''))[0];
-          if (last) priceGramField.value = last.pricePerGram;
-        });
+        const qty = a.quantity || 0;
+        if (a.pricePerGram) priceGramField.value = a.pricePerGram;
+        if (qty > 0 && parseFloat(priceGramField.value) > 0) {
+          amountField.value = (qty * parseFloat(priceGramField.value)).toFixed(2);
+        } else if (a.currentValue) {
+          amountField.value = a.currentValue;
+        }
       } else {
         priceGramGroup.style.display = 'none';
+        if (a && a.currentValue) amountField.value = a.currentValue;
       }
     });
 
@@ -345,6 +350,103 @@ const App = {
     picker.addEventListener('change', handler);
 
     this._modals.valuation.show();
+  },
+
+  _showMetalModal(direction, accountId) {
+    const title = document.getElementById('modal-metal-title');
+    const accIdField = document.getElementById('metal-account-id');
+    const dirField = document.getElementById('metal-direction');
+    const qtyField = document.getElementById('metal-qty');
+    const priceField = document.getElementById('metal-price');
+    const dateField = document.getElementById('metal-date');
+    const notesField = document.getElementById('metal-notes');
+    const totalEl = document.getElementById('metal-total');
+    const currentQtyEl = document.getElementById('metal-current-qty');
+    const curSymEl = document.getElementById('metal-currency-symbol');
+    const priceSymEl = document.getElementById('metal-price-symbol');
+
+    accIdField.value = accountId;
+    dirField.value = direction === 'sell' ? 'sell' : 'buy';
+    qtyField.value = '';
+    priceField.value = '';
+    notesField.value = '';
+    dateField.value = todayStr();
+    totalEl.textContent = '—';
+    title.textContent = direction === 'sell' ? 'SELL METAL' : 'BUY METAL';
+
+    this._metalCurrency = 'CHF';
+
+    DB.getById('accounts', accountId).then(a => {
+      if (!a) return;
+      this._metalCurrency = a.currency || 'CHF';
+      curSymEl.textContent = this._metalCurrency;
+      priceSymEl.textContent = this._metalCurrency + '/g';
+      currentQtyEl.textContent = (a.quantity || 0) + 'g ' + (a.metalType || '');
+      if (a.pricePerGram) priceField.value = a.pricePerGram;
+      if (direction === 'sell') qtyField.value = a.quantity || 0;
+      this._updateMetalTotal();
+    });
+
+    const update = () => this._updateMetalTotal();
+    qtyField.oninput = update;
+    priceField.oninput = update;
+
+    this._modals.metal.show();
+  },
+
+  _updateMetalTotal() {
+    const qty = parseFloat(document.getElementById('metal-qty').value);
+    const price = parseFloat(document.getElementById('metal-price').value);
+    const totalEl = document.getElementById('metal-total');
+    if (qty > 0 && price > 0) {
+      totalEl.textContent = formatCurrency(qty * price, this._metalCurrency);
+    } else {
+      totalEl.textContent = '—';
+    }
+  },
+
+  async saveMetal() {
+    const accountId = parseInt(document.getElementById('metal-account-id').value);
+    const direction = document.getElementById('metal-direction').value;
+    const qty = parseFloat(document.getElementById('metal-qty').value);
+    const price = parseFloat(document.getElementById('metal-price').value);
+    const date = document.getElementById('metal-date').value || todayStr();
+    const notes = document.getElementById('metal-notes').value.trim();
+
+    if (!qty || qty <= 0) { this.toast('ENTER A VALID QUANTITY'); return; }
+    if (!price || price <= 0) { this.toast('ENTER A VALID PRICE'); return; }
+
+    const account = await DB.getById('accounts', accountId);
+    if (!account) { this.toast('ACCOUNT NOT FOUND'); return; }
+
+    const currentQty = account.quantity || 0;
+    if (direction === 'sell' && qty > currentQty) { this.toast('NOT ENOUGH METAL TO SELL'); return; }
+
+    const newQty = direction === 'buy' ? currentQty + qty : currentQty - qty;
+    const total = qty * price;
+    const newValue = newQty * price;
+
+    await DB.add('transactions', {
+      accountId,
+      type: direction,
+      quantity: qty,
+      pricePerGram: price,
+      amount: direction === 'buy' ? total : -total,
+      date,
+      notes,
+      balanceAfter: newValue,
+      quantityAfter: newQty,
+      createdAt: nowISO()
+    });
+
+    account.quantity = newQty;
+    account.pricePerGram = price;
+    account.currentValue = newValue;
+    await DB.put('accounts', account);
+
+    this._modals.metal.hide();
+    this.toast(direction === 'buy' ? 'METAL PURCHASED' : 'METAL SOLD');
+    this.route();
   },
 
   async _showIncomeModal(editId) {
@@ -599,9 +701,11 @@ const App = {
       const old = await DB.getById('accounts', parseInt(id));
       existingValue = old ? old.currentValue || 0 : 0;
       data.currentValue = existingValue;
+      data.pricePerGram = old ? (old.pricePerGram || 0) : 0;
       await DB.put('accounts', data);
     } else {
       data.currentValue = 0;
+      data.pricePerGram = 0;
       await DB.add('accounts', data);
     }
     this._modals.account.hide();
@@ -663,7 +767,19 @@ const App = {
       balanceAfter: amount,
       createdAt: nowISO()
     };
-    if (priceGram > 0) txData.pricePerGram = priceGram;
+
+    if (account.accountType === 'Precious Metal') {
+      const qty = account.quantity || 0;
+      if (qty > 0) {
+        const derived = priceGram > 0 ? priceGram : amount / qty;
+        if (derived > 0) {
+          account.pricePerGram = derived;
+          txData.pricePerGram = derived;
+        }
+      }
+    } else if (priceGram > 0) {
+      txData.pricePerGram = priceGram;
+    }
     await DB.add('transactions', txData);
 
     account.currentValue = amount;
@@ -837,8 +953,14 @@ const App = {
     if (!tx) return;
     const account = await DB.getById('accounts', tx.accountId);
     if (account) {
-      // revert the account value
-      account.currentValue = (account.currentValue || 0) - tx.amount;
+      if (tx.type === 'buy' || tx.type === 'sell') {
+        const qty = account.quantity || 0;
+        account.quantity = tx.type === 'buy' ? Math.max(0, qty - (tx.quantity || 0)) : qty + (tx.quantity || 0);
+        account.currentValue = (account.quantity || 0) * (account.pricePerGram || tx.pricePerGram || 0);
+      } else {
+        // revert the account value
+        account.currentValue = (account.currentValue || 0) - tx.amount;
+      }
       await DB.put('accounts', account);
     }
     await DB.del('transactions', id);

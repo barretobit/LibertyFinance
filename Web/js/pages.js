@@ -1,12 +1,33 @@
 /* ===== Page Renderers ===== */
 
 function _effValue(transactions, fallback) {
-  const txs = transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+  const txs = transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return txs.length > 0 ? (txs[txs.length - 1].balanceAfter || 0) : (fallback || 0);
 }
 
 function _effCostBasis(transactions) {
+  // Precious metals: average-cost basis across buys/sells
+  const metalTxs = transactions.filter(t => t.type === 'buy' || t.type === 'sell');
+  if (metalTxs.length > 0) {
+    let spent = 0;
+    let qty = 0;
+    const sorted = [...metalTxs].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    sorted.forEach(t => {
+      if (t.type === 'buy') {
+        spent += Math.abs(t.amount || 0);
+        qty += Math.abs(t.quantity || 0);
+      } else {
+        const sold = Math.abs(t.quantity || 0);
+        if (qty > 0) {
+          spent = Math.max(0, spent - (spent / qty) * sold);
+          qty = Math.max(0, qty - sold);
+        }
+      }
+    });
+    return spent;
+  }
+
   let basis = 0;
   let hasFlow = false;
   transactions.forEach(t => {
@@ -46,7 +67,7 @@ const Pages = {
 
     // Total value — use latest transaction balance per account
     const accTxs = {};
-    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
       .forEach(t => {
         const prev = accTxs[t.accountId];
         if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
@@ -85,7 +106,7 @@ const Pages = {
     const _perfBal = {};
     perfAccountIds.forEach(id => _perfBal[id] = 0);
     const perfTxs = transactions
-      .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation') && perfAccountIds.has(t.accountId))
+      .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell') && perfAccountIds.has(t.accountId))
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     perfTxs.forEach(tx => {
       _perfBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
@@ -120,6 +141,8 @@ const Pages = {
         if (tx.date < cutoffDate) return;
         if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'buy') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         // Opening valuations count as deposit (pre-existing wealth entered tracking)
         if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
           netDeposits += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
@@ -218,11 +241,13 @@ const Pages = {
 
       const monthTxs = transactions.filter(tx =>
         (tx.date || '').startsWith(monthKey) &&
-        (tx.type === 'deposit' || tx.type === 'withdrawal')
+        (tx.type === 'deposit' || tx.type === 'withdrawal' || tx.type === 'buy' || tx.type === 'sell')
       );
       const netDeposits = monthTxs.reduce((sum, tx) => {
         if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'withdrawal') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'buy') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'sell') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         return sum;
       }, 0);
 
@@ -451,6 +476,8 @@ const Pages = {
         bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'deposit') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'withdrawal') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'buy') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'sell') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
           monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
         }
@@ -495,7 +522,7 @@ const Pages = {
       recent.forEach(tx => {
         const acc = accMap[tx.accountId];
         const typeLabel = tx.type.toUpperCase();
-        const typeClass = tx.type === 'deposit' ? 'deposit' : tx.type === 'withdrawal' ? 'withdrawal' : 'valuation';
+        const typeClass = (tx.type === 'deposit' || tx.type === 'buy') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell') ? 'withdrawal' : 'valuation';
         const displayAmount = tx.type === 'valuation' ? formatCurrency(tx.amount, acc ? acc.currency : 'CHF')
           : formatCurrency(Math.abs(tx.amount), acc ? acc.currency : 'CHF');
         const tr = document.createElement('tr');
@@ -531,7 +558,7 @@ const Pages = {
     const accEff = {};
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
-      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
         .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
       accEff[a.id] = {
         value: _effValue(accTxs, a.currentValue),
@@ -580,7 +607,7 @@ const Pages = {
       const accTxs = transactions.filter(t => t.accountId === a.id);
       const costBasis = _effCostBasis(accTxs);
       const effVal = _effValue(accTxs, a.currentValue);
-      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
         .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
       const lastDate = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
       const cur = a.currency || 'CHF';
@@ -637,7 +664,7 @@ const Pages = {
             </label>
           </div>
         </div>
-        <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${a.accountType === 'Precious Metal' && a.quantity ? ' &middot; ' + a.quantity + 'g ' + (a.metalType||'') : ''}</div>
+        <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${a.accountType === 'Precious Metal' && a.quantity ? ' &middot; ' + a.quantity + 'g ' + (a.metalType||'') + (a.pricePerGram ? ' @ ' + formatCurrency(a.pricePerGram, a.currency) + '/g' : '') : ''}</div>
         <div class="acc-value">${formatCurrency(effVal, a.currency)}</div>
         <div class="acc-pl ${plClass(pl)}">${pl >= 0 ? '+' : ''}${formatCurrency(pl, a.currency)}</div>
       </div>`;
@@ -669,15 +696,30 @@ const Pages = {
     plEl.style.color = pl >= 0 ? '#33ff33' : '#ff3333';
 
     const custName = custMap[account.custodianId] || '—';
+    const isPm = account.accountType === 'Precious Metal';
     let metaText = custName + ' / ' + (account.currency || 'CHF');
-    if (account.accountType === 'Precious Metal') {
-      metaText += ' / ' + (account.quantity || 0) + 'g ' + (account.metalType || '');
+    if (isPm) {
+      metaText += ' / ' + (account.metalType || 'METAL');
     }
     document.getElementById('acc-stat-meta').textContent = metaText;
 
+    // Precious metal stat cards & actions
+    const qtyCard = document.getElementById('acc-stat-qty-card');
+    const priceCard = document.getElementById('acc-stat-price-card');
+    const pmActions = document.getElementById('pm-actions');
+    const stdActions = document.getElementById('std-actions');
+    if (qtyCard) qtyCard.style.display = isPm ? 'block' : 'none';
+    if (priceCard) priceCard.style.display = isPm ? 'block' : 'none';
+    if (pmActions) pmActions.style.display = isPm ? 'flex' : 'none';
+    if (stdActions) stdActions.style.display = isPm ? 'none' : 'flex';
+    if (isPm) {
+      if (document.getElementById('acc-stat-qty')) document.getElementById('acc-stat-qty').textContent = (account.quantity || 0) + 'g';
+      if (document.getElementById('acc-stat-price')) document.getElementById('acc-stat-price').textContent = formatCurrency(account.pricePerGram || 0, account.currency) + '/g';
+    }
+
     // Performance period selectors
     const accTxsSorted = [...transactions]
-      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     const firstTx = accTxsSorted.length > 0 ? accTxsSorted[0] : null;
 
@@ -692,6 +734,8 @@ const Pages = {
         if (tx.date < cutoffDate) return;
         if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount);
         if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount);
+        if (tx.type === 'buy') netDeposits += Math.abs(tx.amount);
+        if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount);
         if (tx.type === 'valuation' && firstTx && firstTx.id === tx.id) {
           netDeposits += tx.amount;
         }
@@ -746,16 +790,30 @@ const Pages = {
       empty.style.display = 'none';
       sorted.forEach(tx => {
         const typeLabel = tx.type.toUpperCase();
-        let typeClass = tx.type === 'deposit' ? 'deposit' : tx.type === 'withdrawal' ? 'withdrawal' : 'valuation';
-        const displayAmount = tx.type === 'valuation'
-          ? formatCurrency(tx.amount, account.currency)
-          : formatCurrency(Math.abs(tx.amount), account.currency);
+        const typeClass = (tx.type === 'deposit' || tx.type === 'buy') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell') ? 'withdrawal' : 'valuation';
+        let displayAmount;
+        if (tx.type === 'valuation') {
+          displayAmount = formatCurrency(tx.amount, account.currency);
+        } else if (tx.type === 'buy' || tx.type === 'sell') {
+          displayAmount = (tx.amount >= 0 ? '+' : '-') + formatCurrency(Math.abs(tx.amount), account.currency);
+        } else {
+          displayAmount = formatCurrency(Math.abs(tx.amount), account.currency);
+        }
+        let notesHtml = escapeHtml(tx.notes || '');
+        if (tx.quantity != null) {
+          let metalLine = (tx.type === 'buy' ? '+' : tx.type === 'sell' ? '&minus;' : '') + tx.quantity + 'g';
+          if (tx.pricePerGram) metalLine += ' @ ' + tx.pricePerGram.toFixed(2) + ' ' + account.currency + '/g';
+          if (tx.quantityAfter != null) metalLine += ' &middot; QTY ' + tx.quantityAfter + 'g';
+          notesHtml += '<br><small style="color:#888">' + metalLine + '</small>';
+        } else if (tx.pricePerGram) {
+          notesHtml += '<br><small style="color:#888">' + tx.pricePerGram.toFixed(2) + ' ' + account.currency + '/g</small>';
+        }
         const tr = document.createElement('tr');
         tr.innerHTML = `<td>${formatDate(tx.date)}</td>
           <td><span class="tx-badge ${typeClass}">${typeLabel}</span></td>
           <td>${displayAmount}</td>
           <td>${formatCurrency(tx.balanceAfter || 0, account.currency)}</td>
-          <td>${escapeHtml(tx.notes || '')}${tx.pricePerGram ? '<br><small style="color:#888">' + tx.pricePerGram.toFixed(2) + ' CHF/g</small>' : ''}</td>
+          <td>${notesHtml}</td>
           <td><a class="tx-link" onclick="App.deleteTransaction(${tx.id})">DELETE</a></td>`;
         tbody.appendChild(tr);
       });
@@ -1023,7 +1081,7 @@ const Pages = {
           return DB.getAll('exchangeRates').then(rateEntries => {
             const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
             const accTxs = {};
-            transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+            transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
               .forEach(t => {
                 const prev = accTxs[t.accountId];
                 if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
