@@ -37,6 +37,13 @@ const Pages = {
     const custodianMap = {};
     custodians.forEach(c => custodianMap[c.id] = c.name);
 
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
+    const accCurrency = {};
+    accounts.forEach(a => accCurrency[a.id] = a.currency || 'CHF');
+
     // Total value — use latest transaction balance per account
     const accTxs = {};
     transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
@@ -53,12 +60,13 @@ const Pages = {
       const latest = accTxs[a.id];
       const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
       if (a.includeInNetWorth !== false) {
-        totalValue += v;
-        if (pfValues[a.portfolioId]) pfValues[a.portfolioId].value += v;
+        const vm = v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+        totalValue += vm;
+        if (pfValues[a.portfolioId]) pfValues[a.portfolioId].value += vm;
       }
     });
 
-    document.getElementById('dash-total-value').textContent = formatCurrency(totalValue);
+    document.getElementById('dash-total-value').textContent = formatCurrency(totalValue, mainCurrency);
 
     // Liquid Net Worth = included accounts minus Pillars portfolio (id=3), filtered by includeInLiquidNetWorth
     let liqTotal = 0;
@@ -66,10 +74,10 @@ const Pages = {
       const latest = accTxs[a.id];
       const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
       if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-        liqTotal += v;
+        liqTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
       }
     });
-    document.getElementById('dash-liquid-value').textContent = formatCurrency(liqTotal);
+    document.getElementById('dash-liquid-value').textContent = formatCurrency(liqTotal, mainCurrency);
 
     // Build perf-tracked month groups for performance card & chart
     const perfAccountIds = new Set(accounts.filter(a => a.trackPerformance !== false).map(a => a.id));
@@ -80,7 +88,7 @@ const Pages = {
       .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation') && perfAccountIds.has(t.accountId))
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     perfTxs.forEach(tx => {
-      _perfBal[tx.accountId] = tx.balanceAfter || 0;
+      _perfBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
       const mk = (tx.date || '').substring(0, 7);
       if (!mk) return;
       let tot = 0;
@@ -94,7 +102,7 @@ const Pages = {
       let totalAtCutoff = 0;
       txList.forEach(tx => {
         if (tx.date >= cutoffDate) return;
-        bal[tx.accountId] = tx.balanceAfter || 0;
+        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
         let t = 0;
         Object.values(bal).forEach(b => t += b);
         totalAtCutoff = t;
@@ -110,11 +118,11 @@ const Pages = {
       let netDeposits = 0;
       txList.forEach(tx => {
         if (tx.date < cutoffDate) return;
-        if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount);
-        if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount);
+        if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         // Opening valuations count as deposit (pre-existing wealth entered tracking)
         if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
-          netDeposits += tx.amount;
+          netDeposits += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
         }
       });
       const abs = currentTotal - totalAtCutoff - netDeposits;
@@ -128,7 +136,7 @@ const Pages = {
     const investTxs = perfTxs.filter(t => investAccountIds.has(t.accountId));
     const investBal = {};
     investAccountIds.forEach(id => investBal[id] = 0);
-    investTxs.forEach(tx => { investBal[tx.accountId] = tx.balanceAfter || 0; });
+    investTxs.forEach(tx => { investBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date); });
     const investCurrentTotal = Object.values(investBal).reduce((s, v) => s + v, 0);
     const _invPerfSince = (cutoffDate) => _computePerfSince(investAccountIds, investTxs, cutoffDate, investCurrentTotal);
 
@@ -144,7 +152,7 @@ const Pages = {
     const activePerf = document.querySelector('#perf-selectors .perf-btn.active');
     const perfMap = { ytd: _invPerfSince(ytdCutoff), '1y': _invPerfSince(oneYearAgo), '2y': _invPerfSince(twoYearsAgo), '3y': _invPerfSince(threeYearsAgo), max: _invPerfSince(investTxs.length > 0 ? investTxs[0].date : today) };
     const initial = perfMap[activePerf ? activePerf.dataset.perf : 'ytd'];
-    perfEl.innerHTML = (initial.abs >= 0 ? '+' : '') + formatCurrency(initial.abs) + ' <span class="perf-pct">(' + (initial.pct >= 0 ? '+' : '') + initial.pct.toFixed(2) + '%)</span>';
+    perfEl.innerHTML = (initial.abs >= 0 ? '+' : '') + formatCurrency(initial.abs, mainCurrency) + ' <span class="perf-pct">(' + (initial.pct >= 0 ? '+' : '') + initial.pct.toFixed(2) + '%)</span>';
     perfEl.style.color = initial.abs >= 0 ? '#33ff33' : '#ff3333';
 
     // Perf selector click handler
@@ -153,7 +161,7 @@ const Pages = {
         document.querySelectorAll('#perf-selectors .perf-btn').forEach(b => b.classList.remove('active'));
         this.classList.add('active');
         const val = perfMap[this.dataset.perf];
-        perfEl.innerHTML = (val.abs >= 0 ? '+' : '') + formatCurrency(val.abs) + ' <span class="perf-pct">(' + (val.pct >= 0 ? '+' : '') + val.pct.toFixed(2) + '%)</span>';
+        perfEl.innerHTML = (val.abs >= 0 ? '+' : '') + formatCurrency(val.abs, mainCurrency) + ' <span class="perf-pct">(' + (val.pct >= 0 ? '+' : '') + val.pct.toFixed(2) + '%)</span>';
         perfEl.style.color = val.abs >= 0 ? '#33ff33' : '#ff3333';
       };
     });
@@ -195,15 +203,15 @@ const Pages = {
 
       const monthIncome = allIncomes
         .filter(inc => inc.month === monthKey)
-        .reduce((sum, inc) => sum + (inc.amount || 0), 0);
+        .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || (monthKey + '-01')), 0);
 
       const yearExpenses = allExpenses.filter(exp => exp.year === year);
       const monthlyTot = yearExpenses
         .filter(exp => exp.type === 'monthly')
-        .reduce((sum, exp) => sum + (exp.amount || 0), 0);
+        .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
       const yearlyTot = yearExpenses
         .filter(exp => exp.type === 'yearly')
-        .reduce((sum, exp) => sum + (exp.amount || 0), 0);
+        .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
       const totalExpenses = monthlyTot + yearlyTot / 12;
 
       const expected = monthIncome - totalExpenses;
@@ -213,8 +221,8 @@ const Pages = {
         (tx.type === 'deposit' || tx.type === 'withdrawal')
       );
       const netDeposits = monthTxs.reduce((sum, tx) => {
-        if (tx.type === 'deposit') return sum + Math.abs(tx.amount);
-        if (tx.type === 'withdrawal') return sum - Math.abs(tx.amount);
+        if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'withdrawal') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         return sum;
       }, 0);
 
@@ -231,15 +239,15 @@ const Pages = {
       }
 
       const roiVal = monthlyRoi[monthKey];
-      const roiText = roiVal ? formatCurrency(roiVal.abs) + ' (' + (roiVal.abs >= 0 ? '+' : '') + roiVal.pct.toFixed(2) + '%)' : 'N/A';
+      const roiText = roiVal ? formatCurrency(roiVal.abs, mainCurrency) + ' (' + (roiVal.abs >= 0 ? '+' : '') + roiVal.pct.toFixed(2) + '%)' : 'N/A';
       const roiColor = roiVal ? (roiVal.abs >= 0 ? '#33ff33' : '#ff3333') : '#555';
 
       const col = document.createElement('div');
       col.className = 'col-2 mb-3';
       col.innerHTML = '<div class="earning-month">' +
         '<div class="earning-month-label">' + monthLabel + '</div>' +
-        '<div class="earning-month-line"><span class="lbl">ACCESS</span><span class="val">' + formatCurrency(expected) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">VALUE</span><span class="val">' + formatCurrency(netDeposits) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">ACCESS</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">VALUE</span><span class="val">' + formatCurrency(netDeposits, mainCurrency) + '</span></div>' +
         '<div class="earning-month-line"><span class="lbl">PERFORMANCE</span><span class="val" style="color:' + perfColor + '">' + perfText + '</span></div>' +
         '<div class="earning-month-line"><span class="lbl">ROI</span><span class="val" style="color:' + roiColor + '">' + roiText + '</span></div>' +
         '</div>';
@@ -270,7 +278,7 @@ const Pages = {
       results.forEach(goalRes => {
         const col = document.createElement('div');
         col.className = 'col-md-4 mb-3';
-        col.innerHTML = this._goalCardHtml(goalRes, accNames, true);
+        col.innerHTML = this._goalCardHtml(goalRes, accNames, true, mainCurrency);
         goalGrid.appendChild(col);
       });
     }
@@ -323,7 +331,7 @@ const Pages = {
       // Group by month — record total after last tx in each month
       const monthGroups = {};
       txList.forEach(tx => {
-        accBalances[tx.accountId] = tx.balanceAfter || 0;
+        accBalances[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
         const monthKey = (tx.date || '').substring(0, 7);
         if (!monthKey) return;
         let total = 0;
@@ -405,7 +413,7 @@ const Pages = {
               grid: { color: '#222' }
             },
             y: {
-              ticks: { color: '#888', font: { size: 10, family: "'Share Tech Mono', monospace" }, callback: v => isPercent ? v.toFixed(2) + '%' : formatCurrency(v) },
+              ticks: { color: '#888', font: { size: 10, family: "'Share Tech Mono', monospace" }, callback: v => isPercent ? v.toFixed(2) + '%' : formatCurrency(v, mainCurrency) },
               grid: { color: '#222' }
             }
           }
@@ -440,11 +448,11 @@ const Pages = {
           startBal = totalBal();
           monthFlows = 0;
         }
-        bal[tx.accountId] = tx.balanceAfter || 0;
-        if (tx.type === 'deposit') monthFlows += Math.abs(tx.amount);
-        if (tx.type === 'withdrawal') monthFlows -= Math.abs(tx.amount);
+        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'deposit') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'withdrawal') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
-          monthFlows += tx.amount;
+          monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
         }
       });
       if (curMonth !== null) {
@@ -506,6 +514,10 @@ const Pages = {
     const portfolios = await DB.getAll('portfolios');
     const accounts = await DB.getAll('accounts');
     const transactions = await DB.getAll('transactions');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
     const list = document.getElementById('portfolio-list');
     const empty = document.getElementById('portfolio-empty');
     list.innerHTML = '';
@@ -519,19 +531,25 @@ const Pages = {
     const accEff = {};
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
-      accEff[a.id] = { value: _effValue(accTxs, a.currentValue), cost: _effCostBasis(accTxs) };
+      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+        .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+      accEff[a.id] = {
+        value: _effValue(accTxs, a.currentValue),
+        cost: _effCostBasis(accTxs),
+        date: flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null
+      };
     });
 
     portfolios.forEach(p => {
       const pfAccounts = accounts.filter(a => a.portfolioId === p.id);
-      const totalVal = pfAccounts.reduce((s, a) => s + (accEff[a.id] ? accEff[a.id].value : 0), 0);
-      const totalCost = pfAccounts.reduce((s, a) => s + (accEff[a.id] ? accEff[a.id].cost : 0), 0);
+      const totalVal = pfAccounts.reduce((s, a) => s + (accEff[a.id] ? accEff[a.id].value * rateFor(a.currency || 'CHF', accEff[a.id].date || todayStr()) : 0), 0);
+      const totalCost = pfAccounts.reduce((s, a) => s + (accEff[a.id] ? accEff[a.id].cost * rateFor(a.currency || 'CHF', accEff[a.id].date || todayStr()) : 0), 0);
       const col = document.createElement('div');
       col.className = 'col-md-6 mb-3';
       col.innerHTML = `<div class="pf-card" onclick="App.navigate('portfolio-detail?id=${p.id}')">
         <div class="pf-name">${escapeHtml(p.name)}</div>
         <div class="pf-desc">${escapeHtml(p.description || '')}</div>
-        <div class="pf-meta">${pluralize(pfAccounts.length, 'ACCOUNT')} &middot; ${formatCurrency(totalVal)}</div>
+        <div class="pf-meta">${pluralize(pfAccounts.length, 'ACCOUNT')} &middot; ${formatCurrency(totalVal, mainCurrency)}</div>
       </div>`;
       list.appendChild(col);
     });
@@ -544,6 +562,10 @@ const Pages = {
     const accounts = await DB.getByIndex('accounts', 'portfolioId', id);
     const transactions = await DB.getAll('transactions');
     const custodians = await DB.getAll('custodians');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
     const custMap = {};
     custodians.forEach(c => custMap[c.id] = c.name);
 
@@ -558,18 +580,23 @@ const Pages = {
       const accTxs = transactions.filter(t => t.accountId === a.id);
       const costBasis = _effCostBasis(accTxs);
       const effVal = _effValue(accTxs, a.currentValue);
+      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+        .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+      const lastDate = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
+      const cur = a.currency || 'CHF';
+      const rate = rateFor(cur, lastDate || todayStr());
       effMap[a.id] = { costBasis, effVal, pl: effVal - costBasis };
-      totalValue += effVal;
-      totalCost += costBasis;
+      totalValue += effVal * rate;
+      totalCost += costBasis * rate;
     });
 
     const totalPL = totalValue - totalCost;
 
-    document.getElementById('pf-stat-value').textContent = formatCurrency(totalValue);
+    document.getElementById('pf-stat-value').textContent = formatCurrency(totalValue, mainCurrency);
     document.getElementById('pf-stat-accounts').textContent = accounts.length;
-    document.getElementById('pf-stat-cost').textContent = formatCurrency(totalCost);
+    document.getElementById('pf-stat-cost').textContent = formatCurrency(totalCost, mainCurrency);
     const plEl = document.getElementById('pf-stat-pl');
-    plEl.textContent = formatCurrency(totalPL);
+    plEl.textContent = formatCurrency(totalPL, mainCurrency);
     plEl.style.color = totalPL >= 0 ? '#33ff33' : '#ff3333';
 
     const list = document.getElementById('account-list');
@@ -767,6 +794,10 @@ const Pages = {
 
   async incomes() {
     const allIncomes = await DB.getAll('incomes');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
     const yearEl = document.getElementById('income-year-select');
     if (!yearEl) return;
 
@@ -780,12 +811,12 @@ const Pages = {
     const selectedYear = yearEl.value;
 
     const filtered = allIncomes.filter(inc => (inc.month || '').startsWith(selectedYear));
-    const total = filtered.reduce((sum, inc) => sum + (inc.amount || 0), 0);
+    const total = filtered.reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
     const monthsWithIncome = new Set(filtered.map(inc => inc.month).filter(Boolean)).size;
 
-    document.getElementById('income-total').textContent = formatCurrency(total);
+    document.getElementById('income-total').textContent = formatCurrency(total, mainCurrency);
     document.getElementById('income-avg-monthly').textContent =
-      formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0);
+      formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0, mainCurrency);
 
     const tbody = document.getElementById('income-list-body');
     const empty = document.getElementById('income-empty');
@@ -801,7 +832,7 @@ const Pages = {
     sorted.forEach(inc => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(inc.source)}</td>
-        <td>${formatCurrency(inc.amount)}</td>
+        <td>${formatCurrency(inc.amount, inc.currency)}</td>
         <td>${formatDate(inc.date)}</td>
         <td>${escapeHtml(inc.notes || '')}</td>
         <td>
@@ -816,6 +847,10 @@ const Pages = {
 
   async expenses() {
     const allExpenses = await DB.getAll('expenses');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
     const yearEl = document.getElementById('expense-year-select');
     if (!yearEl) return;
 
@@ -831,16 +866,17 @@ const Pages = {
     let totalAnnual = 0;
     let totalMonthly = 0;
     filtered.forEach(exp => {
+      const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'));
       if (exp.type === 'monthly') {
-        totalAnnual += (exp.amount || 0) * 12;
-        totalMonthly += (exp.amount || 0);
+        totalAnnual += v * 12;
+        totalMonthly += v;
       } else {
-        totalAnnual += (exp.amount || 0);
+        totalAnnual += v;
       }
     });
 
-    document.getElementById('expense-total').textContent = formatCurrency(totalAnnual);
-    document.getElementById('expense-total-monthly').textContent = formatCurrency(totalMonthly);
+    document.getElementById('expense-total').textContent = formatCurrency(totalAnnual, mainCurrency);
+    document.getElementById('expense-total-monthly').textContent = formatCurrency(totalMonthly, mainCurrency);
 
     const tbody = document.getElementById('expense-list-body');
     const empty = document.getElementById('expense-empty');
@@ -857,8 +893,8 @@ const Pages = {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(exp.text)}</td>
         <td><span class="tx-badge ${exp.type === 'monthly' ? 'deposit' : 'valuation'}">${exp.type.toUpperCase()}</span></td>
-        <td>${formatCurrency(exp.amount)}</td>
-        <td>${formatCurrency(annualCost)}</td>
+        <td>${formatCurrency(exp.amount, exp.currency)}</td>
+        <td>${formatCurrency(annualCost, exp.currency)}</td>
         <td>${escapeHtml(exp.notes || '')}</td>
         <td>
           <a class="tx-link me-2" onclick="App.showModal('expense', ${exp.id})">EDIT</a>
@@ -870,14 +906,16 @@ const Pages = {
 
   async debts() {
     const allDebts = await DB.getAll('debts');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
     const debtsIn = allDebts.filter(d => d.direction === 'in');
     const debtsOut = allDebts.filter(d => d.direction !== 'in');
 
     const totalIn = debtsIn.reduce((sum, d) => sum + (d.amount || 0), 0);
     const totalOut = debtsOut.reduce((sum, d) => sum + (d.amount || 0), 0);
 
-    document.getElementById('debt-owe').textContent = formatCurrency(totalOut);
-    document.getElementById('debt-in').textContent = formatCurrency(totalIn);
+    document.getElementById('debt-owe').textContent = formatCurrency(totalOut, mainCurrency);
+    document.getElementById('debt-in').textContent = formatCurrency(totalIn, mainCurrency);
 
     const tbody = document.getElementById('debt-list-body');
     const empty = document.getElementById('debt-empty');
@@ -895,7 +933,7 @@ const Pages = {
       tr.innerHTML = `<td>${escapeHtml(debt.description)}</td>
         <td>${escapeHtml(debt.person || '-')}</td>
         <td><span class="tx-badge ${isIn ? 'deposit' : 'withdrawal'}">${isIn ? 'OWED TO ME' : 'I OWE'}</span></td>
-        <td>${formatCurrency(debt.amount)}</td>
+        <td>${formatCurrency(debt.amount, mainCurrency)}</td>
         <td>${debt.date ? formatDate(debt.date) : '-'}</td>
         <td>${escapeHtml(debt.notes || '')}</td>
         <td>
@@ -931,15 +969,16 @@ const Pages = {
     });
   },
 
-  _goalCardHtml(goalRes, accNames, compact) {
+  _goalCardHtml(goalRes, accNames, compact, mainCurrency) {
     const goal = goalRes.goal;
+    const cur = mainCurrency || 'CHF';
     const total = goalRes.totalAvail;
     const target = goal.target || 0;
     const pct = target > 0 ? Math.min(100, (total / target) * 100) : 0;
     const diff = total - target;
     const reached = total >= target;
-    const statusText = diff < 0 ? 'SHORT BY ' + formatCurrency(-diff)
-      : diff > 0 ? 'EXCEED BY ' + formatCurrency(diff)
+    const statusText = diff < 0 ? 'SHORT BY ' + formatCurrency(-diff, cur)
+      : diff > 0 ? 'EXCEED BY ' + formatCurrency(diff, cur)
       : 'TARGET REACHED';
     const statusHtml =
       '<div class="goal-status-row">' +
@@ -950,8 +989,8 @@ const Pages = {
       const name = accNames[c.accountId] || ('ACCOUNT #' + c.accountId);
       return '<div class="goal-alloc-line">' +
         '<span class="goal-alloc-name">' + escapeHtml(name) + ' (' + c.pct + '%)</span>' +
-        '<span>' + formatCurrency(c.avail) + '</span>' +
-        '<span>' + formatCurrency(c.take) + '</span>' +
+        '<span>' + formatCurrency(c.avail, cur) + '</span>' +
+        '<span>' + formatCurrency(c.take, cur) + '</span>' +
         '</div>';
     }).join('') || '<div class="goal-alloc-line"><span class="text-muted">NO ACCOUNTS ASSIGNED</span></div>';
 
@@ -960,7 +999,7 @@ const Pages = {
       '<span class="goal-name"><span class="goal-priority">#' + (goal.order != null ? goal.order : '-') + '</span> ' + escapeHtml(goal.name) + '</span>' +
       '<span class="goal-reached" style="' + (reached ? '' : 'display:none') + '">REACHED</span>' +
       '</div>' +
-      '<div class="goal-target-line" style="color:' + (reached ? 'var(--accent)' : 'var(--text-primary)') + '">' + formatCurrency(target) + '</div>' +
+      '<div class="goal-target-line" style="color:' + (reached ? 'var(--accent)' : 'var(--text-primary)') + '">' + formatCurrency(target, cur) + '</div>' +
       statusHtml +
       '<div class="goal-progress"><div class="goal-progress-fill" style="width:' + pct + '%"></div></div>' +
       (compact ? '' :
@@ -979,26 +1018,35 @@ const Pages = {
   _buildGoalContext() {
     return DB.getAll('accounts').then(accounts => {
       return DB.getAll('transactions').then(transactions => {
-        const accTxs = {};
-        transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
-          .forEach(t => {
-            const prev = accTxs[t.accountId];
-            if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
+        return DB.getSettings().then(settings => {
+          const mainCurrency = settings.mainCurrency || 'CHF';
+          return DB.getAll('exchangeRates').then(rateEntries => {
+            const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
+            const accTxs = {};
+            transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation')
+              .forEach(t => {
+                const prev = accTxs[t.accountId];
+                if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
+              });
+            const accValue = {};
+            const accNames = {};
+            accounts.forEach(a => {
+              const latest = accTxs[a.id];
+              const raw = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
+              accValue[a.id] = raw * rateFor(a.currency || 'CHF', latest ? latest.date : todayStr());
+              accNames[a.id] = a.name;
+            });
+            return { accValue, accNames };
           });
-        const accValue = {};
-        const accNames = {};
-        accounts.forEach(a => {
-          const latest = accTxs[a.id];
-          accValue[a.id] = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-          accNames[a.id] = a.name;
         });
-        return { accValue, accNames };
       });
     });
   },
 
   async goals() {
     const goals = await DB.getAll('goals');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
     const { accValue, accNames } = await this._buildGoalContext();
 
     const list = document.getElementById('goal-list');
@@ -1020,9 +1068,189 @@ const Pages = {
     results.forEach(goalRes => {
       const col = document.createElement('div');
       col.className = 'col-md-4 mb-3';
-      col.innerHTML = this._goalCardHtml(goalRes, accNames);
+      col.innerHTML = this._goalCardHtml(goalRes, accNames, undefined, mainCurrency);
       list.appendChild(col);
     });
+  },
+
+  // ==================== EXCHANGE RATES ====================
+
+  async exchangeRates() {
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+
+    const accounts = await DB.getAll('accounts');
+    const incomes = await DB.getAll('incomes');
+    const expenses = await DB.getAll('expenses');
+
+    const usage = {};
+    function addUsage(cur, kind) {
+      if (!cur) return;
+      if (!usage[cur]) usage[cur] = { accounts: 0, incomes: 0, expenses: 0 };
+      usage[cur][kind]++;
+    }
+    accounts.forEach(a => addUsage(a.currency, 'accounts'));
+    incomes.forEach(inc => addUsage(inc.currency, 'incomes'));
+    expenses.forEach(exp => addUsage(exp.currency, 'expenses'));
+
+    const currencies = Object.keys(usage).filter(c => c !== mainCurrency).sort();
+
+    document.getElementById('rates-main-label').textContent = 'MAIN CURRENCY: ' + mainCurrency;
+
+    const dateEl = document.getElementById('rates-date');
+    const dateLabel = document.getElementById('rates-date-label');
+    const tbody = document.getElementById('rates-body');
+    const empty = document.getElementById('rates-empty');
+    const table = document.getElementById('rates-table');
+
+    const loadRates = async (date) => {
+      const saved = await DB.getRatesForDate(date);
+      const rates = (saved && saved.rates) || {};
+      dateLabel.textContent = formatDate(date);
+      tbody.innerHTML = '';
+
+      currencies.forEach(code => {
+        const info = usage[code];
+        const parts = [];
+        if (info.accounts) parts.push(info.accounts + ' ACCOUNT' + (info.accounts === 1 ? '' : 'S'));
+        if (info.incomes) parts.push(info.incomes + ' INCOME' + (info.incomes === 1 ? '' : 'S'));
+        if (info.expenses) parts.push(info.expenses + ' EXPENSE' + (info.expenses === 1 ? '' : 'S'));
+        const c = CURRENCIES.find(x => x.code === code) || { code, name: code };
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td><span class="rate-code">${escapeHtml(code)}</span></td>
+          <td>${escapeHtml(c.name)}</td>
+          <td>${parts.join(' &middot; ')}</td>
+          <td>
+            <div class="input-group" style="max-width: 280px">
+              <span class="input-group-text input-gta-addon">1 ${escapeHtml(code)}</span>
+              <input type="number" step="0.0001" min="0" class="form-control form-gta rate-input" data-code="${escapeHtml(code)}" placeholder="${escapeHtml(mainCurrency)}" value="${rates[code] != null ? rates[code] : ''}" />
+              <span class="input-group-text input-gta-addon">${escapeHtml(mainCurrency)}</span>
+            </div>
+          </td>`;
+        tbody.appendChild(tr);
+      });
+
+      if (currencies.length === 0) {
+        table.style.display = 'none';
+        empty.style.display = 'block';
+      } else {
+        table.style.display = '';
+        empty.style.display = 'none';
+      }
+    };
+
+    if (this._ratesDateHandler) dateEl.removeEventListener('change', this._ratesDateHandler);
+    this._ratesDateHandler = () => loadRates(dateEl.value);
+    dateEl.addEventListener('change', this._ratesDateHandler);
+
+    dateEl.value = todayStr();
+    loadRates(dateEl.value);
+  },
+
+  async saveRates() {
+    const dateEl = document.getElementById('rates-date');
+    const date = dateEl.value || todayStr();
+    const rates = {};
+    document.querySelectorAll('#rates-body .rate-input').forEach(inp => {
+      const code = inp.dataset.code;
+      const val = parseFloat(inp.value);
+      if (val > 0) rates[code] = val;
+    });
+    await DB.saveRatesForDate(date, rates);
+    App.toast('RATES SAVED');
+  },
+
+  async fetchRatesFromFrankfurter() {
+    const btn = document.getElementById('rates-fetch-btn');
+    const status = document.getElementById('rates-fetch-status');
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = 'FETCHING...';
+
+    try {
+      const settings = await DB.getSettings();
+      const mainCurrency = settings.mainCurrency || 'CHF';
+
+      const accounts = await DB.getAll('accounts');
+      const incomes = await DB.getAll('incomes');
+      const expenses = await DB.getAll('expenses');
+      const transactions = await DB.getAll('transactions');
+
+      const accCur = {};
+      accounts.forEach(a => accCur[a.id] = a.currency || 'CHF');
+
+      // Collect distinct (date -> set of foreign currencies) from records
+      const dateCurrencies = {};
+      const allForeign = new Set();
+      const track = (currency) => {
+        if (currency && currency !== mainCurrency) allForeign.add(currency);
+      };
+      const addDateCurrency = (date, currency) => {
+        if (!currency || currency === mainCurrency || !date) return;
+        if (!dateCurrencies[date]) dateCurrencies[date] = new Set();
+        dateCurrencies[date].add(currency);
+      };
+
+      incomes.forEach(inc => { track(inc.currency); addDateCurrency(inc.date, inc.currency); });
+      expenses.forEach(exp => { track(exp.currency); addDateCurrency(exp.date, exp.currency); });
+      transactions.forEach(tx => {
+        const cur = accCur[tx.accountId];
+        track(cur);
+        addDateCurrency(tx.date, cur);
+      });
+      accounts.forEach(a => track(a.currency));
+
+      // Ensure a "latest" snapshot so current account balances convert
+      const today = todayStr();
+      if (allForeign.size > 0) {
+        if (!dateCurrencies[today]) dateCurrencies[today] = new Set();
+        allForeign.forEach(c => dateCurrencies[today].add(c));
+      }
+
+      const dates = Object.keys(dateCurrencies).sort();
+      if (dates.length === 0) {
+        if (status) status.textContent = 'NO FOREIGN CURRENCIES IN USE';
+        return;
+      }
+
+      const api = 'https://api.frankfurter.dev/v1';
+      let filled = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      for (const date of dates) {
+        const codes = [...dateCurrencies[date]];
+        const url = api + '/' + date + '?from=' + encodeURIComponent(mainCurrency) + '&to=' + encodeURIComponent(codes.join(','));
+        let data;
+        try {
+          const res = await fetch(url);
+          if (!res.ok) { failed++; continue; }
+          data = await res.json();
+        } catch (e) {
+          failed++;
+          continue;
+        }
+        const fx = (data && data.rates) || {};
+
+        const existing = await DB.getRatesForDate(date);
+        const merged = Object.assign({}, existing ? existing.rates : {});
+        let changed = false;
+        codes.forEach(code => {
+          const raw = fx[code];
+          if (raw == null) return;
+          if (merged[code] != null) { skipped++; return; }
+          merged[code] = Math.round((1 / raw) * 100) / 100;
+          filled++;
+          changed = true;
+        });
+        if (changed) await DB.saveRatesForDate(date, merged);
+      }
+
+      if (status) status.textContent = 'DONE — ' + filled + ' FILLED, ' + skipped + ' SKIPPED, ' + failed + ' FAILED';
+      App.toast('RATES SYNCED FROM FRANKFURTER');
+      await this.exchangeRates();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
 };

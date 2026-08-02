@@ -16,6 +16,34 @@ function formatCurrency(amount, currencyCode = 'CHF') {
   return c.symbol + ' ' + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function _rateFromEntries(entries, fromCurrency, toCurrency, date) {
+  if (!fromCurrency || fromCurrency === toCurrency) return 1;
+  const sorted = entries
+    .filter(e => e.date && e.rates && e.rates[fromCurrency] != null)
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length === 0) return 1;
+  let best = null;
+  for (const e of sorted) {
+    if (e.date <= (date || '')) best = e;
+    else break;
+  }
+  return best ? best.rates[fromCurrency] : sorted[0].rates[fromCurrency];
+}
+
+async function lookupRate(fromCurrency, toCurrency, date) {
+  return _rateFromEntries(await DB.getAll('exchangeRates'), fromCurrency, toCurrency, date);
+}
+
+async function convertAmount(amount, fromCurrency, toCurrency, date) {
+  if (amount == null || amount === 0 || !fromCurrency || fromCurrency === toCurrency) return Number(amount) || 0;
+  const rate = await lookupRate(fromCurrency, toCurrency, date);
+  return Number(amount) * rate;
+}
+
+async function formatConverted(amount, fromCurrency, toCurrency, date) {
+  return formatCurrency(await convertAmount(amount, fromCurrency, toCurrency, date), toCurrency);
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return '—';
   const d = new Date(dateStr);

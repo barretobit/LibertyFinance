@@ -28,6 +28,7 @@ const App = {
       expense: new bootstrap.Modal(document.getElementById('modal-expense')),
       debt: new bootstrap.Modal(document.getElementById('modal-debt')),
       goal: new bootstrap.Modal(document.getElementById('modal-goal')),
+      settings: new bootstrap.Modal(document.getElementById('modal-settings')),
       importModal: new bootstrap.Modal(document.getElementById('modal-import')),
       confirm: new bootstrap.Modal(document.getElementById('modal-confirm'))
     };
@@ -81,6 +82,9 @@ const App = {
         case 'goals':
           Pages.goals();
           break;
+        case 'exchange-rates':
+          Pages.exchangeRates();
+          break;
       }
     }
   },
@@ -122,6 +126,24 @@ const App = {
         this._showGoalModal(args[0]);
         break;
     }
+  },
+
+  async showSettingsModal() {
+    const settings = await DB.getSettings();
+    const current = settings.mainCurrency || 'CHF';
+    const select = document.getElementById('settings-currency');
+    select.innerHTML = CURRENCIES.map(c =>
+      `<option value="${c.code}" ${c.code === current ? 'selected' : ''}>${c.code} - ${c.name}</option>`
+    ).join('');
+    this._modals.settings.show();
+  },
+
+  async saveSettings() {
+    const currency = document.getElementById('settings-currency').value;
+    if (!currency) { this.toast('SELECT A MAIN CURRENCY'); return; }
+    await DB.saveSettings({ mainCurrency: currency });
+    this._modals.settings.hide();
+    this.toast('SETTINGS SAVED');
   },
 
   _showCustodianModal(editId) {
@@ -325,14 +347,21 @@ const App = {
     this._modals.valuation.show();
   },
 
-  _showIncomeModal(editId) {
+  async _showIncomeModal(editId) {
     const title = document.getElementById('modal-income-title');
     const idField = document.getElementById('income-id');
     const monthField = document.getElementById('income-month-field');
     const sourceField = document.getElementById('income-source');
     const amountField = document.getElementById('income-amount');
+    const currencyField = document.getElementById('income-currency');
     const dateField = document.getElementById('income-date');
     const notesField = document.getElementById('income-notes');
+
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    currencyField.innerHTML = CURRENCIES.map(c =>
+      `<option value="${c.code}">${c.code} - ${c.symbol}</option>`
+    ).join('');
 
     if (editId) {
       title.textContent = 'EDIT INCOME';
@@ -342,6 +371,7 @@ const App = {
         monthField.value = inc.month || '';
         sourceField.value = inc.source || '';
         amountField.value = inc.amount || '';
+        currencyField.value = inc.currency || mainCurrency;
         dateField.value = inc.date || '';
         notesField.value = inc.notes || '';
         this._modals.income.show();
@@ -352,20 +382,28 @@ const App = {
       monthField.value = todayStr().substring(0, 7);
       sourceField.value = '';
       amountField.value = '';
+      currencyField.value = mainCurrency;
       dateField.value = todayStr();
       notesField.value = '';
       this._modals.income.show();
     }
   },
 
-  _showExpenseModal(editId) {
+  async _showExpenseModal(editId) {
     const title = document.getElementById('modal-expense-title');
     const idField = document.getElementById('expense-id');
     const textField = document.getElementById('expense-text');
     const amountField = document.getElementById('expense-amount');
+    const currencyField = document.getElementById('expense-currency');
     const typeField = document.getElementById('expense-type');
     const yearField = document.getElementById('expense-year');
     const notesField = document.getElementById('expense-notes');
+
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    currencyField.innerHTML = CURRENCIES.map(c =>
+      `<option value="${c.code}">${c.code} - ${c.symbol}</option>`
+    ).join('');
 
     const curYear = new Date().getFullYear();
     yearField.innerHTML = '';
@@ -383,6 +421,7 @@ const App = {
         idField.value = exp.id;
         textField.value = exp.text || '';
         amountField.value = exp.amount || '';
+        currencyField.value = exp.currency || mainCurrency;
         typeField.value = exp.type || 'monthly';
         yearField.value = exp.year || String(curYear);
         notesField.value = exp.notes || '';
@@ -393,6 +432,7 @@ const App = {
       idField.value = '';
       textField.value = '';
       amountField.value = '';
+      currencyField.value = mainCurrency;
       typeField.value = 'monthly';
       yearField.value = String(curYear);
       notesField.value = '';
@@ -645,7 +685,7 @@ const App = {
     if (!source) { this.toast('SOURCE IS REQUIRED'); return; }
     if (!amount || amount <= 0) { this.toast('ENTER A VALID AMOUNT'); return; }
 
-    const data = { month, source, amount, date, notes };
+    const data = { month, source, amount, date, notes, currency: document.getElementById('income-currency').value || 'CHF' };
     if (id) { data.id = parseInt(id); await DB.put('incomes', data); }
     else { await DB.add('incomes', data); }
 
@@ -665,7 +705,7 @@ const App = {
     if (!text) { this.toast('TEXT IS REQUIRED'); return; }
     if (!amount || amount <= 0) { this.toast('ENTER A VALID AMOUNT'); return; }
 
-    const data = { text, amount, type, year, notes };
+    const data = { text, amount, type, year, notes, currency: document.getElementById('expense-currency').value || 'CHF' };
     if (id) { data.id = parseInt(id); await DB.put('expenses', data); }
     else { await DB.add('expenses', data); }
 

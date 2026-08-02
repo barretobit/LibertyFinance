@@ -899,3 +899,19 @@ html, body {
   cursor: pointer;
 }
 .tx-link:hover { color: var(--danger); }
+
+/* ===== EXCHANGE RATES ===== */
+.rate-main-label {
+  font-family: var(--font-title);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 2px;
+}
+.rate-code {
+  font-family: var(--font-title);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 1px;
+}

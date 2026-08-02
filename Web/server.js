@@ -9,7 +9,8 @@ const PUBLIC_DIR = __dirname;
 
 const EMPTY_DATA = JSON.stringify({
   custodians: [], portfolios: [], accounts: [], transactions: [],
-  incomes: [], expenses: [], debts: [], goals: []
+  incomes: [], expenses: [], debts: [], goals: [],
+  exchangeRates: [], settings: {}
 });
 
 try {

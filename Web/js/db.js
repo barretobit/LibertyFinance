@@ -2,7 +2,7 @@
 
 const DB = (() => {
   const DATA_FILE = new URLSearchParams(window.location.search).get('file');
-  let data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [] };
+  let data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
   let loaded = false;
 
   function api(path) {
@@ -21,6 +21,8 @@ const DB = (() => {
     data.expenses = data.expenses || [];
     data.debts = data.debts || [];
     data.goals = data.goals || [];
+    data.exchangeRates = data.exchangeRates || [];
+    data.settings = data.settings || {};
     loaded = true;
   }
 
@@ -82,8 +84,32 @@ const DB = (() => {
     await persist();
   }
 
+  async function getSettings() {
+    if (!loaded) await load();
+    return data.settings || {};
+  }
+
+  async function saveSettings(settings) {
+    if (!loaded) await load();
+    data.settings = settings || {};
+    await persist();
+  }
+
+  async function getRatesForDate(date) {
+    if (!loaded) await load();
+    return data.exchangeRates.find(r => r.date === date) || null;
+  }
+
+  async function saveRatesForDate(date, rates) {
+    if (!loaded) await load();
+    const idx = data.exchangeRates.findIndex(r => r.date === date);
+    if (idx >= 0) data.exchangeRates[idx] = { date, rates };
+    else data.exchangeRates.push({ date, rates });
+    await persist();
+  }
+
   async function clearAll() {
-    data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [] };
+    data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
     await persist();
   }
 
@@ -101,10 +127,12 @@ const DB = (() => {
       incomes: importData.incomes || [],
       expenses: importData.expenses || [],
       debts: importData.debts || [],
-      goals: importData.goals || []
+      goals: importData.goals || [],
+      exchangeRates: importData.exchangeRates || [],
+      settings: importData.settings || {}
     };
     await persist();
   }
 
-  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, get currentFile() { return DATA_FILE || ''; } };
+  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, get currentFile() { return DATA_FILE || ''; } };
 })();
