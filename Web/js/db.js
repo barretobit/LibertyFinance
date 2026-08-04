@@ -2,7 +2,7 @@
 
 const DB = (() => {
   const DATA_FILE = new URLSearchParams(window.location.search).get('file');
-  let data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
+  let data = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
   let loaded = false;
 
   function api(path) {
@@ -17,6 +17,7 @@ const DB = (() => {
     data.portfolios = data.portfolios || [];
     data.accounts = data.accounts || [];
     data.transactions = data.transactions || [];
+    data.assets = data.assets || [];
     data.incomes = data.incomes || [];
     data.expenses = data.expenses || [];
     data.debts = data.debts || [];
@@ -109,7 +110,7 @@ const DB = (() => {
   }
 
   async function clearAll() {
-    data = { custodians: [], portfolios: [], accounts: [], transactions: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
+    data = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], exchangeRates: [], settings: {} };
     await persist();
   }
 
@@ -124,6 +125,7 @@ const DB = (() => {
       portfolios: importData.portfolios || [],
       accounts: importData.accounts || [],
       transactions: importData.transactions || [],
+      assets: importData.assets || [],
       incomes: importData.incomes || [],
       expenses: importData.expenses || [],
       debts: importData.debts || [],

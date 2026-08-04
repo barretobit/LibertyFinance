@@ -25,6 +25,8 @@ const App = {
       transaction: new bootstrap.Modal(document.getElementById('modal-transaction')),
       valuation: new bootstrap.Modal(document.getElementById('modal-valuation')),
       metal: new bootstrap.Modal(document.getElementById('modal-metal')),
+      asset: new bootstrap.Modal(document.getElementById('modal-asset')),
+      sellAsset: new bootstrap.Modal(document.getElementById('modal-sell-asset')),
       income: new bootstrap.Modal(document.getElementById('modal-income')),
       expense: new bootstrap.Modal(document.getElementById('modal-expense')),
       debt: new bootstrap.Modal(document.getElementById('modal-debt')),
@@ -117,6 +119,12 @@ const App = {
       case 'metal':
         this._showMetalModal(args[0], args[1]);
         break;
+      case 'asset':
+        this._showAssetModal(args[0], args[1]);
+        break;
+      case 'sellAsset':
+        this._showSellAssetModal(args[0]);
+        break;
       case 'income':
         this._showIncomeModal(args[0]);
         break;
@@ -196,7 +204,9 @@ const App = {
     }
   },
 
-  _showAccountModal(pfId, editId) {
+  async _showAccountModal(pfId, editId) {
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
     const title = document.getElementById('modal-account-title');
     const idField = document.getElementById('account-id');
     const pfIdField = document.getElementById('account-pfid');
@@ -211,11 +221,22 @@ const App = {
     const metalField = document.getElementById('account-metal');
     const qtyField = document.getElementById('account-qty');
     const pmFields = document.getElementById('pm-fields');
+    const startingFields = document.getElementById('starting-value-fields');
+    const startingValueField = document.getElementById('account-starting-value');
+    const startingDateField = document.getElementById('account-starting-date');
+    const startingSymbol = document.getElementById('account-starting-symbol');
 
-    function togglePmFields() {
-      pmFields.style.display = typeField.value === 'Precious Metal' ? 'block' : 'none';
+    function toggleAccountTypeFields() {
+      const t = typeField.value;
+      pmFields.style.display = t === 'Precious Metal' ? 'block' : 'none';
+      if (startingFields) startingFields.style.display = (editId || t === 'Tangible Asset') ? 'none' : 'block';
     }
-    typeField.onchange = togglePmFields;
+    typeField.onchange = toggleAccountTypeFields;
+
+    function updateStartingSymbol() {
+      if (startingSymbol) startingSymbol.textContent = currencyField.value || mainCurrency;
+    }
+    currencyField.onchange = updateStartingSymbol;
 
     // populate custodians
     DB.getAll('custodians').then(custodians => {
@@ -244,7 +265,8 @@ const App = {
         typeField.value = a.accountType || 'Cash Account';
         metalField.value = a.metalType || 'Gold';
         qtyField.value = a.quantity || 0;
-        togglePmFields();
+        toggleAccountTypeFields();
+        startingValueField.value = '';
         this._modals.account.show();
       });
     } else {
@@ -253,7 +275,7 @@ const App = {
       pfIdField.value = pfId || '';
       nameField.value = '';
       custodianField.value = '';
-      currencyField.value = 'CHF';
+      currencyField.value = mainCurrency;
       notesField.value = '';
       trackPerfField.checked = true;
       includeNwField.checked = true;
@@ -261,7 +283,10 @@ const App = {
       typeField.value = 'Cash Account';
       metalField.value = 'Gold';
       qtyField.value = 0;
-      togglePmFields();
+      toggleAccountTypeFields();
+      startingValueField.value = '';
+      startingDateField.value = todayStr();
+      updateStartingSymbol();
       this._modals.account.show();
     }
   },
@@ -446,6 +471,197 @@ const App = {
 
     this._modals.metal.hide();
     this.toast(direction === 'buy' ? 'METAL PURCHASED' : 'METAL SOLD');
+    this.route();
+  },
+
+  async _showAssetModal(accountId, assetId) {
+    const account = await DB.getById('accounts', accountId);
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const title = document.getElementById('modal-asset-title');
+    if (title) title.textContent = assetId ? 'EDIT ASSET' : 'ADD ASSET';
+    document.getElementById('asset-id').value = assetId || '';
+    document.getElementById('asset-account-id').value = accountId;
+    const curField = document.getElementById('asset-currency');
+    curField.innerHTML = CURRENCIES.map(c =>
+      `<option value="${c.code}">${c.code} - ${c.symbol}</option>`
+    ).join('');
+    if (assetId) {
+      const asset = await DB.getById('assets', assetId);
+      if (asset) {
+        document.getElementById('asset-name').value = asset.name || '';
+        document.getElementById('asset-value').value = asset.purchaseValue != null ? asset.purchaseValue : '';
+        document.getElementById('asset-depreciation').value = asset.depreciationPct != null ? asset.depreciationPct : '';
+        document.getElementById('asset-date').value = asset.purchaseDate || todayStr();
+        curField.value = asset.currency || (account && account.currency) || mainCurrency;
+      }
+    } else {
+      document.getElementById('asset-name').value = '';
+      document.getElementById('asset-value').value = '';
+      document.getElementById('asset-depreciation').value = '';
+      document.getElementById('asset-date').value = todayStr();
+      curField.value = (account && account.currency) || mainCurrency;
+    }
+    this._modals.asset.show();
+  },
+
+  async saveAsset() {
+    const assetId = parseInt(document.getElementById('asset-id').value) || 0;
+    const accountId = parseInt(document.getElementById('asset-account-id').value);
+    const name = document.getElementById('asset-name').value.trim();
+    const purchaseValue = parseFloat(document.getElementById('asset-value').value);
+    const depreciationPct = parseFloat(document.getElementById('asset-depreciation').value) || 0;
+    const purchaseDate = document.getElementById('asset-date').value || todayStr();
+    const currency = document.getElementById('asset-currency').value || 'CHF';
+
+    if (!name) { this.toast('NAME IS REQUIRED'); return; }
+    if (!purchaseValue || purchaseValue <= 0) { this.toast('ENTER A VALID VALUE'); return; }
+    if (isNaN(depreciationPct) || depreciationPct < -100 || depreciationPct > 100) { this.toast('DEPRECIATION MUST BE BETWEEN -100 AND 100'); return; }
+
+    if (assetId) {
+      const asset = await DB.getById('assets', assetId);
+      if (!asset) { this.toast('ASSET NOT FOUND'); return; }
+      asset.name = name;
+      asset.purchaseValue = purchaseValue;
+      asset.depreciationPct = depreciationPct;
+      asset.purchaseDate = purchaseDate;
+      asset.currency = currency;
+      await DB.put('assets', asset);
+
+      const account = await DB.getById('accounts', accountId);
+      if (account) {
+        const accountAssets = await DB.getByIndex('assets', 'accountId', accountId);
+        const rateEntries = await DB.getAll('exchangeRates');
+        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', account.currency || 'CHF', date);
+        const metrics = assetAccountMetrics(accountAssets, purchaseDate, rateToAcc);
+        const addTx = (await DB.getByIndex('transactions', 'assetId', assetId)).find(t => t.type === 'asset-add');
+        if (addTx) {
+          addTx.amount = purchaseValue;
+          addTx.date = purchaseDate;
+          addTx.notes = 'ASSET ADDED: ' + name;
+          addTx.balanceAfter = metrics.value;
+          await DB.put('transactions', addTx);
+        }
+        account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
+        await DB.put('accounts', account);
+      }
+      if (asset.sold) {
+        const sellTx = (await DB.getByIndex('transactions', 'assetId', assetId)).find(t => t.type === 'asset-sell');
+        if (sellTx && sellTx.notes !== 'ASSET SOLD: ' + name) {
+          sellTx.notes = 'ASSET SOLD: ' + name;
+          await DB.put('transactions', sellTx);
+        }
+      }
+
+      this._modals.asset.hide();
+      this.toast('ASSET UPDATED');
+      this.route();
+      return;
+    }
+
+    const asset = { accountId, name, purchaseValue, depreciationPct, purchaseDate, currency, sold: false, saleValue: null, saleDate: null };
+    const newId = await DB.add('assets', asset);
+
+    const account = await DB.getById('accounts', accountId);
+    if (account) {
+      const accountAssets = await DB.getByIndex('assets', 'accountId', accountId);
+      const rateEntries = await DB.getAll('exchangeRates');
+      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', account.currency || 'CHF', date);
+      const metrics = assetAccountMetrics(accountAssets, purchaseDate, rateToAcc);
+      await DB.add('transactions', {
+        accountId,
+        assetId: newId,
+        type: 'asset-add',
+        amount: purchaseValue,
+        date: purchaseDate,
+        notes: 'ASSET ADDED: ' + name,
+        balanceAfter: metrics.value,
+        createdAt: nowISO()
+      });
+      account.currentValue = metrics.value;
+      await DB.put('accounts', account);
+    }
+
+    this._modals.asset.hide();
+    this.toast('ASSET ADDED');
+    this.route();
+  },
+
+  async _showSellAssetModal(assetId) {
+    const asset = await DB.getById('assets', assetId);
+    if (!asset) return;
+    document.getElementById('sell-asset-id').value = assetId;
+    document.getElementById('sell-asset-name').textContent = asset.name || '—';
+    document.getElementById('sell-asset-value').value = asset.sold ? (asset.saleValue || '') : '';
+    document.getElementById('sell-asset-date').value = asset.saleDate || todayStr();
+    document.getElementById('sell-asset-currency').textContent = asset.currency || 'CHF';
+    this._modals.sellAsset.show();
+  },
+
+  async saveSellAsset() {
+    const assetId = parseInt(document.getElementById('sell-asset-id').value);
+    const saleValue = parseFloat(document.getElementById('sell-asset-value').value);
+    const saleDate = document.getElementById('sell-asset-date').value || todayStr();
+
+    if (!saleValue || saleValue < 0) { this.toast('ENTER A VALID SALE VALUE'); return; }
+
+    const asset = await DB.getById('assets', assetId);
+    if (!asset) { this.toast('ASSET NOT FOUND'); return; }
+    if (asset.sold) { this.toast('ASSET ALREADY SOLD'); return; }
+
+    asset.sold = true;
+    asset.saleValue = saleValue;
+    asset.saleDate = saleDate;
+    await DB.put('assets', asset);
+
+    const account = await DB.getById('accounts', asset.accountId);
+    if (account) {
+      const accountAssets = await DB.getByIndex('assets', 'accountId', asset.accountId);
+      const rateEntries = await DB.getAll('exchangeRates');
+      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', account.currency || 'CHF', date);
+      const metrics = assetAccountMetrics(accountAssets, saleDate, rateToAcc);
+      await DB.add('transactions', {
+        accountId: asset.accountId,
+        assetId,
+        type: 'asset-sell',
+        amount: saleValue,
+        date: saleDate,
+        notes: 'ASSET SOLD: ' + (asset.name || ''),
+        balanceAfter: metrics.value,
+        createdAt: nowISO()
+      });
+      account.currentValue = metrics.value;
+      await DB.put('accounts', account);
+    }
+
+    this._modals.sellAsset.hide();
+    this.toast('ASSET SOLD');
+    this.route();
+  },
+
+  async deleteAsset(id) {
+    const confirmed = await this.confirm('DELETE ASSET?', 'Remove this asset and its transactions?');
+    if (!confirmed) return;
+
+    const asset = await DB.getById('assets', id);
+    if (!asset) return;
+
+    const txs = await DB.getByIndex('transactions', 'assetId', id);
+    for (const tx of txs) {
+      await DB.del('transactions', tx.id);
+    }
+    await DB.del('assets', id);
+
+    const account = await DB.getById('accounts', asset.accountId);
+    if (account && account.accountType === 'Tangible Asset') {
+      const accountAssets = await DB.getByIndex('assets', 'accountId', asset.accountId);
+      const rateEntries = await DB.getAll('exchangeRates');
+      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', account.currency || 'CHF', date);
+      account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
+      await DB.put('accounts', account);
+    }
+
+    this.toast('ASSET DELETED');
     this.route();
   },
 
@@ -695,6 +911,11 @@ const App = {
       currentValue: 0
     };
 
+    const isNew = !id;
+    const accountType = document.getElementById('account-type').value;
+    const startingValue = isNew && accountType !== 'Tangible Asset' ? (parseFloat(document.getElementById('account-starting-value').value) || 0) : 0;
+    const startingDate = isNew ? (document.getElementById('account-starting-date').value || todayStr()) : todayStr();
+
     let existingValue = 0;
     if (id) {
       data.id = parseInt(id);
@@ -706,7 +927,26 @@ const App = {
     } else {
       data.currentValue = 0;
       data.pricePerGram = 0;
-      await DB.add('accounts', data);
+      const accountId = await DB.add('accounts', data);
+      if (startingValue > 0) {
+        const txData = {
+          accountId,
+          type: 'valuation',
+          amount: startingValue,
+          date: startingDate,
+          notes: 'OPENING VALUATION',
+          balanceAfter: startingValue,
+          createdAt: nowISO()
+        };
+        if (data.accountType === 'Precious Metal' && (data.quantity || 0) > 0) {
+          const derived = startingValue / data.quantity;
+          data.pricePerGram = derived;
+          txData.pricePerGram = derived;
+        }
+        await DB.add('transactions', txData);
+        data.currentValue = startingValue;
+        await DB.put('accounts', data);
+      }
     }
     this._modals.account.hide();
     this.toast('ACCOUNT SAVED');
@@ -940,6 +1180,10 @@ const App = {
     for (const tx of txs) {
       await DB.del('transactions', tx.id);
     }
+    const assets = await DB.getByIndex('assets', 'accountId', id);
+    for (const asset of assets) {
+      await DB.del('assets', asset.id);
+    }
     await DB.del('accounts', id);
     this.toast('ACCOUNT DELETED');
     this.navigate('portfolio-detail?id=' + this.currentPfId);
@@ -953,7 +1197,9 @@ const App = {
     if (!tx) return;
     const account = await DB.getById('accounts', tx.accountId);
     if (account) {
-      if (tx.type === 'buy' || tx.type === 'sell') {
+      if (tx.type === 'asset-add' || tx.type === 'asset-sell') {
+        // Tangible asset events do not change the computed account value
+      } else if (tx.type === 'buy' || tx.type === 'sell') {
         const qty = account.quantity || 0;
         account.quantity = tx.type === 'buy' ? Math.max(0, qty - (tx.quantity || 0)) : qty + (tx.quantity || 0);
         account.currentValue = (account.quantity || 0) * (account.pricePerGram || tx.pricePerGram || 0);
@@ -961,7 +1207,9 @@ const App = {
         // revert the account value
         account.currentValue = (account.currentValue || 0) - tx.amount;
       }
-      await DB.put('accounts', account);
+      if (tx.type !== 'asset-add' && tx.type !== 'asset-sell') {
+        await DB.put('accounts', account);
+      }
     }
     await DB.del('transactions', id);
     this.toast('TRANSACTION DELETED');

@@ -24,7 +24,7 @@ public sealed class MainForm : Form
         _config = config;
         _server = server;
         _update = new UpdateService(config);
-        _labelVersion = new ToolStripStatusLabel(GetVersion()) { ForeColor = Color.Lime };
+        _labelVersion = new ToolStripStatusLabel(GetVersion()) { ForeColor = Color.DimGray };
 
         Text = "Liberty Finance";
         Icon = CreateAppIcon(GetWebRoot());
@@ -39,7 +39,7 @@ public sealed class MainForm : Form
         Controls.Add(_webView);
 
         _labelStatus.Text = "Starting...";
-        _labelStatus.ForeColor = Color.Lime;
+        _labelStatus.ForeColor = Color.DimGray;
         _btnCheckUpdates.Click += OnCheckForUpdatesClick;
         _btnOpenData.Click += OnOpenDataClick;
 
@@ -49,7 +49,7 @@ public sealed class MainForm : Form
         _statusStrip.Items.Add(_btnCheckUpdates);
         _statusStrip.Dock = DockStyle.Bottom;
         _statusStrip.BackColor = Color.Black;
-        _statusStrip.ForeColor = Color.Lime;
+        _statusStrip.ForeColor = Color.DimGray;
         _statusStrip.SizingGrip = false;
         _statusStrip.Renderer = new ToolStripProfessionalRenderer(new DarkColorTable());
 
@@ -62,7 +62,7 @@ public sealed class MainForm : Form
 
     private static void StyleBarButton(ToolStripButton button)
     {
-        button.ForeColor = Color.Lime;
+        button.ForeColor = Color.DimGray;
         button.Margin = new Padding(4, 1, 4, 1);
     }
 

@@ -9,7 +9,7 @@
   --border-accent: #33ff33;
   --text-primary: #d0d0d0;
   --text-secondary: #888888;
-  --text-muted: #555555;
+  --text-muted: #999999;
   --accent: #33ff33;
   --accent-dim: #1a7a1a;
   --accent-glow: rgba(51, 255, 51, 0.15);
@@ -21,6 +21,9 @@
 }
 
 * { box-sizing: border-box; }
+
+/* Bootstrap's default text-muted (#6c757d) is near-invisible on this dark theme */
+.text-muted { color: var(--text-muted) !important; }
 
 html, body {
   margin: 0;
@@ -877,6 +880,19 @@ html, body {
 .tx-badge.withdrawal { border-color: var(--danger); color: var(--danger); }
 .tx-badge.valuation { border-color: #ffaa00; color: #ffaa00; }
 
+/* ===== RATE BADGES ===== */
+.badge-rate {
+  font-family: var(--font-title);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 2px 8px;
+  margin: 0 4px 4px 0;
+  display: inline-block;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 0;
+}
+
 /* ===== TYPE BADGE ===== */
 .type-badge {
   font-family: var(--font-title);
@@ -900,6 +916,11 @@ html, body {
 }
 .tx-link:hover { color: var(--danger); }
 
+/* ===== TANGIBLE ASSETS ===== */
+.ta-pl { font-family: var(--font-title); font-size: 14px; }
+.ta-pl.pos { color: var(--accent); }
+.ta-pl.neg { color: var(--danger); }
+
 /* ===== EXCHANGE RATES ===== */
 .rate-main-label {
   font-family: var(--font-title);
@@ -914,4 +935,14 @@ html, body {
   font-weight: 600;
   color: var(--accent);
   letter-spacing: 1px;
+}
+
+/* ===== FORECAST ===== */
+.stat-value.forecast-stat { font-size: 24px; }
+.stat-value.forecast-stat.pos { color: var(--accent); }
+.stat-value.forecast-stat.neg { color: var(--danger); }
+.stat-value.forecast-stat .perf-pct { font-size: 15px; font-weight: 400; letter-spacing: 1px; }
+.forecast-chart-wrap {
+  position: relative;
+  height: 240px;
 }

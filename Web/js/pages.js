@@ -1,7 +1,7 @@
 /* ===== Page Renderers ===== */
 
 function _effValue(transactions, fallback) {
-  const txs = transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
+  const txs = transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
     .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   return txs.length > 0 ? (txs[txs.length - 1].balanceAfter || 0) : (fallback || 0);
 }
@@ -54,9 +54,16 @@ const Pages = {
     const portfolios = await DB.getAll('portfolios');
     const transactions = await DB.getAll('transactions');
     const custodians = await DB.getAll('custodians');
+    const assets = await DB.getAll('assets');
 
     const custodianMap = {};
     custodians.forEach(c => custodianMap[c.id] = c.name);
+
+    const accountAssets = {};
+    assets.forEach(a => {
+      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
+      accountAssets[a.accountId].push(a);
+    });
 
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
@@ -67,7 +74,7 @@ const Pages = {
 
     // Total value — use latest transaction balance per account
     const accTxs = {};
-    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
+    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
       .forEach(t => {
         const prev = accTxs[t.accountId];
         if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
@@ -78,10 +85,16 @@ const Pages = {
     portfolios.forEach(p => pfValues[p.id] = { name: p.name, value: 0 });
 
     accounts.forEach(a => {
-      const latest = accTxs[a.id];
-      const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
+      let latest = accTxs[a.id];
+      let v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
+      let vDate = latest ? latest.date : todayStr();
+      if (a.accountType === 'Tangible Asset') {
+        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+        v = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
+        vDate = todayStr();
+      }
       if (a.includeInNetWorth !== false) {
-        const vm = v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+        const vm = v * rateFor(accCurrency[a.id], vDate);
         totalValue += vm;
         if (pfValues[a.portfolioId]) pfValues[a.portfolioId].value += vm;
       }
@@ -95,7 +108,12 @@ const Pages = {
       const latest = accTxs[a.id];
       const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
       if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-        liqTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+        if (a.accountType === 'Tangible Asset') {
+          const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+          liqTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
+        } else {
+          liqTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+        }
       }
     });
     document.getElementById('dash-liquid-value').textContent = formatCurrency(liqTotal, mainCurrency);
@@ -106,7 +124,7 @@ const Pages = {
     const _perfBal = {};
     perfAccountIds.forEach(id => _perfBal[id] = 0);
     const perfTxs = transactions
-      .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell') && perfAccountIds.has(t.accountId))
+      .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell') && perfAccountIds.has(t.accountId))
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     perfTxs.forEach(tx => {
       _perfBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
@@ -256,7 +274,7 @@ const Pages = {
       let perfColor, perfText;
       if (expected > 0) {
         const pct = (netDeposits / expected) * 100;
-        perfColor = pct >= 100 ? '#33ff33' : '#ffaa00';
+        perfColor = pct >= 0 ? '#33ff33' : '#ff3333';
         perfText = pct.toFixed(0) + '%';
       } else {
         perfColor = '#555';
@@ -300,13 +318,285 @@ const Pages = {
         ((a.order != null ? a.order : Infinity) - (b.order != null ? b.order : Infinity)) || (a.id - b.id)
       );
       const results = this._computeGoalWaterfall(goals, accValue);
-      results.forEach(goalRes => {
+      results.slice(0, 3).forEach(goalRes => {
         const col = document.createElement('div');
         col.className = 'col-md-4 mb-3';
         col.innerHTML = this._goalCardHtml(goalRes, accNames, true, mainCurrency);
         goalGrid.appendChild(col);
       });
     }
+
+    // ==================== FORECAST ====================
+    // Projects liquid net worth 12 months ahead using historical monthly ROI
+    (function() {
+      const canvas = document.getElementById('chart-forecast');
+      const empty = document.getElementById('forecast-empty');
+      const statsRow = document.getElementById('forecast-stats');
+      if (!canvas || !empty) return;
+
+      // Liquid Net Worth scope
+      const liquidAccountIds = new Set(accounts
+        .filter(a => a.includeInLiquidNetWorth !== false && a.portfolioId != 3)
+        .map(a => a.id));
+      const flowTypes = ['deposit', 'withdrawal', 'valuation', 'buy', 'sell', 'asset-add', 'asset-sell'];
+      const liquidTxs = transactions
+        .filter(t => liquidAccountIds.has(t.accountId) && flowTypes.includes(t.type))
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+      let liquidCurrentTotal = 0;
+      accounts.forEach(a => {
+        if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
+          if (a.accountType === 'Tangible Asset') {
+            const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+            liquidCurrentTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
+          } else {
+            const latest = accTxs[a.id];
+            const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
+            liquidCurrentTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+          }
+        }
+      });
+
+      const bal = {};
+      liquidAccountIds.forEach(id => bal[id] = 0);
+      const monthTotals = {};
+      liquidTxs.forEach(tx => {
+        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
+        const mk = (tx.date || '').substring(0, 7);
+        if (mk) {
+          let t = 0;
+          Object.values(bal).forEach(b => t += b);
+          monthTotals[mk] = t;
+        }
+      });
+
+      const curMonth = todayStr().substring(0, 7);
+      monthTotals[curMonth] = liquidCurrentTotal;
+
+      // Monthly ROI over liquid accounts (asset add/sell treated as flows)
+      function _liquidMonthlyRoi() {
+        const b = {};
+        liquidAccountIds.forEach(id => b[id] = 0);
+        const firstOfAccount = {};
+        liquidTxs.forEach(tx => {
+          const key = tx.accountId;
+          if (!firstOfAccount[key] || tx.date < firstOfAccount[key].date) firstOfAccount[key] = tx;
+        });
+        const totalB = () => Object.values(b).reduce((s, v) => s + v, 0);
+        const results = {};
+        let mkActive = null;
+        let startBal = 0;
+        let monthFlows = 0;
+        liquidTxs.forEach(tx => {
+          const mk = (tx.date || '').substring(0, 7);
+          if (!mk) return;
+          if (mk !== mkActive) {
+            if (mkActive !== null) {
+              const abs = totalB() - startBal - monthFlows;
+              const base = startBal + monthFlows;
+              results[mkActive] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
+            }
+            mkActive = mk;
+            startBal = totalB();
+            monthFlows = 0;
+          }
+          b[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
+          if (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') {
+            monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+          } else if (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') {
+            monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+          } else if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
+            monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
+          }
+        });
+        if (mkActive !== null) {
+          const abs = totalB() - startBal - monthFlows;
+          const base = startBal + monthFlows;
+          results[mkActive] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
+        }
+        return results;
+      }
+
+      const roi = _liquidMonthlyRoi();
+      let roiMonths = Object.keys(roi).filter(m => m < curMonth).sort();
+      if (roiMonths.length === 0) roiMonths = Object.keys(roi).sort();
+      const rates = roiMonths.map(m => roi[m].pct / 100);
+
+      const hasData = rates.length > 0 && liquidCurrentTotal > 0;
+      if (!hasData) {
+        empty.style.display = 'block';
+        if (statsRow) statsRow.style.display = 'none';
+        if (canvas) {
+          canvas.style.display = 'none';
+          if (canvas.parentElement) canvas.parentElement.style.display = 'none';
+        }
+        return;
+      }
+      empty.style.display = 'none';
+      if (statsRow) statsRow.style.display = '';
+      if (canvas) {
+        canvas.style.display = '';
+        if (canvas.parentElement) canvas.parentElement.style.display = '';
+      }
+
+      const mean = rates.reduce((s, v) => s + v, 0) / rates.length;
+      const variance = rates.reduce((s, v) => s + (v - mean) * (v - mean), 0) / rates.length;
+      const stdev = Math.sqrt(variance);
+
+      const histKeys = Object.keys(monthTotals).filter(m => m <= curMonth).sort().slice(-12);
+      const labels = [];
+      const histVals = [];
+      const pessVals = [];
+      const neutralVals = [];
+      const optVals = [];
+      histKeys.forEach(mk => {
+        labels.push(mk);
+        histVals.push(monthTotals[mk]);
+        pessVals.push(null);
+        neutralVals.push(null);
+        optVals.push(null);
+      });
+
+      const anchorIdx = histKeys.indexOf(curMonth);
+      const anchorVal = monthTotals[curMonth] || liquidCurrentTotal;
+      if (anchorIdx >= 0) {
+        pessVals[anchorIdx] = anchorVal;
+        neutralVals[anchorIdx] = anchorVal;
+        optVals[anchorIdx] = anchorVal;
+      }
+
+      const now = new Date();
+      const baseYear = now.getFullYear();
+      const baseMonth = now.getMonth();
+      let nRun = anchorVal;
+      let pRun = anchorVal;
+      let oRun = anchorVal;
+      for (let m = 1; m <= 12; m++) {
+        const d = new Date(baseYear, baseMonth + m, 1);
+        const mk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        labels.push(mk);
+        histVals.push(null);
+        nRun *= (1 + mean);
+        pRun *= (1 + mean - stdev);
+        oRun *= (1 + mean + stdev);
+        pessVals.push(Math.max(0, pRun));
+        neutralVals.push(nRun);
+        optVals.push(oRun);
+      }
+      const projectedValue = nRun;
+
+      const growthAmt = projectedValue - anchorVal;
+      const growthPct = anchorVal > 0 ? (growthAmt / anchorVal) * 100 : 0;
+
+      document.getElementById('forecast-current').textContent = formatCurrency(anchorVal, mainCurrency);
+      document.getElementById('forecast-projected').textContent = formatCurrency(projectedValue, mainCurrency);
+      const growthEl = document.getElementById('forecast-growth');
+      growthEl.innerHTML = (growthAmt >= 0 ? '+' : '') + formatCurrency(growthAmt, mainCurrency) + ' <span class="perf-pct">(' + (growthPct >= 0 ? '+' : '') + growthPct.toFixed(2) + '%)</span>';
+      growthEl.className = 'stat-value forecast-stat ' + (growthAmt >= 0 ? 'pos' : 'neg');
+      const roiEl = document.getElementById('forecast-roi');
+      roiEl.innerHTML = (mean >= 0 ? '+' : '') + (mean * 100).toFixed(2) + '% <span class="perf-pct">+/&minus;' + (stdev * 100).toFixed(2) + '%</span>';
+      roiEl.className = 'stat-value forecast-stat ' + (mean >= 0 ? 'pos' : 'neg');
+
+      App._charts.forecast = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'HISTORY',
+              data: histVals,
+              borderColor: '#33ff33',
+              backgroundColor: '#33ff330d',
+              fill: true,
+              tension: 0.3,
+              pointRadius: 3,
+              pointBackgroundColor: '#33ff33',
+              borderWidth: 2
+            },
+            {
+              label: 'PESSIMISTIC',
+              data: pessVals,
+              borderColor: '#ff3333',
+              backgroundColor: '#ff33330d',
+              borderDash: [6, 4],
+              tension: 0.3,
+              pointRadius: 3,
+              pointBackgroundColor: '#ff3333',
+              borderWidth: 2,
+              fill: false
+            },
+            {
+              label: 'NEUTRAL',
+              data: neutralVals,
+              borderColor: '#33ccff',
+              backgroundColor: '#33ccff0d',
+              borderDash: [6, 4],
+              tension: 0.3,
+              pointRadius: 3,
+              pointBackgroundColor: '#33ccff',
+              borderWidth: 2,
+              fill: false
+            },
+            {
+              label: 'OPTIMISTIC',
+              data: optVals,
+              borderColor: '#ffaa00',
+              backgroundColor: '#ffaa000d',
+              borderDash: [6, 4],
+              tension: 0.3,
+              pointRadius: 3,
+              pointBackgroundColor: '#ffaa00',
+              borderWidth: 2,
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                color: '#d0d0d0',
+                font: { family: "'Share Tech Mono', monospace", size: 10 },
+                padding: 8
+              }
+            },
+            tooltip: {
+              callbacks: {
+                title: items => {
+                  const mk = items && items.length ? items[0].label : '';
+                  const d = new Date(mk + '-01');
+                  return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: '#888',
+                font: { size: 10, family: "'Share Tech Mono', monospace" },
+                callback: v => {
+                  const d = new Date(labels[v] + '-01');
+                  return d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+                }
+              },
+              grid: { color: '#222' }
+            },
+            y: {
+              ticks: {
+                color: '#888',
+                font: { size: 10, family: "'Share Tech Mono', monospace" },
+                callback: v => formatCurrency(v, mainCurrency)
+              },
+              grid: { color: '#222' }
+            }
+          }
+        }
+      });
+    })();
 
     // Portfolio allocation chart (doughnut)
     const allocCanvas = document.getElementById('chart-allocation');
@@ -521,8 +811,8 @@ const Pages = {
       accounts.forEach(a => accMap[a.id] = a);
       recent.forEach(tx => {
         const acc = accMap[tx.accountId];
-        const typeLabel = tx.type.toUpperCase();
-        const typeClass = (tx.type === 'deposit' || tx.type === 'buy') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell') ? 'withdrawal' : 'valuation';
+        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : tx.type.toUpperCase();
+        const typeClass = (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
         const displayAmount = tx.type === 'valuation' ? formatCurrency(tx.amount, acc ? acc.currency : 'CHF')
           : formatCurrency(Math.abs(tx.amount), acc ? acc.currency : 'CHF');
         const tr = document.createElement('tr');
@@ -541,6 +831,7 @@ const Pages = {
     const portfolios = await DB.getAll('portfolios');
     const accounts = await DB.getAll('accounts');
     const transactions = await DB.getAll('transactions');
+    const assets = await DB.getAll('assets');
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
     const rateEntries = await DB.getAll('exchangeRates');
@@ -555,16 +846,30 @@ const Pages = {
     }
     empty.style.display = 'none';
 
+    const accountAssets = {};
+    assets.forEach(a => {
+      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
+      accountAssets[a.accountId].push(a);
+    });
+
     const accEff = {};
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
-      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
-        .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
-      accEff[a.id] = {
-        value: _effValue(accTxs, a.currentValue),
-        cost: _effCostBasis(accTxs),
-        date: flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null
-      };
+      let value, cost, date;
+      if (a.accountType === 'Tangible Asset') {
+        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+        const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
+        value = m.value;
+        cost = m.cost;
+        date = todayStr();
+      } else {
+        const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
+          .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+        value = _effValue(accTxs, a.currentValue);
+        cost = _effCostBasis(accTxs);
+        date = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
+      }
+      accEff[a.id] = { value, cost, date };
     });
 
     portfolios.forEach(p => {
@@ -588,6 +893,7 @@ const Pages = {
     const portfolio = await DB.getById('portfolios', id);
     const accounts = await DB.getByIndex('accounts', 'portfolioId', id);
     const transactions = await DB.getAll('transactions');
+    const assets = await DB.getAll('assets');
     const custodians = await DB.getAll('custodians');
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
@@ -595,6 +901,12 @@ const Pages = {
     const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
     const custMap = {};
     custodians.forEach(c => custMap[c.id] = c.name);
+
+    const accountAssets = {};
+    assets.forEach(a => {
+      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
+      accountAssets[a.accountId].push(a);
+    });
 
     document.getElementById('pf-detail-title').textContent = portfolio ? portfolio.name : 'PORTFOLIO';
 
@@ -605,11 +917,20 @@ const Pages = {
     const effMap = {};
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
-      const costBasis = _effCostBasis(accTxs);
-      const effVal = _effValue(accTxs, a.currentValue);
-      const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
-        .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
-      const lastDate = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
+      let costBasis, effVal, lastDate;
+      if (a.accountType === 'Tangible Asset') {
+        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+        const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
+        costBasis = m.cost;
+        effVal = m.value;
+        lastDate = todayStr();
+      } else {
+        costBasis = _effCostBasis(accTxs);
+        effVal = _effValue(accTxs, a.currentValue);
+        const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
+          .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+        lastDate = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
+      }
       const cur = a.currency || 'CHF';
       const rate = rateFor(cur, lastDate || todayStr());
       effMap[a.id] = { costBasis, effVal, pl: effVal - costBasis };
@@ -638,6 +959,13 @@ const Pages = {
 
     accounts.forEach(a => {
       const { effVal, pl } = effMap[a.id] || { effVal: 0, pl: 0 };
+      let metaExtra = '';
+      if (a.accountType === 'Precious Metal' && a.quantity) {
+        metaExtra = ' &middot; ' + a.quantity + 'g ' + (a.metalType || '') + (a.pricePerGram ? ' @ ' + formatCurrency(a.pricePerGram, a.currency) + '/g' : '');
+      } else if (a.accountType === 'Tangible Asset') {
+        const held = (accountAssets[a.id] || []).filter(x => !x.sold).length;
+        metaExtra = ' &middot; ' + pluralize(held, 'ASSET');
+      }
       const col = document.createElement('div');
       col.className = 'col-md-6 mb-3';
       col.innerHTML = `<div class="acc-card" onclick="App.navigate('account-detail?id=${a.id}&pfid=${id}')">
@@ -664,7 +992,7 @@ const Pages = {
             </label>
           </div>
         </div>
-        <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${a.accountType === 'Precious Metal' && a.quantity ? ' &middot; ' + a.quantity + 'g ' + (a.metalType||'') + (a.pricePerGram ? ' @ ' + formatCurrency(a.pricePerGram, a.currency) + '/g' : '') : ''}</div>
+        <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${metaExtra}</div>
         <div class="acc-value">${formatCurrency(effVal, a.currency)}</div>
         <div class="acc-pl ${plClass(pl)}">${pl >= 0 ? '+' : ''}${formatCurrency(pl, a.currency)}</div>
       </div>`;
@@ -678,6 +1006,9 @@ const Pages = {
     const account = await DB.getById('accounts', id);
     if (!account) { App.navigate('dashboard'); return; }
     const transactions = await DB.getByIndex('transactions', 'accountId', id);
+    const accountAssets = await DB.getByIndex('assets', 'accountId', id);
+    const assetMap = {};
+    accountAssets.forEach(a => assetMap[a.id] = a);
     const custodians = await DB.getAll('custodians');
     const custMap = {};
     custodians.forEach(c => custMap[c.id] = c.name);
@@ -685,8 +1016,23 @@ const Pages = {
     document.getElementById('acc-detail-name').textContent = account.name || 'ACCOUNT';
     document.getElementById('acc-detail-back').href = '#portfolio-detail?id=' + (account.portfolioId || '');
 
-    const costBasis = _effCostBasis(transactions);
-    const currentVal = _effValue(transactions, account.currentValue);
+    const isPm = account.accountType === 'Precious Metal';
+    const isTa = account.accountType === 'Tangible Asset';
+
+    const settings = await DB.getSettings();
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', account.currency || 'CHF', date);
+
+    let costBasis;
+    let currentVal;
+    if (isTa) {
+      const m = assetAccountMetrics(accountAssets, todayStr(), rateToAcc);
+      costBasis = m.cost;
+      currentVal = m.value;
+    } else {
+      costBasis = _effCostBasis(transactions);
+      currentVal = _effValue(transactions, account.currentValue);
+    }
     const pl = currentVal - costBasis;
 
     document.getElementById('acc-stat-value').textContent = formatCurrency(currentVal, account.currency);
@@ -696,34 +1042,53 @@ const Pages = {
     plEl.style.color = pl >= 0 ? '#33ff33' : '#ff3333';
 
     const custName = custMap[account.custodianId] || '—';
-    const isPm = account.accountType === 'Precious Metal';
     let metaText = custName + ' / ' + (account.currency || 'CHF');
     if (isPm) {
       metaText += ' / ' + (account.metalType || 'METAL');
     }
     document.getElementById('acc-stat-meta').textContent = metaText;
 
-    // Precious metal stat cards & actions
+    // Precious metal / tangible asset stat cards & actions
     const qtyCard = document.getElementById('acc-stat-qty-card');
     const priceCard = document.getElementById('acc-stat-price-card');
+    const assetsCard = document.getElementById('acc-stat-assets-card');
     const pmActions = document.getElementById('pm-actions');
+    const taActions = document.getElementById('ta-actions');
+    const taAssetsCard = document.getElementById('ta-assets-card');
     const stdActions = document.getElementById('std-actions');
     if (qtyCard) qtyCard.style.display = isPm ? 'block' : 'none';
     if (priceCard) priceCard.style.display = isPm ? 'block' : 'none';
+    if (assetsCard) assetsCard.style.display = isTa ? 'block' : 'none';
     if (pmActions) pmActions.style.display = isPm ? 'flex' : 'none';
-    if (stdActions) stdActions.style.display = isPm ? 'none' : 'flex';
+    if (taActions) taActions.style.display = isTa ? 'flex' : 'none';
+    if (taAssetsCard) taAssetsCard.style.display = isTa ? 'block' : 'none';
+    if (stdActions) stdActions.style.display = (isPm || isTa) ? 'none' : 'flex';
     if (isPm) {
       if (document.getElementById('acc-stat-qty')) document.getElementById('acc-stat-qty').textContent = (account.quantity || 0) + 'g';
       if (document.getElementById('acc-stat-price')) document.getElementById('acc-stat-price').textContent = formatCurrency(account.pricePerGram || 0, account.currency) + '/g';
     }
+    if (isTa) {
+      if (document.getElementById('acc-stat-assets')) {
+        const held = accountAssets.filter(a => !a.sold).length;
+        document.getElementById('acc-stat-assets').textContent = pluralize(held, 'ASSET');
+      }
+      this._renderAssetsTable(accountAssets, account.currency);
+    }
 
     // Performance period selectors
     const accTxsSorted = [...transactions]
-      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
+      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     const firstTx = accTxsSorted.length > 0 ? accTxsSorted[0] : null;
 
     function _accPerfSince(cutoffDate) {
+      if (isTa) {
+        const vNow = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
+        const vCutoff = assetAccountMetrics(accountAssets, cutoffDate, rateToAcc).value;
+        const abs = vNow - vCutoff;
+        const base = vCutoff;
+        return { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
+      }
       let totalAtCutoff = 0;
       accTxsSorted.forEach(tx => {
         if (tx.date >= cutoffDate) return;
@@ -789,13 +1154,18 @@ const Pages = {
     } else {
       empty.style.display = 'none';
       sorted.forEach(tx => {
-        const typeLabel = tx.type.toUpperCase();
-        const typeClass = (tx.type === 'deposit' || tx.type === 'buy') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell') ? 'withdrawal' : 'valuation';
+        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : tx.type.toUpperCase();
+        const typeClass = (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
         let displayAmount;
         if (tx.type === 'valuation') {
           displayAmount = formatCurrency(tx.amount, account.currency);
-        } else if (tx.type === 'buy' || tx.type === 'sell') {
-          displayAmount = (tx.amount >= 0 ? '+' : '-') + formatCurrency(Math.abs(tx.amount), account.currency);
+        } else if (tx.type === 'buy' || tx.type === 'sell' || tx.type === 'asset-add' || tx.type === 'asset-sell') {
+          let amt = Math.abs(tx.amount);
+          if (tx.type === 'asset-add' || tx.type === 'asset-sell') {
+            const asset = assetMap[tx.assetId];
+            if (asset) amt = amt * rateToAcc(asset.currency || 'CHF', tx.date);
+          }
+          displayAmount = (tx.amount >= 0 ? '+' : '-') + formatCurrency(amt, account.currency);
         } else {
           displayAmount = formatCurrency(Math.abs(tx.amount), account.currency);
         }
@@ -818,6 +1188,58 @@ const Pages = {
         tbody.appendChild(tr);
       });
     }
+  },
+
+  _renderAssetsTable(assets, currency) {
+    const tbody = document.getElementById('ta-assets-body');
+    const empty = document.getElementById('ta-assets-empty');
+    const table = document.getElementById('ta-assets-table');
+    tbody.innerHTML = '';
+
+    const sorted = [...assets].sort((a, b) => {
+      if (a.sold !== b.sold) return a.sold ? 1 : -1;
+      return (b.purchaseDate || '').localeCompare(a.purchaseDate || '');
+    });
+
+    if (sorted.length === 0) {
+      if (empty) empty.style.display = 'block';
+      if (table) table.style.display = 'none';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (table) table.style.display = '';
+
+    sorted.forEach(asset => {
+      const assetCur = asset.currency || 'CHF';
+      const currentValue = assetCurrentValue(asset, todayStr());
+      const realized = assetRealizedPL(asset);
+      const statusHtml = asset.sold
+        ? '<span class="tx-badge withdrawal">SOLD</span>'
+        : '<span class="tx-badge deposit">HELD</span>';
+      const valueHtml = asset.sold
+        ? '<span class="text-muted">—</span>'
+        : formatCurrency(currentValue, assetCur);
+      const plHtml = realized == null
+        ? '<span class="text-muted">—</span>'
+        : '<span class="ta-pl ' + plClass(realized) + '">' + (realized >= 0 ? '+' : '') + formatCurrency(realized, assetCur) + '</span>';
+      const editLink = '<a class="tx-link me-2" onclick="App.showModal(\'asset\', ' + asset.accountId + ', ' + asset.id + ')">EDIT</a>';
+      const actionsHtml = asset.sold
+        ? editLink + '<a class="tx-link" onclick="App.deleteAsset(' + asset.id + ')">DELETE</a>'
+        : '<a class="tx-link me-2" onclick="App.showModal(\'sellAsset\', ' + asset.id + ')">SELL</a>' +
+          editLink + '<a class="tx-link" onclick="App.deleteAsset(' + asset.id + ')">DELETE</a>';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(asset.name)}</td>
+        <td>${formatDate(asset.purchaseDate)}</td>
+        <td>${formatCurrency(assetCostValue(asset), assetCur)}</td>
+        <td>${assetCur}</td>
+        <td>${(asset.depreciationPct || 0)}%</td>
+        <td>${valueHtml}</td>
+        <td>${statusHtml}</td>
+        <td>${plHtml}</td>
+        <td>${actionsHtml}</td>`;
+      tbody.appendChild(tr);
+    });
   },
 
   // ==================== CUSTODIANS ====================
@@ -1073,32 +1495,41 @@ const Pages = {
       '</div>';
   },
 
-  _buildGoalContext() {
-    return DB.getAll('accounts').then(accounts => {
-      return DB.getAll('transactions').then(transactions => {
-        return DB.getSettings().then(settings => {
-          const mainCurrency = settings.mainCurrency || 'CHF';
-          return DB.getAll('exchangeRates').then(rateEntries => {
-            const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-            const accTxs = {};
-            transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell')
-              .forEach(t => {
-                const prev = accTxs[t.accountId];
-                if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
-              });
-            const accValue = {};
-            const accNames = {};
-            accounts.forEach(a => {
-              const latest = accTxs[a.id];
-              const raw = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-              accValue[a.id] = raw * rateFor(a.currency || 'CHF', latest ? latest.date : todayStr());
-              accNames[a.id] = a.name;
-            });
-            return { accValue, accNames };
-          });
-        });
+  async _buildGoalContext() {
+    const accounts = await DB.getAll('accounts');
+    const transactions = await DB.getAll('transactions');
+    const assets = await DB.getAll('assets');
+    const settings = await DB.getSettings();
+    const mainCurrency = settings.mainCurrency || 'CHF';
+    const rateEntries = await DB.getAll('exchangeRates');
+    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
+    const accTxs = {};
+    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
+      .forEach(t => {
+        const prev = accTxs[t.accountId];
+        if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
       });
+    const accountAssets = {};
+    assets.forEach(a => {
+      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
+      accountAssets[a.accountId].push(a);
     });
+    const accValue = {};
+    const accNames = {};
+    accounts.forEach(a => {
+      let raw;
+      let latest = null;
+      if (a.accountType === 'Tangible Asset') {
+        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+        raw = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
+      } else {
+        latest = accTxs[a.id];
+        raw = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
+      }
+      accValue[a.id] = raw * rateFor(a.currency || 'CHF', latest ? latest.date : todayStr());
+      accNames[a.id] = a.name;
+    });
+    return { accValue, accNames };
   },
 
   async goals() {
@@ -1197,12 +1628,53 @@ const Pages = {
       }
     };
 
+    const allBody = document.getElementById('rates-all-body');
+    const allEmpty = document.getElementById('rates-all-empty');
+    const allTable = document.getElementById('rates-all-table');
+
+    const loadAllRates = async () => {
+      const entries = await DB.getAll('exchangeRates');
+      const sorted = entries.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      allBody.innerHTML = '';
+
+      sorted.forEach(entry => {
+        const codes = Object.keys(entry.rates || {}).sort();
+        const chips = codes.map(code => {
+          const rate = entry.rates[code];
+          return `<span class="badge badge-rate">${escapeHtml(code)} ${escapeHtml(formatNumber(rate))}</span>`;
+        }).join(' ');
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${formatDate(entry.date)}</td>
+          <td>${chips || '<span class="text-muted">EMPTY</span>'}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-gta" onclick="Pages.loadRatesFromHistory('${escapeHtml(entry.date)}')">OPEN</button>
+          </td>`;
+        allBody.appendChild(tr);
+      });
+
+      if (sorted.length === 0) {
+        allTable.style.display = 'none';
+        allEmpty.style.display = 'block';
+      } else {
+        allTable.style.display = '';
+        allEmpty.style.display = 'none';
+      }
+    };
+
     if (this._ratesDateHandler) dateEl.removeEventListener('change', this._ratesDateHandler);
     this._ratesDateHandler = () => loadRates(dateEl.value);
     dateEl.addEventListener('change', this._ratesDateHandler);
 
     dateEl.value = todayStr();
     loadRates(dateEl.value);
+    loadAllRates();
+  },
+
+  async loadRatesFromHistory(date) {
+    const dateEl = document.getElementById('rates-date');
+    dateEl.value = date;
+    if (this._ratesDateHandler) this._ratesDateHandler();
+    document.getElementById('rates-date').scrollIntoView({ behavior: 'smooth', block: 'center' });
   },
 
   async saveRates() {
@@ -1232,6 +1704,7 @@ const Pages = {
       const incomes = await DB.getAll('incomes');
       const expenses = await DB.getAll('expenses');
       const transactions = await DB.getAll('transactions');
+      const assets = await DB.getAll('assets');
 
       const accCur = {};
       accounts.forEach(a => accCur[a.id] = a.currency || 'CHF');
@@ -1256,6 +1729,12 @@ const Pages = {
         addDateCurrency(tx.date, cur);
       });
       accounts.forEach(a => track(a.currency));
+      assets.forEach(a => {
+        const cur = a.currency;
+        track(cur);
+        addDateCurrency(a.purchaseDate, cur);
+        addDateCurrency(a.saleDate, cur);
+      });
 
       // Ensure a "latest" snapshot so current account balances convert
       const today = todayStr();

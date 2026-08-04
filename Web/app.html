@@ -8,7 +8,7 @@
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="css/style.css?v=7" />
+    <link rel="stylesheet" href="css/style.css?v=21" />
   </head>
   <body>
     <!-- ===== TOP NAV ===== -->
@@ -132,6 +132,34 @@
               </div>
             </div>
           </div>
+          <div class="row mb-3">
+            <div class="col-12">
+              <div class="card-gta">
+                <div class="card-gta-header d-flex justify-content-between align-items-center">
+                  <span>FORECAST</span>
+                  <span class="text-muted" style="font-family:var(--font-body);font-size:11px;letter-spacing:1px">12-MONTH PROJECTION FROM HISTORICAL PERFORMANCE</span>
+                </div>
+                <div class="card-gta-body">
+                  <div class="row" id="forecast-stats">
+                    <div class="col-md-3 mb-3">
+                      <div class="stat-card"><span class="stat-label">CURRENT VALUE</span><span class="stat-value forecast-stat" id="forecast-current">CHF 0.00</span></div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                      <div class="stat-card"><span class="stat-label">PROJECTED VALUE (12M)</span><span class="stat-value forecast-stat" id="forecast-projected">CHF 0.00</span></div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                      <div class="stat-card"><span class="stat-label">PROJECTED GROWTH</span><span class="stat-value forecast-stat" id="forecast-growth">CHF 0.00</span></div>
+                    </div>
+                    <div class="col-md-3 mb-3">
+                      <div class="stat-card"><span class="stat-label">AVG MONTHLY ROI</span><span class="stat-value forecast-stat" id="forecast-roi">+0.00%</span></div>
+                    </div>
+                  </div>
+                  <div class="forecast-chart-wrap"><canvas id="chart-forecast"></canvas></div>
+                  <div id="forecast-empty" class="empty-state">INSUFFICIENT LIQUID NET WORTH DATA FOR A RELIABLE FORECAST. ADD ACCOUNTS INCLUDED IN LIQUID NET WORTH OR RECORD VALUATIONS FIRST.</div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="row">
             <div class="col-12">
               <div class="card-gta">
@@ -221,6 +249,9 @@
             <div class="col-md-3 mb-3" id="acc-stat-price-card" style="display:none">
               <div class="stat-card"><span class="stat-label">PRICE PER GRAM</span><span class="stat-value" id="acc-stat-price">—</span></div>
             </div>
+            <div class="col-md-3 mb-3" id="acc-stat-assets-card" style="display:none">
+              <div class="stat-card"><span class="stat-label">ASSETS HELD</span><span class="stat-value" id="acc-stat-assets">0</span></div>
+            </div>
             <div class="col-md-3 mb-3">
               <div class="stat-card"><span class="stat-label">COST BASIS</span><span class="stat-value" id="acc-stat-cost">CHF 0.00</span></div>
             </div>
@@ -257,6 +288,33 @@
             <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccId)">UPDATE PRICE</button>
             <button class="btn btn-gta" onclick="App.showModal('metal', 'buy', App.currentAccId)">BUY METAL</button>
             <button class="btn btn-gta" onclick="App.showModal('metal', 'sell', App.currentAccId)">SELL METAL</button>
+          </div>
+          <div class="gap-2 mb-4 flex-wrap" id="ta-actions" style="display:none">
+            <button class="btn btn-gta" onclick="App.showModal('asset', App.currentAccId)">ADD ASSET</button>
+          </div>
+          <div class="card-gta mb-4" id="ta-assets-card" style="display:none">
+            <div class="card-gta-header">TANGIBLE ASSETS</div>
+            <div class="card-gta-body">
+              <div class="table-responsive">
+                <table class="table table-gta" id="ta-assets-table">
+                  <thead>
+                    <tr>
+                      <th>NAME</th>
+                      <th>PURCHASED</th>
+                      <th>PURCHASE VALUE</th>
+                      <th>CURRENCY</th>
+                      <th>DEPR / YR</th>
+                      <th>CURRENT VALUE</th>
+                      <th>STATUS</th>
+                      <th>P&amp;L</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="ta-assets-body"></tbody>
+                </table>
+              </div>
+              <div id="ta-assets-empty" class="empty-state">NO ASSETS ADDED YET.</div>
+            </div>
           </div>
           <div class="card-gta">
             <div class="card-gta-header">TRANSACTION HISTORY</div>
@@ -479,6 +537,26 @@
             </div>
           </div>
         </div>
+        <div class="card-gta mt-4">
+          <div class="card-gta-header">
+            <span>ALL SAVED RATES</span>
+          </div>
+          <div class="card-gta-body">
+            <div id="rates-all-empty" class="empty-state">NO RATES SAVED YET.</div>
+            <div class="table-responsive">
+              <table class="table table-gta" id="rates-all-table">
+                <thead>
+                  <tr>
+                    <th>DATE</th>
+                    <th>CURRENCIES</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="rates-all-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -564,6 +642,18 @@
                 <label class="form-label">QUANTITY (grams)</label>
                 <input type="number" step="0.01" class="form-control form-gta" id="account-qty" value="0" />
               </div>
+            </div>
+            <div class="mb-3" id="starting-value-fields">
+              <label class="form-label">STARTING VALUE</label>
+              <div class="input-group">
+                <span class="input-group-text input-gta-addon" id="account-starting-symbol">CHF</span>
+                <input type="number" step="0.01" min="0" class="form-control form-gta" id="account-starting-value" placeholder="0.00" />
+              </div>
+              <div class="mt-2">
+                <label class="form-label">STARTING DATE</label>
+                <input type="date" class="form-control form-gta" id="account-starting-date" />
+              </div>
+              <small class="text-muted">OPTIONAL — SETS THE PERFORMANCE BASELINE FOR THIS ACCOUNT</small>
             </div>
             <div class="mb-3"><label class="form-label">NOTES</label><textarea class="form-control form-gta" id="account-notes" rows="2"></textarea></div>
             <div class="mb-3 form-check">
@@ -664,6 +754,48 @@
             <div class="mb-3"><label class="form-label">DATE</label><input type="date" class="form-control form-gta" id="metal-date" /></div>
           </div>
           <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveMetal()">SAVE</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tangible Asset Add/Edit Modal -->
+    <div class="modal fade" id="modal-asset" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title" id="modal-asset-title">ADD ASSET</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="asset-id" />
+            <input type="hidden" id="asset-account-id" />
+            <div class="mb-3"><label class="form-label">NAME</label><input type="text" class="form-control form-gta" id="asset-name" placeholder="e.g. Car, Laptop, Sofa" /></div>
+            <div class="mb-3"><label class="form-label">VALUE</label><input type="number" step="0.01" min="0" class="form-control form-gta" id="asset-value" placeholder="0.00" /></div>
+            <div class="mb-3"><label class="form-label">CURRENCY</label><select class="form-select form-gta" id="asset-currency"></select></div>
+            <div class="mb-3"><label class="form-label">DEPRECIATION PER YEAR (%)</label><input type="number" step="0.01" min="-100" max="100" class="form-control form-gta" id="asset-depreciation" placeholder="e.g. 20" /></div>
+            <div class="mb-3"><label class="form-label">PURCHASE DATE</label><input type="date" class="form-control form-gta" id="asset-date" /></div>
+            <small class="text-muted">VALUE DEPRECIATES STRAIGHT-LINE BY THE % PER YEAR SINCE THE PURCHASE DATE. USE A NEGATIVE % FOR APPRECIATION.</small>
+          </div>
+          <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveAsset()">SAVE</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tangible Asset Sell Modal -->
+    <div class="modal fade" id="modal-sell-asset" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title">SELL ASSET</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="sell-asset-id" />
+            <div class="mb-3"><span class="text-muted">ASSET: <span id="sell-asset-name">—</span></span></div>
+            <div class="mb-3"><label class="form-label">SALE VALUE</label><input type="number" step="0.01" min="0" class="form-control form-gta" id="sell-asset-value" /><small class="text-muted">CURRENCY: <span id="sell-asset-currency">—</span></small></div>
+            <div class="mb-3"><label class="form-label">SALE DATE</label><input type="date" class="form-control form-gta" id="sell-asset-date" /></div>
+          </div>
+          <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveSellAsset()">SAVE</button></div>
         </div>
       </div>
     </div>
@@ -842,9 +974,9 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="js/db.js?v=7"></script>
-    <script src="js/utils.js?v=7"></script>
-    <script src="js/app.js?v=7"></script>
-    <script src="js/pages.js?v=7"></script>
+    <script src="js/db.js?v=21"></script>
+    <script src="js/utils.js?v=21"></script>
+    <script src="js/app.js?v=21"></script>
+    <script src="js/pages.js?v=21"></script>
   </body>
 </html>
