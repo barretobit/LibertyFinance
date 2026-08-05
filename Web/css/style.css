@@ -554,6 +554,8 @@ html, body {
   cursor: pointer;
   transition: all 0.2s;
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .pf-card:hover {
   border-color: var(--accent);
@@ -562,20 +564,115 @@ html, body {
 }
 .pf-card .pf-name {
   font-family: var(--font-title);
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   color: var(--accent);
   letter-spacing: 1px;
 }
+.pf-card .pf-value {
+  font-family: var(--font-title);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 8px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
 .pf-card .pf-desc {
   font-size: 14px;
   color: var(--text-secondary);
-  margin-top: 6px;
+  margin-top: 12px;
+  flex: 1 1 auto;
 }
 .pf-card .pf-meta {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--text-muted);
-  margin-top: 8px;
+  margin-top: 12px;
+  letter-spacing: 1px;
+}
+
+/* ===== PORTFOLIO NESTED CHART ===== */
+.pf-chart-col {
+  display: flex;
+  flex-direction: column;
+}
+.pf-chart-card {
+  position: sticky;
+  top: 64px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+.pf-chart-card .card-gta-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+.pf-chart-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  height: 320px;
+  max-height: 320px;
+}
+.pf-chart-empty {
+  padding: 30px 20px;
+}
+.pf-legend {
+  margin-top: 12px;
+  padding-right: 4px;
+}
+.pf-legend-group {
+  margin-bottom: 8px;
+}
+.pf-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  padding: 3px 0;
+  color: var(--text-secondary);
+}
+.pf-legend-row.sub {
+  padding-left: 22px;
+}
+.pf-legend-dot {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border: 1px solid rgba(0,0,0,0.4);
+}
+.pf-legend-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-body);
+}
+.pf-legend-row .pf-legend-name {
+  color: var(--accent);
+  font-family: var(--font-title);
+  font-size: 14px;
+  letter-spacing: 1px;
+}
+.pf-legend-row.sub .pf-legend-name {
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+.pf-legend-val {
+  color: var(--text-primary);
+  font-family: var(--font-title);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.pf-legend-pct {
+  color: var(--accent);
+  font-family: var(--font-title);
+  font-size: 14px;
+  min-width: 52px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ===== ACCOUNT CARDS ===== */
@@ -735,41 +832,70 @@ html, body {
 .acc-card .perf-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   font-size: 12px;
   color: var(--text-muted);
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
 .acc-card .perf-toggle input[type="checkbox"] {
   width: 15px;
   height: 15px;
   accent-color: var(--accent);
   cursor: pointer;
+  margin: 0;
+  flex-shrink: 0;
 }
-.acc-card .perf-toggle input[type="checkbox"]:not(:checked) + span {
+.acc-card .perf-toggle:has(input[type="checkbox"]:not(:checked)) span {
   color: #555;
 }
 .acc-toggles {
   display: flex;
-  gap: 10px;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
-/* ===== ACCOUNT PERF VALUE ===== */
+/* ===== ACCOUNT PERF BREAKDOWN ===== */
+.acc-perf-rows {
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.acc-perf-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 40px;
+}
+.acc-perf-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
 .acc-perf-value {
   font-family: var(--font-title);
-  font-size: 40px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text-primary);
-  text-shadow: 0 0 20px var(--accent-glow);
-  letter-spacing: 2px;
-}
-.acc-perf-value .perf-pct {
-  font-size: 20px;
-  font-weight: 400;
-  text-shadow: 0 0 10px var(--accent-glow);
   letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+/* ===== ACCOUNT PERFORMANCE CHART ===== */
+.acc-perf-chart-wrap {
+  position: relative;
+  height: 260px;
+}
+.acc-perf-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 /* ===== PAGE TITLES ===== */

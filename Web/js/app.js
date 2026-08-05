@@ -18,6 +18,12 @@ const App = {
     if (navProfile) navProfile.textContent = file.replace(/\.json$/i, '');
 
     await DB.open();
+
+    (async () => {
+      await Pages.fetchMetalPrices(true).catch(() => {});
+      await Pages.fetchRatesLatest(true).catch(() => {});
+    })();
+
     this._modals = {
       custodian: new bootstrap.Modal(document.getElementById('modal-custodian')),
       portfolio: new bootstrap.Modal(document.getElementById('modal-portfolio')),
@@ -87,6 +93,9 @@ const App = {
           break;
         case 'exchange-rates':
           Pages.exchangeRates();
+          break;
+        case 'metal-prices':
+          Pages.metalPrices();
           break;
       }
     }
@@ -333,15 +342,19 @@ const App = {
     notesField.value = '';
     dateField.value = todayStr();
 
-    DB.getById('accounts', accountId).then(a => {
+    DB.getById('accounts', accountId).then(async a => {
       const cur = a ? a.currency || 'CHF' : 'CHF';
       symbol.textContent = cur;
       pgSymbol.textContent = cur;
       if (a && a.accountType === 'Precious Metal') {
-        // Show price/gram and pre-fill from the account's current price
+        // Show price/gram and pre-fill from today's spot price
         priceGramGroup.style.display = 'block';
         const qty = a.quantity || 0;
         if (a.pricePerGram) priceGramField.value = a.pricePerGram;
+        const saved = await DB.getMetalPricesForDate(todayStr());
+        const rateEntries = await DB.getAll('exchangeRates');
+        const spot = metalSpotPerGram(saved, a.metalType, cur, rateEntries, todayStr());
+        if (spot != null) priceGramField.value = spot;
         if (qty > 0 && parseFloat(priceGramField.value) > 0) {
           amountField.value = (qty * parseFloat(priceGramField.value)).toFixed(2);
         } else if (a.currentValue) {
@@ -401,7 +414,7 @@ const App = {
 
     this._metalCurrency = 'CHF';
 
-    DB.getById('accounts', accountId).then(a => {
+    DB.getById('accounts', accountId).then(async a => {
       if (!a) return;
       this._metalCurrency = a.currency || 'CHF';
       curSymEl.textContent = this._metalCurrency;
@@ -409,6 +422,12 @@ const App = {
       currentQtyEl.textContent = (a.quantity || 0) + 'g ' + (a.metalType || '');
       if (a.pricePerGram) priceField.value = a.pricePerGram;
       if (direction === 'sell') qtyField.value = a.quantity || 0;
+      if (!priceField.value && a.metalType) {
+        const saved = await DB.getMetalPricesForDate(todayStr());
+        const rateEntries = await DB.getAll('exchangeRates');
+        const spot = metalSpotPerGram(saved, a.metalType, this._metalCurrency, rateEntries, todayStr());
+        if (spot != null) priceField.value = spot;
+      }
       this._updateMetalTotal();
     });
 

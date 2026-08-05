@@ -144,3 +144,23 @@ function assetAccountMetrics(assets, date, rateFor) {
   });
   return { value, cost, count, soldCount, realized, pl: value - cost };
 }
+
+/* ===== Precious Metals ===== */
+
+const METAL_SYMBOLS = { Gold: 'XAU', Silver: 'XAG', Platinum: 'XPT', Palladium: 'XPD' };
+
+// Live spot price per gram for a metal type, expressed in `toCurrency`, or null when no snapshot / rate available
+function metalSpotPerGram(metalEntry, metalType, toCurrency, rateEntries, date) {
+  const symbol = METAL_SYMBOLS[metalType];
+  const p = symbol && metalEntry && metalEntry.prices ? metalEntry.prices[symbol] : null;
+  if (!p || p.chfPerGram == null) return null;
+  const rate = currencyRateTo(rateEntries || [], 'CHF', toCurrency || 'CHF', date || todayStr());
+  return p.chfPerGram * rate;
+}
+
+// Current value of a precious-metal account: quantity x live spot (market.json), fallback to last trade price
+function metalAccountValue(account, metalEntry, rateEntries, date) {
+  const spot = metalSpotPerGram(metalEntry, account.metalType, account.currency || 'CHF', rateEntries, date);
+  const price = spot != null ? spot : (account.pricePerGram || 0);
+  return (account.quantity || 0) * price;
+}

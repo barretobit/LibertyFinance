@@ -11,8 +11,11 @@ const EMPTY_DATA = JSON.stringify({
   custodians: [], portfolios: [], accounts: [], transactions: [],
   assets: [],
   incomes: [], expenses: [], debts: [], goals: [],
-  exchangeRates: [], settings: {}
+  settings: {}
 });
+
+const MARKET_FILE = path.join(DATA_DIR, 'market.json');
+const EMPTY_MARKET = JSON.stringify({ exchangeRates: [], metalPrices: [] });
 
 try {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -70,6 +73,7 @@ const server = http.createServer((req, res) => {
       try { names = fs.readdirSync(DATA_DIR); } catch (e) { /* no dir yet */ }
       const files = names
         .filter(n => path.extname(n).toLowerCase() === '.json')
+        .filter(n => path.join(DATA_DIR, n).toLowerCase() !== MARKET_FILE.toLowerCase())
         .map(n => {
           const stat = fs.statSync(path.join(DATA_DIR, n));
           return { name: n, size: stat.size, modified: stat.mtime.toISOString() };
@@ -91,6 +95,10 @@ const server = http.createServer((req, res) => {
 
     if (req.method === 'DELETE') {
       const dataFile = resolveDataFile(fileParam);
+      if (dataFile && dataFile.toLowerCase() === MARKET_FILE.toLowerCase()) {
+        json(res, 403, { error: 'Protected file' });
+        return;
+      }
       if (dataFile && fs.existsSync(dataFile)) {
         fs.unlinkSync(dataFile);
       }
@@ -134,6 +142,44 @@ const server = http.createServer((req, res) => {
         json(res, 200, { success: true });
       });
     });
+    return;
+  }
+
+  // API: GET/POST /api/market — shared per-computer market data (FX + metals)
+  if (urlPath === '/api/market') {
+    if (req.method === 'GET') {
+      fs.readFile(MARKET_FILE, 'utf8', (err, content) => {
+        if (err) {
+          if (err.code === 'ENOENT') {
+            fs.writeFileSync(MARKET_FILE, EMPTY_MARKET, 'utf8');
+            json(res, 200, JSON.parse(EMPTY_MARKET));
+          } else {
+            json(res, 500, { error: err.message });
+          }
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(content);
+      });
+      return;
+    }
+
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', () => {
+        fs.writeFile(MARKET_FILE, body, 'utf8', err => {
+          if (err) {
+            json(res, 500, { error: err.message });
+            return;
+          }
+          json(res, 200, { success: true });
+        });
+      });
+      return;
+    }
+
+    json(res, 405, { error: 'Method not allowed' });
     return;
   }
 

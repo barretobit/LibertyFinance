@@ -29,8 +29,6 @@
         <span class="nav-sep">|</span>
         <a class="nav-link" href="#custodians">CUSTODIANS</a>
         <span class="nav-sep">|</span>
-        <a class="nav-link" href="#exchange-rates">EXCHANGE RATES</a>
-        <span class="nav-sep">|</span>
         <div class="dropdown d-inline-block">
           <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="Settings">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-gear-fill align-middle" viewBox="0 0 16 16">
@@ -39,6 +37,10 @@
           </a>
           <ul class="dropdown-menu dropdown-menu-end">
             <li><a class="dropdown-item" href="#" onclick="App.showSettingsModal(); return false;">SETTINGS</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#exchange-rates">EXCHANGE RATES</a></li>
+            <li><a class="dropdown-item" href="#metal-prices">PRECIOUS METALS</a></li>
+            <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="#" onclick="App.exportData(); return false;">EXPORT</a></li>
             <li><a class="dropdown-item" href="#" onclick="App.importData(); return false;">IMPORT</a></li>
             <li><a class="dropdown-item" href="index.html">LOGOUT</a></li>
@@ -193,8 +195,24 @@
             <h2 class="page-title">PORTFOLIOS</h2>
             <button class="btn btn-gta" onclick="App.showModal('portfolio')">+ NEW PORTFOLIO</button>
           </div>
-          <div class="row" id="portfolio-list"></div>
-          <div id="portfolio-empty" class="empty-state">NO PORTFOLIOS YET. CREATE ONE TO GET STARTED.</div>
+          <div class="row">
+            <div class="col-lg-6">
+              <div class="row" id="portfolio-list"></div>
+              <div id="portfolio-empty" class="empty-state">NO PORTFOLIOS YET. CREATE ONE TO GET STARTED.</div>
+            </div>
+            <div class="col-lg-6 pf-chart-col">
+              <div class="card-gta pf-chart-card">
+                <div class="card-gta-header">NET WORTH ALLOCATION</div>
+                <div class="card-gta-body">
+                  <div class="pf-chart-wrap" id="portfolio-chart-wrap">
+                    <canvas id="chart-portfolio-nested"></canvas>
+                  </div>
+                  <div id="portfolio-chart-empty" class="empty-state pf-chart-empty">NO ACCOUNTS WITH VALUE YET.</div>
+                  <div class="pf-legend" id="portfolio-chart-legend"></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -211,13 +229,13 @@
           </div>
           <div class="row mb-4">
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">TOTAL VALUE</span><span class="stat-value" id="pf-stat-value">CHF 0.00</span></div>
-            </div>
-            <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">COST BASIS</span><span class="stat-value" id="pf-stat-cost">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label">TOTAL VALUE</span><span class="stat-value" id="pf-stat-value" style="color:var(--accent)">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
               <div class="stat-card"><span class="stat-label">P&amp;L</span><span class="stat-value" id="pf-stat-pl">CHF 0.00</span></div>
+            </div>
+            <div class="col-md-3 mb-3">
+              <div class="stat-card"><span class="stat-label">INPUT</span><span class="stat-value" id="pf-stat-cost">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
               <div class="stat-card"><span class="stat-label">ACCOUNTS</span><span class="stat-value" id="pf-stat-accounts">0</span></div>
@@ -241,7 +259,16 @@
           </div>
           <div class="row mb-4">
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">CURRENT VALUE</span><span class="stat-value" id="acc-stat-value">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label">CURRENT VALUE</span><span class="stat-value" id="acc-stat-value" style="color:var(--accent)">CHF 0.00</span></div>
+            </div>
+            <div class="col-md-3 mb-3">
+              <div class="stat-card"><span class="stat-label">UNREALIZED P&amp;L</span><span class="stat-value" id="acc-stat-pl">CHF 0.00</span></div>
+            </div>
+            <div class="col-md-3 mb-3">
+              <div class="stat-card"><span class="stat-label">INPUT</span><span class="stat-value" id="acc-stat-cost">CHF 0.00</span></div>
+            </div>
+            <div class="col-md-3 mb-3">
+              <div class="stat-card"><span class="stat-label">CUSTODIAN / CURRENCY</span><span class="stat-value stat-value-sm" id="acc-stat-meta">—</span></div>
             </div>
             <div class="col-md-3 mb-3" id="acc-stat-qty-card" style="display:none">
               <div class="stat-card"><span class="stat-label">QUANTITY</span><span class="stat-value" id="acc-stat-qty">—</span></div>
@@ -252,21 +279,12 @@
             <div class="col-md-3 mb-3" id="acc-stat-assets-card" style="display:none">
               <div class="stat-card"><span class="stat-label">ASSETS HELD</span><span class="stat-value" id="acc-stat-assets">0</span></div>
             </div>
-            <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">COST BASIS</span><span class="stat-value" id="acc-stat-cost">CHF 0.00</span></div>
-            </div>
-            <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">UNREALIZED P&amp;L</span><span class="stat-value" id="acc-stat-pl">CHF 0.00</span></div>
-            </div>
-            <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">CUSTODIAN / CURRENCY</span><span class="stat-value stat-value-sm" id="acc-stat-meta">—</span></div>
-            </div>
           </div>
           <div class="row mb-4">
-            <div class="col-12">
-              <div class="card-gta text-center">
+            <div class="col-lg-4 mb-3">
+              <div class="card-gta text-center h-100 d-flex flex-column">
                 <div class="card-gta-header">PERFORMANCE</div>
-                <div class="card-gta-body py-3">
+                <div class="card-gta-body py-3 d-flex flex-column justify-content-center flex-grow-1">
                   <div class="d-flex justify-content-center gap-2 mb-3" id="acc-perf-selectors">
                     <span class="perf-btn active" data-perf="ytd">YTD</span>
                     <span class="perf-btn" data-perf="1y">1Y</span>
@@ -274,7 +292,24 @@
                     <span class="perf-btn" data-perf="3y">3Y</span>
                     <span class="perf-btn" data-perf="max">MAX</span>
                   </div>
-                  <span class="acc-perf-value" id="acc-perf-value">CHF 0.00</span>
+                  <div class="acc-perf-rows">
+                    <div class="acc-perf-row"><span class="acc-perf-label">INITIAL AMOUNT</span><span class="acc-perf-value" id="acc-perf-initial">CHF 0.00</span></div>
+                    <div class="acc-perf-row"><span class="acc-perf-label">ACTUAL AMOUNT</span><span class="acc-perf-value" id="acc-perf-actual">CHF 0.00</span></div>
+                    <div class="acc-perf-row"><span class="acc-perf-label">INPUT</span><span class="acc-perf-value" id="acc-perf-input">CHF 0.00</span></div>
+                    <div class="acc-perf-row"><span class="acc-perf-label">UNREALIZED P&amp;L</span><span class="acc-perf-value" id="acc-perf-pl">CHF 0.00</span></div>
+                    <div class="acc-perf-row"><span class="acc-perf-label">UNREALIZED P&amp;L %</span><span class="acc-perf-value" id="acc-perf-pct">+0.00%</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-8 mb-3">
+              <div class="card-gta text-center h-100">
+                <div class="card-gta-header">PERFORMANCE CHART</div>
+                <div class="card-gta-body">
+                  <div id="acc-perf-chart-wrap" class="acc-perf-chart-wrap">
+                    <canvas id="acc-perf-chart"></canvas>
+                  </div>
+                  <div id="acc-perf-chart-empty" class="empty-state" style="display:none">NO DATA FOR THIS PERIOD.</div>
                 </div>
               </div>
             </div>
@@ -536,24 +571,82 @@
               <span class="ms-2 text-muted" id="rates-fetch-status"></span>
             </div>
           </div>
-        </div>
-        <div class="card-gta mt-4">
-          <div class="card-gta-header">
-            <span>ALL SAVED RATES</span>
+          <div class="card-gta mt-4">
+            <div class="card-gta-header">
+              <span>ALL SAVED RATES</span>
+            </div>
+            <div class="card-gta-body">
+              <div id="rates-all-empty" class="empty-state">NO RATES SAVED YET.</div>
+              <div class="table-responsive">
+                <table class="table table-gta" id="rates-all-table">
+                  <thead>
+                    <tr>
+                      <th>DATE</th>
+                      <th>CURRENCIES</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="rates-all-body"></tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div class="card-gta-body">
-            <div id="rates-all-empty" class="empty-state">NO RATES SAVED YET.</div>
-            <div class="table-responsive">
-              <table class="table table-gta" id="rates-all-table">
-                <thead>
-                  <tr>
-                    <th>DATE</th>
-                    <th>CURRENCIES</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody id="rates-all-body"></tbody>
-              </table>
+        </div>
+      </div>
+
+      <!-- ===== PRECIOUS METALS PRICES ===== -->
+      <div id="page-metal-prices" class="page">
+        <div class="container-fluid py-4">
+          <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+            <h2 class="page-title">PRECIOUS METALS PRICES</h2>
+            <div class="d-flex align-items-center gap-3">
+              <span class="rate-main-label">SPOT PRICES (CHF)</span>
+              <input type="date" class="form-control form-gta" id="metals-date" style="width: 160px" />
+            </div>
+          </div>
+          <div class="card-gta">
+            <div class="card-gta-header d-flex justify-content-between align-items-center">
+              <span>PRICES FOR <span id="metals-date-label">—</span></span>
+            </div>
+            <div class="card-gta-body">
+              <div id="metals-empty" class="empty-state">NO METAL PRICES FETCHED YET.</div>
+              <div class="table-responsive">
+                <table class="table table-gta" id="metals-table">
+                  <thead>
+                    <tr>
+                      <th>METAL</th>
+                      <th>CHF/oz</th>
+                      <th>CHF/g</th>
+                    </tr>
+                  </thead>
+                  <tbody id="metals-body"></tbody>
+                </table>
+              </div>
+              <small class="text-muted">Live spot prices from gold-api.com, stored per date.</small>
+            </div>
+            <div class="card-gta-body" style="border-top: 1px solid var(--border-color)">
+              <button class="btn btn-gta" id="metals-fetch-btn" onclick="Pages.fetchMetalPrices()">FETCH FROM GOLD API</button>
+              <span class="ms-2 text-muted" id="metals-fetch-status"></span>
+            </div>
+          </div>
+          <div class="card-gta mt-4">
+            <div class="card-gta-header">
+              <span>ALL SAVED PRICES</span>
+            </div>
+            <div class="card-gta-body">
+              <div id="metals-all-empty" class="empty-state">NO METAL PRICES SAVED YET.</div>
+              <div class="table-responsive">
+                <table class="table table-gta" id="metals-all-table">
+                  <thead>
+                    <tr>
+                      <th>DATE</th>
+                      <th>PRICES</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="metals-all-body"></tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

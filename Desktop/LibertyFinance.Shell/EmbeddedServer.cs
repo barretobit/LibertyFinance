@@ -29,6 +29,9 @@ public sealed class EmbeddedServer : IDisposable
         "{\"custodians\":[],\"portfolios\":[],\"accounts\":[],\"transactions\":[]," +
         "\"incomes\":[],\"expenses\":[],\"debts\":[],\"goals\":[]}";
 
+    private const string EmptyMarket =
+        "{\"exchangeRates\":[],\"metalPrices\":[]}";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -136,6 +139,12 @@ public sealed class EmbeddedServer : IDisposable
                 return;
             }
 
+            if (path.Equals("/api/market", StringComparison.OrdinalIgnoreCase))
+            {
+                await HandleMarket(ctx);
+                return;
+            }
+
             if (path.Equals("/api/files", StringComparison.OrdinalIgnoreCase))
             {
                 await HandleFiles(ctx);
@@ -202,6 +211,8 @@ public sealed class EmbeddedServer : IDisposable
             {
                 foreach (var filePath in Directory.GetFiles(_config.DataRoot, "*.json"))
                 {
+                    if (Path.GetFileName(filePath).Equals("market.json", StringComparison.OrdinalIgnoreCase))
+                        continue;
                     var info = new FileInfo(filePath);
                     files.Add(new DataFileInfo(info.Name, info.Length, info.LastWriteTimeUtc.ToString("o")));
                 }
@@ -226,10 +237,51 @@ public sealed class EmbeddedServer : IDisposable
         if (method == "DELETE")
         {
             var dataFile = ResolveDataFile(GetFileParam(ctx));
+            if (Path.GetFileName(dataFile).Equals("market.json", StringComparison.OrdinalIgnoreCase))
+            {
+                Write(ctx.Response, null, null, 403);
+                return;
+            }
             if (File.Exists(dataFile))
             {
                 try { File.Delete(dataFile); } catch { /* best effort */ }
             }
+            Write(ctx.Response, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json", 200);
+            return;
+        }
+
+        Write(ctx.Response, null, null, 405);
+    }
+
+    private async Task HandleMarket(HttpListenerContext ctx)
+    {
+        var marketFile = Path.Combine(_config.DataRoot, "market.json");
+
+        if (ctx.Request.HttpMethod == "GET")
+        {
+            if (File.Exists(marketFile))
+            {
+                var bytes = await File.ReadAllBytesAsync(marketFile);
+                Write(ctx.Response, bytes, "application/json", 200);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(marketFile, EmptyMarket, Encoding.UTF8);
+                Write(ctx.Response, Encoding.UTF8.GetBytes(EmptyMarket), "application/json", 200);
+            }
+            return;
+        }
+
+        if (ctx.Request.HttpMethod == "POST")
+        {
+            string body;
+            using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
+            {
+                body = await reader.ReadToEndAsync();
+            }
+            var dir = Path.GetDirectoryName(marketFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(marketFile, body, Encoding.UTF8);
             Write(ctx.Response, Encoding.UTF8.GetBytes("{\"success\":true}"), "application/json", 200);
             return;
         }
@@ -302,7 +354,7 @@ public sealed class EmbeddedServer : IDisposable
     private static void AddCorsHeaders(HttpListenerResponse response)
     {
         response.Headers["Access-Control-Allow-Origin"] = "*";
-        response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+        response.Headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS";
         response.Headers["Access-Control-Allow-Headers"] = "Content-Type";
     }
 
