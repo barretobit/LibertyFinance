@@ -524,6 +524,32 @@ html, body {
   color: var(--text-primary);
   font-weight: 700;
 }
+.earning-perf-carousel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.earning-perf-arrow {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: var(--font-title);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  text-align: center;
+}
+.earning-perf-arrow:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.earning-perf-arrow:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 .perf-btn {
   display: inline-block;
   font-family: var(--font-title);
@@ -1071,4 +1097,8 @@ html, body {
 .forecast-chart-wrap {
   position: relative;
   height: 240px;
+}
+.expense-chart-wrap {
+  position: relative;
+  height: 300px;
 }

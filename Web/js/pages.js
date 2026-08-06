@@ -242,14 +242,14 @@ const Pages = {
       };
     });
 
-    // Earning performance last 6 months
+    // Earning performance last 12 months
     const allIncomes = await DB.getAll('incomes');
     const allExpenses = await DB.getAll('expenses');
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
     const todayDate = new Date();
     const months = [];
-    for (let i = 5; i >= 0; i--) {
+    for (let i = 12; i >= 0; i--) {
       const d = new Date(todayDate.getFullYear(), todayDate.getMonth() - i, 1);
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -258,9 +258,14 @@ const Pages = {
 
     const earningGrid = document.getElementById('earning-perf-grid');
     const earningEmpty = document.getElementById('earning-perf-empty');
+    const earningLeft = document.getElementById('earning-perf-left');
+    const earningRight = document.getElementById('earning-perf-right');
+    if (!earningGrid) return;
     earningGrid.innerHTML = '';
 
     const monthlyRoi = _monthlyPctSeries(investAccountIds, investTxs);
+    const monthCards = [];
+    const MAX_VISIBLE = 4;
     let hasData = false;
 
     months.forEach(monthKey => {
@@ -312,21 +317,49 @@ const Pages = {
       const roiColor = roiVal ? (roiVal.abs >= 0 ? '#33ff33' : '#ff3333') : '#555';
 
       const col = document.createElement('div');
-      col.className = 'col-2 mb-3';
+      col.className = 'col-3 mb-3';
       col.innerHTML = '<div class="earning-month">' +
         '<div class="earning-month-label">' + monthLabel + '</div>' +
-        '<div class="earning-month-line"><span class="lbl">ACCESS</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">VALUE</span><span class="val">' + formatCurrency(netDeposits, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">PERFORMANCE</span><span class="val" style="color:' + perfColor + '">' + perfText + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">ROI</span><span class="val" style="color:' + roiColor + '">' + roiText + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">INCOME - EXPENSES</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">INVESTED + SAVED</span><span class="val">' + formatCurrency(netDeposits, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">MANAGEMENT PERFORMANCE</span><span class="val" style="color:' + perfColor + '">' + perfText + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">INVESTMENT PERFORMANCE</span><span class="val" style="color:' + roiColor + '">' + roiText + '</span></div>' +
         '</div>';
+      monthCards.push(col);
       earningGrid.appendChild(col);
     });
 
+    let carouselOffset = months.length - MAX_VISIBLE;
+    const renderCarousel = () => {
+      if (!earningLeft || !earningRight) return;
+      monthCards.forEach((card, i) => {
+        card.style.display = (i >= carouselOffset && i < carouselOffset + MAX_VISIBLE) ? '' : 'none';
+      });
+      earningLeft.disabled = carouselOffset <= 0;
+      earningRight.disabled = carouselOffset >= months.length - MAX_VISIBLE;
+    };
+    if (earningLeft && earningRight) {
+      earningLeft.addEventListener('click', () => {
+        if (carouselOffset > 0) {
+          carouselOffset--;
+          renderCarousel();
+        }
+      });
+      earningRight.addEventListener('click', () => {
+        if (carouselOffset < months.length - MAX_VISIBLE) {
+          carouselOffset++;
+          renderCarousel();
+        }
+      });
+    }
+    renderCarousel();
+
     if (!hasData) {
-      earningEmpty.style.display = 'block';
+      if (earningEmpty) earningEmpty.style.display = 'block';
+      if (earningLeft) earningLeft.disabled = true;
+      if (earningRight) earningRight.disabled = true;
     } else {
-      earningEmpty.style.display = 'none';
+      if (earningEmpty) earningEmpty.style.display = 'none';
     }
 
     // Goals section
@@ -446,6 +479,7 @@ const Pages = {
       const roi = _liquidMonthlyRoi();
       let roiMonths = Object.keys(roi).filter(m => m < curMonth).sort();
       if (roiMonths.length === 0) roiMonths = Object.keys(roi).sort();
+      roiMonths = roiMonths.slice(-12);
       const rates = roiMonths.map(m => roi[m].pct / 100);
 
       const hasData = rates.length > 0 && liquidCurrentTotal > 0;
@@ -511,17 +545,29 @@ const Pages = {
       }
       const projectedValue = nRun;
 
+      const initialDate = new Date(baseYear, baseMonth - 12, 1);
+      const initialMonthKey = initialDate.getFullYear() + '-' + String(initialDate.getMonth() + 1).padStart(2, '0');
+      const initialVal = monthTotals[initialMonthKey];
+
       const growthAmt = projectedValue - anchorVal;
       const growthPct = anchorVal > 0 ? (growthAmt / anchorVal) * 100 : 0;
 
-      document.getElementById('forecast-current').textContent = formatCurrency(anchorVal, mainCurrency);
-      document.getElementById('forecast-projected').textContent = formatCurrency(projectedValue, mainCurrency);
+      const initialEl = document.getElementById('forecast-initial');
+      if (initialEl) initialEl.textContent = initialVal !== undefined ? formatCurrency(initialVal, mainCurrency) : 'N/A';
+      const currentEl = document.getElementById('forecast-current');
+      if (currentEl) currentEl.textContent = formatCurrency(anchorVal, mainCurrency);
+      const projectedEl = document.getElementById('forecast-projected');
+      if (projectedEl) projectedEl.textContent = formatCurrency(projectedValue, mainCurrency);
       const growthEl = document.getElementById('forecast-growth');
-      growthEl.innerHTML = (growthAmt >= 0 ? '+' : '') + formatCurrency(growthAmt, mainCurrency) + ' <span class="perf-pct">(' + (growthPct >= 0 ? '+' : '') + growthPct.toFixed(2) + '%)</span>';
-      growthEl.className = 'stat-value forecast-stat ' + (growthAmt >= 0 ? 'pos' : 'neg');
+      if (growthEl) {
+        growthEl.innerHTML = (growthAmt >= 0 ? '+' : '') + formatCurrency(growthAmt, mainCurrency) + ' <span class="perf-pct">(' + (growthPct >= 0 ? '+' : '') + growthPct.toFixed(2) + '%)</span>';
+        growthEl.className = 'stat-value forecast-stat ' + (growthAmt >= 0 ? 'pos' : 'neg');
+      }
       const roiEl = document.getElementById('forecast-roi');
-      roiEl.innerHTML = (mean >= 0 ? '+' : '') + (mean * 100).toFixed(2) + '% <span class="perf-pct">+/&minus;' + (stdev * 100).toFixed(2) + '%</span>';
-      roiEl.className = 'stat-value forecast-stat ' + (mean >= 0 ? 'pos' : 'neg');
+      if (roiEl) {
+        roiEl.innerHTML = (mean >= 0 ? '+' : '') + (mean * 100).toFixed(2) + '% <span class="perf-pct">+/&minus;' + (stdev * 100).toFixed(2) + '%</span>';
+        roiEl.className = 'stat-value forecast-stat ' + (mean >= 0 ? 'pos' : 'neg');
+      }
 
       App._charts.forecast = new Chart(canvas.getContext('2d'), {
         type: 'line',
@@ -622,6 +668,155 @@ const Pages = {
           }
         }
       });
+    })();
+
+    // ==================== YEARLY PERFORMANCE ====================
+    (function() {
+      const grid = document.getElementById('decade-anal-grid');
+      const empty = document.getElementById('decade-anal-empty');
+      const leftBtn = document.getElementById('decade-anal-left');
+      const rightBtn = document.getElementById('decade-anal-right');
+      if (!grid || !empty) return;
+
+      const curYear = todayStr().substring(0, 4);
+      const candidateYears = [];
+      for (let i = 4; i >= 0; i--) candidateYears.push(String(Number(curYear) - i));
+
+      const flowTypes = ['deposit', 'withdrawal', 'valuation', 'buy', 'sell', 'asset-add', 'asset-sell'];
+      const sortedTxs = transactions
+        .filter(t => flowTypes.includes(t.type))
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+      const investedByYear = {};
+      sortedTxs.forEach(t => {
+        const y = (t.date || '').substring(0, 4);
+        if (!y) return;
+        if (t.type === 'deposit') investedByYear[y] = (investedByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        else if (t.type === 'withdrawal') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        else if (t.type === 'buy') investedByYear[y] = (investedByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        else if (t.type === 'sell') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+      });
+
+      const netWorthAt = (eoyDate) => {
+        const lastByAccount = {};
+        sortedTxs.forEach(t => {
+          if ((t.date || '') > eoyDate) return;
+          const prev = lastByAccount[t.accountId];
+          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
+        });
+
+        const accountValueAt = (a) => {
+          if (a.accountType === 'Tangible Asset') {
+            const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+            return { value: assetAccountMetrics(accountAssets[a.id], eoyDate, rateToAcc).value, date: eoyDate };
+          }
+          if (a.accountType === 'Precious Metal' && eoyDate === todayStr()) {
+            return { value: metalAccountValue(a, metalEntry, rateEntries, eoyDate), date: eoyDate };
+          }
+          const last = lastByAccount[a.id];
+          if (last) return { value: last.balanceAfter || 0, date: last.date };
+          if (eoyDate === todayStr()) return { value: a.currentValue || 0, date: eoyDate };
+          return { value: 0, date: eoyDate };
+        };
+
+        let netWorth = 0;
+        let liqNetWorth = 0;
+        accounts.forEach(a => {
+          if (a.includeInNetWorth === false) return;
+          const v = accountValueAt(a);
+          const val = v.value * rateFor(accCurrency[a.id], v.date);
+          netWorth += val;
+          if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) liqNetWorth += val;
+        });
+        return { netWorth, liqNetWorth };
+      };
+
+      const yearStats = {};
+      candidateYears.forEach(year => {
+        const eoyDate = year === curYear ? todayStr() : (year + '-12-31');
+        const { netWorth, liqNetWorth } = netWorthAt(eoyDate);
+
+        const isCurYear = year === curYear;
+        const curMonthKey = todayStr().substring(0, 7);
+        const income = allIncomes
+          .filter(inc => (inc.month || '').startsWith(year) && (!isCurYear || (inc.month || '') <= curMonthKey))
+          .reduce((s, inc) => s + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || (year + '-01')) + '-01')), 0);
+
+        const monthsElapsed = isCurYear ? Math.max(0, Number(curMonthKey.substring(5, 7)) - 1) : 12;
+        let expenses = 0;
+        allExpenses.filter(exp => exp.year === year).forEach(exp => {
+          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
+          expenses += exp.type === 'monthly' ? v * monthsElapsed : v;
+        });
+
+        const investedSaved = investedByYear[year] || 0;
+        const surplus = income - expenses;
+        const mgmtPct = surplus > 0 ? (investedSaved / surplus) * 100 : null;
+
+        yearStats[year] = { netWorth, liqNetWorth, mgmtPct };
+      });
+
+      const years = candidateYears.filter(year => {
+        const hasTx = sortedTxs.some(t => (t.date || '').startsWith(year) && ['deposit', 'withdrawal', 'buy', 'sell', 'valuation'].includes(t.type));
+        const hasInc = allIncomes.some(inc => (inc.month || '').startsWith(year));
+        const hasExp = allExpenses.some(exp => exp.year === year);
+        return hasTx || hasInc || hasExp;
+      });
+
+      const firstYear = years[0];
+      const boy = firstYear ? netWorthAt(firstYear + '-01-01') : null;
+
+      const cards = [];
+      grid.innerHTML = '';
+
+      years.forEach((year, idx) => {
+        const s = yearStats[year];
+        const base = idx > 0 ? yearStats[years[idx - 1]] : boy;
+        const nwGrowth = base ? s.netWorth - base.netWorth : null;
+        const lqGrowth = base ? s.liqNetWorth - base.liqNetWorth : null;
+
+        const growthHtml = (amt) => {
+          if (amt === null || amt === undefined) return '<span class="val" style="color:#555">N/A</span>';
+          return '<span class="val" style="color:' + (amt >= 0 ? '#33ff33' : '#ff3333') + '">' + (amt >= 0 ? '+' : '') + formatCurrency(amt, mainCurrency) + '</span>';
+        };
+
+        const mgmtColor = s.mgmtPct === null ? '#555' : (s.mgmtPct >= 0 ? '#33ff33' : '#ff3333');
+        const mgmtText = s.mgmtPct === null ? 'N/A' : (s.mgmtPct >= 0 ? '+' : '') + s.mgmtPct.toFixed(0) + '%';
+
+        const col = document.createElement('div');
+        col.className = 'col-3 mb-3';
+        col.innerHTML = '<div class="earning-month">' +
+          '<div class="earning-month-label">' + year + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">NET WORTH EOY</span><span class="val">' + formatCurrency(s.netWorth, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH</span>' + growthHtml(nwGrowth) + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EOY</span><span class="val">' + formatCurrency(s.liqNetWorth, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH</span>' + growthHtml(lqGrowth) + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">MANAGEMENT PERFORMANCE</span><span class="val" style="color:' + mgmtColor + '">' + mgmtText + '</span></div>' +
+          '</div>';
+        cards.push(col);
+        grid.appendChild(col);
+      });
+
+      if (years.length === 0) {
+        empty.style.display = 'block';
+        if (leftBtn) leftBtn.disabled = true;
+        if (rightBtn) rightBtn.disabled = true;
+        return;
+      }
+      empty.style.display = 'none';
+
+      const MAX_VISIBLE = 4;
+      let offset = Math.max(0, years.length - MAX_VISIBLE);
+      const renderCarousel = () => {
+        cards.forEach((card, i) => {
+          card.style.display = (i >= offset && i < offset + MAX_VISIBLE) ? '' : 'none';
+        });
+        if (leftBtn) leftBtn.disabled = offset <= 0;
+        if (rightBtn) rightBtn.disabled = offset >= years.length - MAX_VISIBLE;
+      };
+      if (leftBtn) leftBtn.addEventListener('click', () => { if (offset > 0) { offset--; renderCarousel(); } });
+      if (rightBtn) rightBtn.addEventListener('click', () => { if (offset < years.length - MAX_VISIBLE) { offset++; renderCarousel(); } });
+      renderCarousel();
     })();
 
     // Portfolio allocation chart (doughnut)
@@ -726,27 +921,43 @@ const Pages = {
         values = points.map(p => p.value);
       }
 
+      const showAverage = opts && opts.average;
+      const datasets = [{
+        label: isPercent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
+        data: values,
+        borderColor: color,
+        backgroundColor: color + '0d',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 4,
+        pointBackgroundColor: color,
+        borderWidth: 2
+      }];
+      if (showAverage) {
+        const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+        datasets.push({
+          label: 'AVG',
+          data: values.map(() => avg),
+          borderColor: '#ffaa00',
+          borderDash: [6, 4],
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: false,
+          tension: 0
+        });
+      }
+
       App._charts[chartKey] = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
           labels,
-          datasets: [{
-            label: isPercent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
-            data: values,
-            borderColor: color,
-            backgroundColor: color + '0d',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 4,
-            pointBackgroundColor: color,
-            borderWidth: 2
-          }]
+          datasets
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { display: false }
+            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 9, family: "'Share Tech Mono', monospace" } } }
           },
           scales: {
             x: {
@@ -819,7 +1030,7 @@ const Pages = {
     if (investCanvas) {
       const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
       const range = activeRange ? activeRange.dataset.range : '1y';
-      _renderRangeChart(investCanvas, 'investment', investAccountIds, investTxs, range, '#33ccff', { percent: true });
+      _renderRangeChart(investCanvas, 'investment', investAccountIds, investTxs, range, '#33ccff', { percent: true, average: true });
     }
 
     // Recent transactions (last 10)
@@ -842,10 +1053,10 @@ const Pages = {
         const displayAmount = tx.type === 'valuation' ? formatCurrency(tx.amount, acc ? acc.currency : 'CHF')
           : formatCurrency(Math.abs(tx.amount), acc ? acc.currency : 'CHF');
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${formatDate(tx.date)}</td>
+        tr.innerHTML = `<td><span class="tx-badge ${typeClass}">${typeLabel}</span></td>
           <td>${acc ? escapeHtml(acc.name) : '—'}</td>
-          <td><span class="tx-badge ${typeClass}">${typeLabel}</span></td>
-          <td>${displayAmount}</td>`;
+          <td>${displayAmount}</td>
+          <td>${formatDate(tx.date)}</td>`;
         tbody.appendChild(tr);
       });
     }
@@ -1641,11 +1852,68 @@ const Pages = {
     const empty = document.getElementById('expense-empty');
     tbody.innerHTML = '';
 
+    const chartWrap = document.getElementById('expense-chart-wrap');
+    const chartEmpty = document.getElementById('expense-chart-empty');
+    const chartKey = 'expenseWeight';
+    if (App._charts[chartKey]) { try { App._charts[chartKey].destroy(); } catch (e) {} delete App._charts[chartKey]; }
+
     if (filtered.length === 0) {
       empty.style.display = 'block';
+      if (chartWrap) chartWrap.style.display = 'none';
+      if (chartEmpty) chartEmpty.style.display = 'block';
       return;
     }
     empty.style.display = 'none';
+    if (chartWrap) chartWrap.style.display = '';
+    if (chartEmpty) chartEmpty.style.display = 'none';
+
+    const chartItems = filtered
+      .map(exp => {
+        const base = (exp.amount || 0) * (exp.type === 'monthly' ? 12 : 1);
+        return {
+          label: exp.text,
+          annual: base * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'))
+        };
+      })
+      .sort((a, b) => b.annual - a.annual);
+
+    const chartCanvas = document.getElementById('chart-expense-weight');
+    if (chartCanvas && chartItems.length > 0) {
+      if (chartWrap) chartWrap.style.height = Math.max(220, chartItems.length * 34) + 'px';
+      const palette = ['#33ff33', '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
+      App._charts[chartKey] = new Chart(chartCanvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: chartItems.map(i => i.label),
+          datasets: [{
+            label: 'ANNUAL COST',
+            data: chartItems.map(i => i.annual),
+            backgroundColor: chartItems.map((_, idx) => palette[idx % palette.length]),
+            borderColor: '#161616',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => formatCurrency(ctx.parsed.x, mainCurrency) } }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#888', font: { size: 13, family: "'Share Tech Mono', monospace" }, callback: v => formatCurrency(v, mainCurrency) },
+              grid: { color: '#222' }
+            },
+            y: {
+              ticks: { color: '#888', font: { size: 13, family: "'Share Tech Mono', monospace" } },
+              grid: { display: false }
+            }
+          }
+        }
+      });
+    }
 
     filtered.sort((a, b) => (b.amount || 0) - (a.amount || 0)).forEach(exp => {
       const annualCost = exp.type === 'monthly' ? (exp.amount || 0) * 12 : (exp.amount || 0);

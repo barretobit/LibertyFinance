@@ -112,10 +112,14 @@
           <div class="row mb-3">
             <div class="col-12">
               <div class="card-gta">
-                <div class="card-gta-header">EARNING PERFORMANCE (LAST 6 MONTHS)</div>
+                <div class="card-gta-header">EARNING PERFORMANCE (LAST 12 MONTHS)</div>
                 <div class="card-gta-body">
-                  <div class="row" id="earning-perf-grid"></div>
-                  <div id="earning-perf-empty" class="empty-state">NO DATA FOR LAST 6 MONTHS.</div>
+                  <div class="earning-perf-carousel">
+                    <button type="button" id="earning-perf-left" class="earning-perf-arrow" title="Earlier months" aria-label="Earlier months">&larr;</button>
+                    <div class="row flex-grow-1" id="earning-perf-grid"></div>
+                    <button type="button" id="earning-perf-right" class="earning-perf-arrow" title="Recent months" aria-label="Recent months">&rarr;</button>
+                  </div>
+                  <div id="earning-perf-empty" class="empty-state">NO DATA FOR LAST 12 MONTHS.</div>
                 </div>
               </div>
             </div>
@@ -143,21 +147,39 @@
                 </div>
                 <div class="card-gta-body">
                   <div class="row" id="forecast-stats">
-                    <div class="col-md-3 mb-3">
+                    <div class="col-md mb-3">
+                      <div class="stat-card"><span class="stat-label">INITIAL VALUE (12M)</span><span class="stat-value forecast-stat" id="forecast-initial">CHF 0.00</span></div>
+                    </div>
+                    <div class="col-md mb-3">
                       <div class="stat-card"><span class="stat-label">CURRENT VALUE</span><span class="stat-value forecast-stat" id="forecast-current">CHF 0.00</span></div>
                     </div>
-                    <div class="col-md-3 mb-3">
+                    <div class="col-md mb-3">
                       <div class="stat-card"><span class="stat-label">PROJECTED VALUE (12M)</span><span class="stat-value forecast-stat" id="forecast-projected">CHF 0.00</span></div>
                     </div>
-                    <div class="col-md-3 mb-3">
+                    <div class="col-md mb-3">
                       <div class="stat-card"><span class="stat-label">PROJECTED GROWTH</span><span class="stat-value forecast-stat" id="forecast-growth">CHF 0.00</span></div>
                     </div>
-                    <div class="col-md-3 mb-3">
+                    <div class="col-md mb-3">
                       <div class="stat-card"><span class="stat-label">AVG MONTHLY ROI</span><span class="stat-value forecast-stat" id="forecast-roi">+0.00%</span></div>
                     </div>
                   </div>
                   <div class="forecast-chart-wrap"><canvas id="chart-forecast"></canvas></div>
                   <div id="forecast-empty" class="empty-state">INSUFFICIENT LIQUID NET WORTH DATA FOR A RELIABLE FORECAST. ADD ACCOUNTS INCLUDED IN LIQUID NET WORTH OR RECORD VALUATIONS FIRST.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-12">
+              <div class="card-gta">
+                <div class="card-gta-header">YEARLY PERFORMANCE</div>
+                <div class="card-gta-body">
+                  <div class="earning-perf-carousel">
+                    <button type="button" id="decade-anal-left" class="earning-perf-arrow" title="Earlier years" aria-label="Earlier years">&larr;</button>
+                    <div class="row flex-grow-1" id="decade-anal-grid"></div>
+                    <button type="button" id="decade-anal-right" class="earning-perf-arrow" title="Recent years" aria-label="Recent years">&rarr;</button>
+                  </div>
+                  <div id="decade-anal-empty" class="empty-state">NO DATA FOR LAST 5 YEARS.</div>
                 </div>
               </div>
             </div>
@@ -171,10 +193,10 @@
                     <table class="table table-gta" id="dash-tx-table">
                       <thead>
                         <tr>
-                          <th>DATE</th>
-                          <th>ACCOUNT</th>
                           <th>TYPE</th>
+                          <th>ACCOUNT</th>
                           <th>AMOUNT</th>
+                          <th>DATE</th>
                         </tr>
                       </thead>
                       <tbody id="dash-tx-body"></tbody>
@@ -232,7 +254,7 @@
               <div class="stat-card"><span class="stat-label">TOTAL VALUE</span><span class="stat-value" id="pf-stat-value" style="color:var(--accent)">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">P&amp;L</span><span class="stat-value" id="pf-stat-pl">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label">UNREALIZED P&amp;L</span><span class="stat-value" id="pf-stat-pl">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
               <div class="stat-card"><span class="stat-label">INPUT</span><span class="stat-value" id="pf-stat-cost">CHF 0.00</span></div>
@@ -465,6 +487,13 @@
                 </table>
               </div>
               <div id="expense-empty" class="empty-state">NO EXPENSES ADDED YET.</div>
+            </div>
+          </div>
+          <div class="card-gta mt-3">
+            <div class="card-gta-header">EXPENSE WEIGHT (ANNUAL)</div>
+            <div class="card-gta-body">
+              <div class="expense-chart-wrap" id="expense-chart-wrap"><canvas id="chart-expense-weight"></canvas></div>
+              <div id="expense-chart-empty" class="empty-state">NO EXPENSES FOR SELECTED YEAR.</div>
             </div>
           </div>
         </div>
