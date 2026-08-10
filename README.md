@@ -24,9 +24,10 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 - **Investment Performance** — computed over **YTD, 1Y, 2Y, 3Y and MAX** timeframes 📈
 - **Performance Over Time** chart with selectable date ranges 📉
 - **Portfolio Allocation** breakdown across your portfolios 🥧
-- **Earning Performance** — your last 6 months of net income at a glance
+- **Earning Performance** — your last 12 months of income, savings and investment performance in a carousel 📊
+- **Yearly Performance** — net worth, liquid net worth, growth and management performance per year (last 5) 🗓️
 - **Goals overview** with live waterfall allocation across funding accounts 🎯
-- **Forecast** — a 12-month projection based on your historical performance 🔮
+- **Forecast** — a 12-month projection based on historical monthly ROI, with pessimistic / neutral / optimistic scenarios 🔮
 - **Recent Transactions** feed for quick review 🧾
 
 ### 🗂️ Portfolios & Accounts
@@ -34,6 +35,7 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 - Organize accounts into **portfolios** (e.g. Retirement, Growth, Emergency)
 - Five account types: **Cash**, **Investment**, **Retirement Fund**, **Tangible Asset**, **Precious Metal** 🏦
 - Per-account **currency**, **custodian**, **starting value & date**
+- Manage your **custodians** (banks, brokers, vaults) on a dedicated page 🏦
 - Granular toggles: include in **performance chart**, **net worth** and **liquid net worth** ⚙️
 - Track **deposits, withdrawals and valuations** with a full **transaction history** (including running balance) 🧮
 - **Realized & unrealized P&L** and **cost basis** per account
@@ -44,6 +46,7 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 - Buy / Sell metal with **price per gram**, auto-calculated totals
 - **Average-cost basis** accounting across buys and sells
 - Quantity, current price and unrealized P&L shown per metal account
+- **Live spot prices** page: one-click fetch of today's XAU/XAG/XPT/XPD prices (CHF/oz & CHF/g), stored per date 📈
 
 ### 💎 Tangible Assets
 
@@ -73,6 +76,7 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 - Fully **date-based**: rates are stored per day, so historical values convert correctly 🗓️
 - Currency conversion for all amounts into your **main currency** (CHF/EUR/USD/GBP/JPY)
 - **Auto-fill** from the free **Frankfurter API** with one click (only foreign currencies actually used are fetched) 🔄
+- **Startup sync**: today's FX snapshot is silently refreshed for the currencies your accounts actually use
 - Manual save of rates for any date
 
 ### 🛡️ Reliability
@@ -93,13 +97,16 @@ This is the core promise of Liberty Finance:
 - ✅ Your balances, transactions, metals, goals and backups **never leave your hard drive**
 - ✅ Even if the internet goes down, the app keeps working normally
 
-The **only** optional online activities (all user-initiated, none involve your data):
+The **only** online activities are automatic update/market-data refreshes on launch and a few one-click buttons — and none involve your data:
 
-| Activity                    | What it does                                | Your data?                          |
-| --------------------------- | ------------------------------------------- | ----------------------------------- |
-| 🔄 Update check on launch   | Fetches the latest web version from GitHub  | ❌ Never sent                       |
-| 💱 Auto-fill exchange rates | Downloads public FX rates from Frankfurter  | ❌ Never sent (only currency codes) |
-| 🎨 UI styling               | Bootstrap / fonts / charts loaded from CDNs | ❌ Never sent                       |
+| Activity                        | What it does                                          | Your data?                              |
+| ------------------------------- | ----------------------------------------------------- | --------------------------------------- |
+| 🔄 Update check on launch       | Fetches the latest web version from GitHub            | ❌ Never sent                            |
+| 💱 Exchange rates               | Downloads public FX rates from Frankfurter            | ❌ Only currency codes (e.g. EUR, USD)  |
+| 🥇 Metal prices                 | Downloads public spot prices from gold-api.com        | ❌ Only metal symbols (XAU, XAG, XPT, XPD) |
+| 🎨 UI styling                   | Bootstrap / fonts / charts loaded from CDNs           | ❌ Never sent                            |
+
+> 🔒 **Not critical data:** The requests that fetch **gold prices** and **FX rates** only transmit public, non-sensitive identifiers — **currency codes** (e.g. `EUR`, `USD`) and **metal symbols** (e.g. `XAU`, `XAG`). No account balances, transaction amounts or personal data are ever sent. These lookups are purely market-data queries that reveal nothing about your finances.
 
 Delete your data folder and nobody can ever recover it. **What's yours stays yours.** 🔐
 
@@ -144,7 +151,7 @@ Delete your data folder and nobody can ever recover it. **What's yours stays you
 **Desktop Shell** (`Desktop/LibertyFinance.Shell/`) — C# .NET 10 + WinForms
 
 - A borderless, dark-themed wrapper hosting the web UI inside **WebView2** 🖥️
-- **EmbeddedServer**: a minimal `HttpListener` on `127.0.0.1` that serves the static UI and a small REST API (`/api/data`, `/api/files`) — the single source of truth between UI and storage 🌐
+- **EmbeddedServer**: a minimal `HttpListener` on `127.0.0.1` that serves the static UI and a small REST API (`/api/data`, `/api/files`, `/api/market`) — the single source of truth between UI and storage 🌐
 - **BackupService**: snapshots all data files into `Backups\` on startup, keeping the newest N (default 30) 🗄️
 - **UpdateService**: checks GitHub for a newer web build and atomically swaps the local web folder (with rollback safety) ⬆️
 - **CrashLog**: unhandled exceptions are written to `Logs\crash.log` for diagnostics 📝
@@ -156,10 +163,10 @@ Delete your data folder and nobody can ever recover it. **What's yours stays you
 - `js/db.js` — a lightweight **file-backed data layer** with CRUD per entity store 📄
 - `js/utils.js` — currency formatting, **date-based FX conversion**, asset depreciation math
 - `js/app.js` — router, modals and CRUD orchestration
-- `js/pages.js` — all page renderers: dashboard, portfolios, accounts, metals, assets, incomes, expenses, debts, goals, exchange rates
+- `js/pages.js` — all page renderers: dashboard, portfolios, accounts, metals, assets, incomes, expenses, debts, goals, custodians, exchange rates, metal prices
 - `css/style.css` — the full retro theme 🎨
 
-**Data storage** — plain JSON, one file per profile. Zero SQL, zero cloud. 📄
+**Data storage** — plain JSON, one file per profile (plus a shared market file for FX rates & metal prices). Zero SQL, zero cloud. 📄
 
 ---
 
@@ -209,6 +216,7 @@ node Web/server.js
 | 📦 UI Library    | Bootstrap 5 · Chart.js                                    |
 | 🗄️ Storage       | Plain JSON files (fully local)                            |
 | 💱 FX Data       | Frankfurter API (optional, user-initiated)                |
+| 🥇 Metal Data    | gold-api.com (optional, user-initiated)                   |
 
 ---
 
@@ -228,6 +236,7 @@ LibertyFinance/
 │   ├── index.html                # profile picker
 │   ├── app.html                  # main dashboard SPA
 │   ├── server.js                 # Node dev server (optional)
+│   ├── version.txt               # web UI version tag
 │   ├── css/style.css             # retro theme
 │   └── js/                       # db / utils / app / pages
 └── LibertyFinance.slnx           # solution file
