@@ -26,7 +26,85 @@
           <button class="btn-enter sm" onclick="createFile()">+ CREATE</button>
         </div>
 
+        <div class="landing-tutorial">
+          <button class="btn-enter sm" onclick="openTutorial()">HOW IT WORKS</button>
+        </div>
+
         <div class="landing-footer" id="landing-mode-note"></div>
+      </div>
+    </div>
+
+    <!-- ===== HOW IT WORKS / TUTORIAL MODAL ===== -->
+    <div class="tutorial-overlay" id="tutorial-overlay" style="display: none">
+      <div class="tutorial-dialog">
+        <div class="tutorial-header">
+          <span>HOW IT WORKS</span>
+          <button class="tutorial-close" onclick="closeTutorial()" title="CLOSE" aria-label="Close">&times;</button>
+        </div>
+        <div class="tutorial-body">
+          <div class="tutorial-intro">
+            LIBERTY FINANCE IS A PERSONAL WEALTH MANAGEMENT SYSTEM THAT RUNS ENTIRELY IN YOUR BROWSER. IT TRACKS YOUR FULL FINANCIAL PICTURE &mdash; WHAT YOU OWN, WHAT YOU EARN, WHAT YOU SPEND AND WHERE YOUR MONEY GROWS &mdash; ALL IN ONE PLACE.
+          </div>
+
+          <div class="tutorial-section">
+            <div class="tutorial-section-title">YOUR DATA STAYS WITH YOU</div>
+            <p>Everything is stored as plain JSON files on your machine (or in your browser&rsquo;s private storage). No accounts, no cloud, no tracking. You can create <b>multiple profiles</b> to keep separate books &mdash; for example personal, business or family.</p>
+          </div>
+
+          <div class="tutorial-section">
+            <div class="tutorial-section-title">WHAT YOU CAN DO WITH THE APP</div>
+            <ul>
+              <li><b>DASHBOARD</b> &mdash; live net worth, liquid net worth, investment performance, a 12-month forecast, yearly performance and recent transactions.</li>
+              <li><b>PORTFOLIOS</b> &mdash; group your accounts (Retirement, Growth, Emergency&hellip;) and track value, P&amp;L and allocation per portfolio.</li>
+              <li><b>ACCOUNTS</b> &mdash; cash, investments, retirement funds, precious metals and tangible assets, each with currency, custodian, deposits/withdrawals and a full transaction history.</li>
+              <li><b>INCOMES / EXPENSES</b> &mdash; log what you earn and spend to see average monthly income, monthly &amp; annual costs and what you can save.</li>
+              <li><b>GOALS</b> &mdash; set savings targets with priorities and automatic funding from your accounts.</li>
+              <li><b>DEBTS</b> &mdash; track what you owe and what is owed to you.</li>
+              <li><b>CUSTODIANS</b> &mdash; the banks, brokers and vaults that hold your assets.</li>
+              <li><b>EXCHANGE RATES &amp; PRECIOUS METALS</b> &mdash; date-based FX rates and live gold / silver / platinum / palladium spot prices.</li>
+            </ul>
+          </div>
+
+          <div class="tutorial-section">
+            <div class="tutorial-section-title">FIRST STEPS AFTER CREATING YOUR PROFILE</div>
+            <p>Once you create a profile and enter the app, follow these steps in order:</p>
+
+            <div class="tutorial-step">
+              <span class="tutorial-step-num">1</span>
+              <div>
+                <div class="tutorial-step-title">REGISTER YOUR CUSTODIANS</div>
+                <p>Open the <b>CUSTODIANS</b> page and add every institution that holds your money. <b>What is a Custodian?</b> Put simply, it is the company that keeps your assets safe on your behalf &mdash; usually a bank or broker (e.g. UBS, Interactive Brokers), or a vault that stores your gold. Even when you trade through an app, the actual money and securities sit at a custodian. Registering them keeps your accounts organized and easy to understand.</p>
+              </div>
+            </div>
+
+            <div class="tutorial-step">
+              <span class="tutorial-step-num">2</span>
+              <div>
+                <div class="tutorial-step-title">REGISTER YOUR INCOMES AND EXPENSES</div>
+                <p>Log your income sources (salary, freelance, rent) under <b>INCOMES</b>, and your recurring costs (rent, insurance, groceries) under <b>EXPENSES</b>. The app then calculates your average monthly income, your monthly and annual expenses, and ultimately what you can save and invest.</p>
+              </div>
+            </div>
+
+            <div class="tutorial-step">
+              <span class="tutorial-step-num">3</span>
+              <div>
+                <div class="tutorial-step-title">CREATE PORTFOLIOS AND PUT ACCOUNTS INSIDE</div>
+                <p>Go to <b>PORTFOLIOS</b> and create a portfolio &mdash; a group that holds related accounts, like &ldquo;Retirement&rdquo;, &ldquo;Growth&rdquo; or &ldquo;Emergency Fund&rdquo;. Then open the portfolio and press <b>+ ADD ACCOUNT</b> to place your bank and broker accounts inside it. For each account you choose a custodian, a currency and a type (Cash, Investment, Retirement Fund, Precious Metal or Tangible Asset), and set its starting value and date.</p>
+              </div>
+            </div>
+
+            <div class="tutorial-step">
+              <span class="tutorial-step-num">4</span>
+              <div>
+                <div class="tutorial-step-title">KEEP IT UPDATED</div>
+                <p>Record deposits, withdrawals and valuations on each account to keep balances and performance accurate. Your dashboard then computes net worth, P&amp;L and a 12-month forecast automatically.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="tutorial-footer">
+          <button class="btn-enter sm" onclick="closeTutorial()">GOT IT</button>
+        </div>
       </div>
     </div>
 
@@ -86,6 +164,24 @@
         addAction("OPEN PROFILE FILE", "btn-open-file").onclick = openFile;
         setModeNote(mode);
       }
+
+      function openTutorial() {
+        document.getElementById("tutorial-overlay").style.display = "flex";
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeTutorial() {
+        document.getElementById("tutorial-overlay").style.display = "none";
+        document.body.style.overflow = "";
+      }
+
+      document.getElementById("tutorial-overlay").addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeTutorial();
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeTutorial();
+      });
 
       function setModeNote(mode) {
         if (mode === "classic") {
