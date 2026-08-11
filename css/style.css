@@ -328,6 +328,8 @@ body {
   z-index: 100;
 }
 .gtanav .nav-brand {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-title);
   font-size: 18px;
   font-weight: 700;
@@ -338,7 +340,7 @@ body {
 }
 .gtanav .nav-profile {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 400;
   letter-spacing: 2px;
   color: var(--text-secondary);
@@ -673,7 +675,9 @@ body {
   gap: 8px;
 }
 /* Single-row carousel cards: drop the column bottom margin (overrides gutter alignment) */
-.row > .earning-col { margin-bottom: 0 !important; }
+.row > .earning-col {
+  margin-bottom: 0 !important;
+}
 .earning-perf-arrow {
   flex-shrink: 0;
   width: 36px;
@@ -896,8 +900,12 @@ body {
 
 /* ===== GOAL CARDS ===== */
 /* Dedicated goal grid columns: equal 24px spacing, flush variant for single-row grids inside cards */
-.row > .goal-col { margin-bottom: 24px !important; }
-.row > .goal-col.goal-col-flush { margin-bottom: 0 !important; }
+.row > .goal-col {
+  margin-bottom: 24px !important;
+}
+.row > .goal-col.goal-col-flush {
+  margin-bottom: 0 !important;
+}
 .goal-card {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
