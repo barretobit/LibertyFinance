@@ -317,7 +317,7 @@ const Pages = {
       const roiColor = roiVal ? (roiVal.abs >= 0 ? '#33ff33' : '#ff3333') : '#555';
 
       const col = document.createElement('div');
-      col.className = 'col-3 mb-3';
+      col.className = 'col-3 earning-col';
       col.innerHTML = '<div class="earning-month">' +
         '<div class="earning-month-label">' + monthLabel + '</div>' +
         '<div class="earning-month-line"><span class="lbl">INCOME - EXPENSES</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
@@ -379,7 +379,7 @@ const Pages = {
       const results = this._computeGoalWaterfall(goals, accValue);
       results.slice(0, 3).forEach(goalRes => {
         const col = document.createElement('div');
-        col.className = 'col-md-4 mb-3';
+        col.className = 'col-md-4 goal-col goal-col-flush';
         col.innerHTML = this._goalCardHtml(goalRes, accNames, true, mainCurrency);
         goalGrid.appendChild(col);
       });
@@ -784,7 +784,7 @@ const Pages = {
         const mgmtText = s.mgmtPct === null ? 'N/A' : (s.mgmtPct >= 0 ? '+' : '') + s.mgmtPct.toFixed(0) + '%';
 
         const col = document.createElement('div');
-        col.className = 'col-3 mb-3';
+        col.className = 'col-3 earning-col';
         col.innerHTML = '<div class="earning-month">' +
           '<div class="earning-month-label">' + year + '</div>' +
           '<div class="earning-month-line"><span class="lbl">NET WORTH EOY</span><span class="val">' + formatCurrency(s.netWorth, mainCurrency) + '</span></div>' +
@@ -825,6 +825,7 @@ const Pages = {
       const labels = [];
       const values = [];
       const colors = [];
+      const rows = [];
       const palette = ['#33ff33', '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
       let ci = 0;
       Object.values(pfValues).forEach(p => {
@@ -832,7 +833,9 @@ const Pages = {
           const pct = totalValue > 0 ? Math.round(p.value / totalValue * 100) : 0;
           labels.push(p.name + ' (' + pct + '%)');
           values.push(p.value);
-          colors.push(palette[ci % palette.length]);
+          const color = palette[ci % palette.length];
+          colors.push(color);
+          rows.push({ name: p.name, pct, color });
           ci++;
         }
       });
@@ -848,13 +851,22 @@ const Pages = {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: {
-              position: 'bottom',
-              labels: { color: '#d0d0d0', font: { family: "'Share Tech Mono', monospace", size: 10 }, padding: 8 }
-            }
+            legend: { display: false }
           }
         }
       });
+      const legendEl = document.getElementById('alloc-legend');
+      if (legendEl) {
+        legendEl.innerHTML = rows.length
+          ? rows.map(r =>
+              '<div class="alloc-legend-row">' +
+                '<span class="alloc-legend-swatch" style="background:' + r.color + '"></span>' +
+                '<span class="alloc-legend-pct">' + r.pct + '%</span>' +
+                '<span class="alloc-legend-name">' + escapeHtml(r.name) + '</span>' +
+              '</div>'
+            ).join('')
+          : '<div class="alloc-legend-row"><span class="alloc-legend-name">NO DATA</span></div>';
+      }
     }
 
     // Range line chart — shared renderer for Performance Over Time & Investment Performance
@@ -2106,7 +2118,7 @@ const Pages = {
 
     results.forEach(goalRes => {
       const col = document.createElement('div');
-      col.className = 'col-md-4 mb-3';
+      col.className = 'col-md-4 goal-col';
       col.innerHTML = this._goalCardHtml(goalRes, accNames, undefined, mainCurrency);
       list.appendChild(col);
     });

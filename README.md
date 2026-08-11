@@ -131,6 +131,7 @@ Your data always lives in **plain JSON files**. *How* those files are read and w
 ### Folder mode (Chrome, Edge, Opera)
 
 - Click **OPEN DATA FOLDER** and pick your data folder once. The app remembers it and reconnects automatically on your next visit.
+- The button becomes **CHANGE DATA FOLDER** once connected — click it anytime to switch to a different folder (e.g. if you picked the wrong one).
 - Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
 - A `Backups/` subfolder is created next to your data — every time you open a profile, a timestamped snapshot is saved (newest 30 kept).
 - FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.

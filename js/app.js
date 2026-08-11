@@ -25,6 +25,8 @@ const App = {
       return;
     }
 
+    this._applyRadius();
+
     (async () => {
       await Pages.fetchMetalPrices(true).catch(() => {});
       await Pages.fetchRatesLatest(true).catch(() => {});
@@ -162,13 +164,32 @@ const App = {
     select.innerHTML = CURRENCIES.map(c =>
       `<option value="${c.code}" ${c.code === current ? 'selected' : ''}>${c.code} - ${c.name}</option>`
     ).join('');
+    const slider = document.getElementById('settings-radius');
+    const label = document.getElementById('settings-radius-label');
+    const radius = settings.borderRadius != null ? settings.borderRadius : 0;
+    slider.value = radius;
+    label.textContent = radius + 'px';
+    const preview = () => {
+      const v = slider.value;
+      label.textContent = v + 'px';
+      document.documentElement.style.setProperty('--radius', v + 'px');
+    };
+    slider.oninput = preview;
     this._modals.settings.show();
+  },
+
+  async _applyRadius() {
+    const settings = await DB.getSettings();
+    const radius = settings.borderRadius != null ? settings.borderRadius : 0;
+    document.documentElement.style.setProperty('--radius', radius + 'px');
   },
 
   async saveSettings() {
     const currency = document.getElementById('settings-currency').value;
     if (!currency) { this.toast('SELECT A MAIN CURRENCY'); return; }
-    await DB.saveSettings({ mainCurrency: currency });
+    const borderRadius = parseInt(document.getElementById('settings-radius').value) || 0;
+    const existing = await DB.getSettings();
+    await DB.saveSettings({ ...existing, mainCurrency: currency, borderRadius });
     this._modals.settings.hide();
     this.toast('SETTINGS SAVED');
   },
