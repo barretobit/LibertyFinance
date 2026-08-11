@@ -1,21 +1,34 @@
-/* ===== File-based Data Layer ===== */
+/* ===== File-based Data Layer =====
+ *
+ * Storage-agnostic: talks to the active Storage adapter (folder or file mode).
+ * The public DB.* API is stable so the rest of the app never thinks about
+ * where the files live.
+ */
 
 const DB = (() => {
   const DATA_FILE = new URLSearchParams(window.location.search).get('file');
-  let data = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} };
+  const EMPTY = () => ({ custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} });
+  let data = EMPTY();
   let market = { exchangeRates: [], metalPrices: [] };
+  let adapter = null;
   let loaded = false;
   let loadPromise = null;
   let marketWrite = Promise.resolve();
+  let backedUp = false;
 
-  function api(path) {
-    return DATA_FILE ? path + '?file=' + encodeURIComponent(DATA_FILE) : path;
+  async function getAdapter() {
+    if (!adapter) adapter = await Storage.get();
+    return adapter;
   }
 
   async function loadMarket() {
-    const res = await fetch('/api/market');
-    if (!res.ok) throw new Error('Failed to load market data');
-    market = await res.json();
+    const a = await getAdapter();
+    let content = null;
+    try { content = await a.read('market.json'); } catch (e) { content = null; }
+    if (content) {
+      try { market = JSON.parse(content); } catch (e) { market = null; }
+    }
+    if (!market) market = { exchangeRates: [], metalPrices: [] };
     market.exchangeRates = market.exchangeRates || [];
     market.metalPrices = market.metalPrices || [];
   }
@@ -25,20 +38,32 @@ const DB = (() => {
   function saveMarket() {
     const payload = JSON.stringify(market);
     marketWrite = marketWrite.then(async () => {
-      const res = await fetch('/api/market', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload
-      });
-      if (!res.ok) throw new Error('Failed to save market data');
+      const a = await getAdapter();
+      await a.write('market.json', payload);
     });
     return marketWrite;
   }
 
   async function doLoad() {
-    const res = await fetch(api('/api/data'));
-    if (!res.ok) throw new Error('Failed to load data');
-    data = await res.json();
+    const a = await getAdapter();
+
+    let content = null;
+    if (DATA_FILE) {
+      content = await a.read(DATA_FILE);
+    }
+    if (content == null) {
+      // File mode, first visit of this profile: the file was opened via the picker.
+      const pending = Storage.consumePendingOpen();
+      if (pending && pending.name === DATA_FILE) {
+        content = pending.content;
+        // Seed the mirror so the profile survives a reload before the first edit.
+        try { await a.write(DATA_FILE, content); } catch (e) { /* non-fatal */ }
+      }
+    }
+    if (content) {
+      try { data = JSON.parse(content); } catch (e) { data = null; }
+    }
+    data = Object.assign(EMPTY(), data || {});
     data.custodians = data.custodians || [];
     data.portfolios = data.portfolios || [];
     data.accounts = data.accounts || [];
@@ -62,6 +87,13 @@ const DB = (() => {
       await saveMarket();
     }
     delete data.exchangeRates;
+
+    // Light auto-backup once per session.
+    if (DATA_FILE && !backedUp) {
+      backedUp = true;
+      try { await a.backup(DATA_FILE, JSON.stringify(data, null, 2)); } catch (e) { /* non-fatal */ }
+    }
+
     loaded = true;
   }
 
@@ -78,12 +110,8 @@ const DB = (() => {
   }
 
   async function persist() {
-    const res = await fetch(api('/api/data'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error('Failed to save data');
+    const a = await getAdapter();
+    if (DATA_FILE) await a.write(DATA_FILE, JSON.stringify(data));
   }
 
   async function open() {
@@ -174,7 +202,7 @@ const DB = (() => {
   }
 
   async function clearAll() {
-    data = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} };
+    data = EMPTY();
     await persist();
   }
 
@@ -199,5 +227,22 @@ const DB = (() => {
     await persist();
   }
 
-  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, get currentFile() { return DATA_FILE || ''; } };
+  // Force a write of the current data. In file mode this also downloads a copy
+  // so the user keeps a real file on disk.
+  async function saveFile() {
+    await persist();
+    const a = await getAdapter();
+    if (a.kind === 'classic') {
+      Storage.download(DATA_FILE, JSON.stringify(data, null, 2));
+      return 'classic';
+    }
+    return 'dir';
+  }
+
+  async function getMode() {
+    const a = await getAdapter();
+    return a.kind;
+  }
+
+  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, saveFile, getMode, get currentFile() { return DATA_FILE || ''; } };
 })();

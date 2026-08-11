@@ -2,9 +2,9 @@
 
 > **Wealth Management System** — Track, manage and forecast your entire financial life from one place, with a slick retro-inspired dark UI. 🎮
 
-Liberty Finance is a **personal wealth management application** that combines a lightweight **Windows desktop shell** with a modern **web-based dashboard**. It covers everything from cash and investments to precious metals, tangible assets, debts, income, expenses, savings goals and currency-aware net worth — all with zero cloud dependency.
+Liberty Finance is a **personal wealth management application** that runs **entirely in your browser**. No install, no `.exe`, no server — a pure static web app that reads and writes your data as **plain JSON files in a folder you choose**. Works on **Windows, macOS and Linux**, in Chrome, Edge, Firefox and Safari.
 
-Current version: **v0.9** · Themed "Liberty City Network" 🌆
+Current version: **v1.0** · Themed "Liberty City Network" 🌆
 
 ---
 
@@ -13,9 +13,9 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 ### 🖥️ Multi-Profile Management
 
 - Create and manage **multiple independent data profiles** (e.g. personal, business, family) 🗂️
-- Every profile lives in its own local file — switch between them freely
+- Every profile lives in its own JSON file — switch between them freely
 - One-click **export** to a JSON backup file and **import**/restore from any backup 📦
-- Automatic **data backups** created on every app launch 🔄
+- Automatic **data backups** created every time you open a profile 🔄
 
 ### 📊 Dashboard
 
@@ -79,130 +79,148 @@ Current version: **v0.9** · Themed "Liberty City Network" 🌆
 - **Startup sync**: today's FX snapshot is silently refreshed for the currencies your accounts actually use
 - Manual save of rates for any date
 
-### 🛡️ Reliability
-
-- **Self-update**: the desktop app checks the GitHub repo on launch and downloads the latest web assets automatically 🔄
-- **Crash logging** to a local `Logs` folder
-- Embedded server gracefully falls back to a free port if **8765** is busy
-
----
-
-## 🔒 100% LOCAL & OFFLINE — Your Data Never Leaves Your Machine
-
-This is the core promise of Liberty Finance:
-
-- ✅ **All your financial data is stored locally** as plain JSON files on your own computer
-- ✅ **No cloud, no accounts, no sign-up, no tracking, no telemetry**
-- ✅ The app runs on a **local-only server** (`127.0.0.1`) — it is never reachable from the internet
-- ✅ Your balances, transactions, metals, goals and backups **never leave your hard drive**
-- ✅ Even if the internet goes down, the app keeps working normally
-
-The **only** online activities are automatic update/market-data refreshes on launch and a few one-click buttons — and none involve your data:
-
-| Activity                        | What it does                                          | Your data?                              |
-| ------------------------------- | ----------------------------------------------------- | --------------------------------------- |
-| 🔄 Update check on launch       | Fetches the latest web version from GitHub            | ❌ Never sent                            |
-| 💱 Exchange rates               | Downloads public FX rates from Frankfurter            | ❌ Only currency codes (e.g. EUR, USD)  |
-| 🥇 Metal prices                 | Downloads public spot prices from gold-api.com        | ❌ Only metal symbols (XAU, XAG, XPT, XPD) |
-| 🎨 UI styling                   | Bootstrap / fonts / charts loaded from CDNs           | ❌ Never sent                            |
-
-> 🔒 **Not critical data:** The requests that fetch **gold prices** and **FX rates** only transmit public, non-sensitive identifiers — **currency codes** (e.g. `EUR`, `USD`) and **metal symbols** (e.g. `XAU`, `XAG`). No account balances, transaction amounts or personal data are ever sent. These lookups are purely market-data queries that reveal nothing about your finances.
-
-Delete your data folder and nobody can ever recover it. **What's yours stays yours.** 🔐
-
 ---
 
 ## 🏗️ Architecture
 
-> A simple, layered design — **thick client UI + thin local server + plain file storage**. No database, no external services required.
+> A simple, layered design — **static frontend + plain file storage**. No database, no server, no external services required.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  LIBERTY FINANCE DESKTOP APP                 │
-│                      (C# .NET 10 WinForms)                   │
-│                                                              │
-│  ┌───────────────┐   ┌──────────────────────────────┐        │
-│  │  Main Form    │   │  Embedded Server             │        │
-│  │  (WebView2)   │──▶│  http://127.0.0.1:8765       │        │
-│  └──────┬────────┘   │   · serves Web UI            │        │
-│         │            │   · REST API (GET/POST data) │        │
-│         │            └──────┬───────────────────────┘        │
-│  ┌──────┴────────┐          │                                │
-│  │ UpdateService │   ┌──────▼───────────────────────┐        │
-│  │ BackupService │   │  LOCAL JSON DATA FILES        │        │
-│  │ CrashLog      │   │  C:\LibertyFinance\Data       │        │
-│  └───────────────┘   │   · <profile>.json            │        │
-│                      │   · Backups\  (auto)          │        │
-│                      │   · Logs\    (crash logs)     │        │
-│                      └───────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
-                              ▲
-                              │ serves
-              ┌───────────────┴────────────────┐
-              │      WEB FRONTEND (vanilla)     │
-              │  HTML · CSS · JavaScript        │
-              │  Bootstrap 5 · Chart.js         │
-              │  (dashboard + all modules)      │
-              └─────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                     LIBERTY FINANCE (WEB)                      │
+│                    served by GitHub Pages / static host         │
+│                                                               │
+│  ┌───────────────┐   ┌───────────────────────────────────┐   │
+│  │  index.html   │   │  app.html (dashboard + modules)   │   │
+│  │  profile pick │──▶│  js/db.js — Data Layer (DB.* API) │   │
+│  └───────────────┘   └──────────┬────────────────────────┘   │
+│                                 │ reads / writes via          │
+│                                 ▼                             │
+│  ┌───────────────────────────────────────────────────┐       │
+│  │             js/storage.js — 2 adapters             │       │
+│  │   Folder mode (Chrome/Edge/Opera)                  │       │
+│  │     File System Access API → real files on disk    │       │
+│  │   File mode (Firefox/Safari/all)                   │       │
+│  │     open/download + in-browser mirror              │       │
+│  └──────────────────────┬─────────────────────────────┘       │
+│                         │                                      │
+│         YOUR DATA:  <profile>.json · market.json · Backups/    │
+│                     (in a folder you choose — see below)       │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### 🧩 Components
 
-**Desktop Shell** (`Desktop/LibertyFinance.Shell/`) — C# .NET 10 + WinForms
-
-- A borderless, dark-themed wrapper hosting the web UI inside **WebView2** 🖥️
-- **EmbeddedServer**: a minimal `HttpListener` on `127.0.0.1` that serves the static UI and a small REST API (`/api/data`, `/api/files`, `/api/market`) — the single source of truth between UI and storage 🌐
-- **BackupService**: snapshots all data files into `Backups\` on startup, keeping the newest N (default 30) 🗄️
-- **UpdateService**: checks GitHub for a newer web build and atomically swaps the local web folder (with rollback safety) ⬆️
-- **CrashLog**: unhandled exceptions are written to `Logs\crash.log` for diagnostics 📝
-
-**Web Frontend** (`Web/`) — plain HTML/CSS/JavaScript (no framework)
-
 - `index.html` — the profile picker / landing page 🚪
-- `app.html` — the main SPA-style dashboard (hash-based routing: `#dashboard`, `#portfolios`, ...)
-- `js/db.js` — a lightweight **file-backed data layer** with CRUD per entity store 📄
+- `app.html` — the main dashboard (hash-based routing: `#dashboard`, `#portfolios`, …)
+- `js/db.js` — the **data layer**: a file-backed CRUD API (`DB.*`) that the whole UI uses. It talks to the active storage adapter, so nothing else knows or cares where files live 📄
+- `js/storage.js` — the **storage layer**: two interchangeable adapters plus a small IndexedDB helper (see below) 📂
 - `js/utils.js` — currency formatting, **date-based FX conversion**, asset depreciation math
 - `js/app.js` — router, modals and CRUD orchestration
 - `js/pages.js` — all page renderers: dashboard, portfolios, accounts, metals, assets, incomes, expenses, debts, goals, custodians, exchange rates, metal prices
-- `css/style.css` — the full retro theme 🎨
+- `server.js` — **local preview only** (static files; GitHub Pages serves the same files in production)
 
-**Data storage** — plain JSON, one file per profile (plus a shared market file for FX rates & metal prices). Zero SQL, zero cloud. 📄
+**Data storage** — plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices). Zero SQL, zero cloud. 📄
+
+---
+
+## 📂 Storage & Compatibility
+
+Your data always lives in **plain JSON files**. *How* those files are read and written depends on your browser — browsers intentionally sandbox websites away from your hard drive, so the app can only touch files **you** pick.
+
+### Folder mode (Chrome, Edge, Opera)
+
+- Click **OPEN DATA FOLDER** and pick your data folder once. The app remembers it and reconnects automatically on your next visit.
+- Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
+- A `Backups/` subfolder is created next to your data — every time you open a profile, a timestamped snapshot is saved (newest 30 kept).
+- FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.
+- **Your files are just files** — copy them, back them up, open them in another device, anything.
+
+### File mode (Firefox, Safari, and any other browser)
+
+- Click **OPEN PROFILE FILE** to open a single `.json` profile.
+- Edits are kept safe in an in-browser mirror (IndexedDB), so nothing is lost between visits.
+- Use **SAVE FILE** (settings menu inside the app) to **download** the current profile — that's how you keep a real updated file on disk.
+- Backups and market data live in the browser's own storage, not on disk.
+- **EXPORT** (settings menu) gives you a JSON backup file you can carry anywhere; **IMPORT** restores it.
+
+### Same app, same data, everywhere
+
+- All features, calculations and the JSON format are **identical in both modes**.
+- Profiles are fully interchangeable between browsers and devices via EXPORT/IMPORT — or, in folder mode, by copying the files themselves.
+- The app never requires you to switch browsers; it simply adapts to what yours allows.
+
+| Aspect | Folder mode (Chrome/Edge/Opera) | File mode (Firefox/Safari/…) |
+|---|---|---|
+| Opening | Pick a **folder** once → all profiles listed | Open **one `.json` file** at a time |
+| Saving | Silent write back into that folder | **SAVE FILE** downloads the profile |
+| Backups | Real `Backups/` folder next to your data | Inside browser storage (invisible) |
+| Market data | `market.json` in your folder | Inside browser storage |
+| Next visit | Auto-reconnects to your folder | Reopens profile from browser storage |
+| Moving data | Copy the files directly | Use EXPORT / IMPORT |
+
+---
+
+## 🔒 PRIVACY — Your Data Never Leaves Your Machine
+
+- ✅ **All your financial data is stored as local files** (or, in file mode, in your browser's private storage) — never in a database, never on a server
+- ✅ **No accounts, no sign-up, no tracking, no telemetry** in this app
+- ✅ GitHub Pages only serves the static files; it has **no access** to your data and no code runs on their servers
+- ✅ The app keeps working offline once the page is loaded
+
+The **only** online activities are a few one-click market-data refreshes — and none involve your data:
+
+| Activity                        | What it does                                          | Your data?                              |
+| ------------------------------- | ----------------------------------------------------- | --------------------------------------- |
+| 💱 Exchange rates               | Downloads public FX rates from Frankfurter            | ❌ Only currency codes (e.g. EUR, USD)  |
+| 🥇 Metal prices                 | Downloads public spot prices from gold-api.com        | ❌ Only metal symbols (XAU, XAG, XPT, XPD) |
+| 🎨 UI styling                   | Bootstrap / fonts / charts loaded from CDNs           | ❌ Never sent                            |
+
+> 🔒 **Not critical data:** The requests that fetch **gold prices** and **FX rates** only transmit public, non-sensitive identifiers — **currency codes** (e.g. `EUR`, `USD`) and **metal symbols** (e.g. `XAU`, `XAG`). No account balances, transaction amounts or personal data are ever sent.
+
+Delete your data folder (or clear browser storage) and nobody can ever recover it. **What's yours stays yours.** 🔐
 
 ---
 
 ## 🚀 Getting Started
 
-### Requirements
+### Just use it
 
-- **Windows 10/11** (64-bit)
-- **.NET 10 SDK** to build the desktop app
-- **Microsoft Edge WebView2 Runtime** (auto-detected; install prompt on first run)
+The app is hosted on GitHub Pages — no installation:
 
-### Run in development
-
-```powershell
-# Build & run the desktop shell (it serves the Web folder from the repo in dev mode)
-dotnet run --project Desktop/LibertyFinance.Shell
+```
+https://barretobit.github.io/LibertyFinance/
 ```
 
-### Run the web UI standalone (browser)
+Open the link, choose a data folder or file, and you're in. Bookmark it.
+
+### Host your own copy on GitHub Pages (free)
+
+1. Fork (or push) this repo to your GitHub account.
+2. In the repo: **Settings → Pages → Source: Deploy from a branch → Branch: `main` → Folder: `/` (root) → Save**.
+3. Your site goes live at `https://<your-username>.github.io/LibertyFinance/` and **auto-publishes on every push**.
+4. (Optional) Set a custom domain under the same Pages settings.
+
+> The app uses only relative paths, so it works under any subpath or custom domain without changes.
+
+### Test locally
+
+No build step, no dependencies — just serve the folder:
 
 ```powershell
-node Web/server.js
+# Node.js
+node server.js
 # → open http://localhost:8765
 ```
 
-> ⚠️ The Node server is a dev convenience. The **desktop app** embeds the same server natively.
+Or any static server: `npx serve .`, `python -m http.server 8765`, VS Code "Live Server", etc.
 
-### Configuration (`Desktop/LibertyFinance.Shell/appsettings.json`)
+**Testing tips**
+- **Chrome / Edge** → full folder mode: create a profile, add data, confirm the `.json` file and `Backups/` folder appear where you picked, then reload to see auto-reconnect.
+- **Firefox / Safari** → file mode: open a profile, edit, use **SAVE FILE** to download it, reload to confirm the in-browser mirror kept your data.
+- Try EXPORT/IMPORT to move a profile between browsers.
 
-```jsonc
-{
-  "GitHub": { "Owner": "barretobit", "Repo": "LibertyFinance", "Branch": "main", "WebFolder": "Web" },
-  "Paths": { "DataRoot": "C:\\LibertyFinance\\Data" },
-  "Backups": { "MaxFiles": 30 },
-}
-```
+> ⚠️ `file://` (double-clicking the HTML) works for browsing but some browsers restrict storage; use one of the servers above for realistic testing.
 
 ---
 
@@ -210,13 +228,13 @@ node Web/server.js
 
 | Layer            | Technology                                                |
 | ---------------- | --------------------------------------------------------- |
-| 🖥️ Desktop Shell | C# · .NET 10 · WinForms · WebView2                        |
-| 🌐 Server        | Embedded HTTP server (`HttpListener`) on `127.0.0.1:8765` |
+| 🏠 Hosting       | GitHub Pages (static, free, HTTPS)                        |
 | 🎨 Frontend      | HTML5 · CSS3 · Vanilla JavaScript                         |
 | 📦 UI Library    | Bootstrap 5 · Chart.js                                    |
-| 🗄️ Storage       | Plain JSON files (fully local)                            |
+| 📂 Storage       | File System Access API + IndexedDB / plain JSON files     |
 | 💱 FX Data       | Frankfurter API (optional, user-initiated)                |
 | 🥇 Metal Data    | gold-api.com (optional, user-initiated)                   |
+| 🧪 Local preview | `server.js` (static only) or any static file server       |
 
 ---
 
@@ -224,22 +242,19 @@ node Web/server.js
 
 ```
 LibertyFinance/
-├── Desktop/
-│   └── LibertyFinance.Shell/     # WinForms + embedded server + services
-│       ├── MainForm.cs           # WebView2 host, status bar, actions
-│       ├── EmbeddedServer.cs     # local HTTP server + data REST API
-│       ├── BackupService.cs      # automatic startup backups
-│       ├── UpdateService.cs      # self-update from GitHub
-│       ├── CrashLog.cs           # local crash logging
-│       └── AppConfig.cs          # appsettings.json binding
-├── Web/                          # the frontend served to the app
-│   ├── index.html                # profile picker
-│   ├── app.html                  # main dashboard SPA
-│   ├── server.js                 # Node dev server (optional)
-│   ├── version.txt               # web UI version tag
-│   ├── css/style.css             # retro theme
-│   └── js/                       # db / utils / app / pages
-└── LibertyFinance.slnx           # solution file
+├── index.html              # profile picker (landing page)
+├── app.html                # main dashboard SPA
+├── css/style.css           # retro theme
+├── js/
+│   ├── storage.js          # storage layer (folder + file adapters)
+│   ├── db.js               # data layer (DB.* API on top of storage)
+│   ├── utils.js            # FX conversion, formatting, depreciation
+│   ├── app.js              # router, modals, CRUD orchestration
+│   └── pages.js            # all page renderers
+├── logo.png
+├── version.txt             # web UI version tag
+├── server.js               # static dev server (local preview only)
+└── .nojekyll               # tells GitHub Pages to serve files as-is
 ```
 
 ---
@@ -247,7 +262,7 @@ LibertyFinance/
 ## 📜 License & Disclaimer
 
 This is a **personal finance tool** — not investment, tax or legal advice. 🚫
-The app provides a 12-month **forecast based on historical performance only**; past performance does not guarantee future results. Always back up your data folder (`C:\LibertyFinance\Data`) separately if it matters to you. 🛟
+The app provides a 12-month **forecast based on historical performance only**; past performance does not guarantee future results. Always keep a separate copy of your data folder (or an EXPORT backup) if it matters to you. 🛟
 
 ---
 

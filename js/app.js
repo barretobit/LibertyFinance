@@ -17,7 +17,13 @@ const App = {
     const navProfile = document.getElementById('nav-profile');
     if (navProfile) navProfile.textContent = file.replace(/\.json$/i, '');
 
-    await DB.open();
+    try {
+      await DB.open();
+    } catch (e) {
+      // Storage not connected (e.g. folder permission revoked) — back to the picker.
+      window.location.replace('index.html');
+      return;
+    }
 
     (async () => {
       await Pages.fetchMetalPrices(true).catch(() => {});
@@ -1262,6 +1268,19 @@ const App = {
   },
 
   // ==================== EXPORT / IMPORT ====================
+
+  async saveFile() {
+    try {
+      const kind = await DB.saveFile();
+      if (kind === 'classic') {
+        this.toast('FILE DOWNLOADED');
+      } else {
+        this.toast('FILE SAVED TO FOLDER');
+      }
+    } catch (e) {
+      this.toast('SAVE FAILED: ' + e.message);
+    }
+  },
 
   async exportData() {
     const data = await DB.exportAll();

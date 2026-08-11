@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Liberty Finance</title>
+  <link rel="icon" type="image/png" href="logo.png" />
+  <link rel="stylesheet" href="css/style.css?v=7" />
+</head>
+<body>
+  <div id="page-landing">
+    <div class="scanlines"></div>
+    <div class="landing-content">
+      <div class="landing-badge">LCN-87.3</div>
+      <h1 class="landing-title">LIBERTY<br />FINANCE</h1>
+      <p class="landing-subtitle">WEALTH MANAGEMENT SYSTEM <span id="app-version">v1.0</span></p>
+      <div class="landing-status" id="landing-status">CONNECT YOUR DATA</div>
+
+      <div class="landing-actions" id="landing-actions"></div>
+
+      <div id="file-list" class="file-list"></div>
+      <div id="file-empty" class="file-empty" style="display: none">NO DATA FILES FOUND</div>
+
+      <div class="file-create">
+        <input type="text" id="new-file-name" class="file-input" placeholder="NEW PROFILE NAME" maxlength="40" />
+        <button class="btn-enter sm" onclick="createFile()">+ CREATE</button>
+      </div>
+
+      <div class="landing-footer" id="landing-mode-note"></div>
+    </div>
+  </div>
+
+  <script src="js/storage.js?v=1"></script>
+  <script>
+    const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
+    const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} };
+    let selected = localStorage.getItem(LAST_FILE_KEY);
+    let folderConnected = false;
+
+    const statusEl = () => document.getElementById('landing-status');
+    const listEl = () => document.getElementById('file-list');
+    const modeNoteEl = () => document.getElementById('landing-mode-note');
+    const actionsEl = () => document.getElementById('landing-actions');
+
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function formatModified(ts) {
+      if (!ts) return '—';
+      const d = new Date(ts);
+      return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function selectFile(name) {
+      selected = name;
+      document.querySelectorAll('.file-row').forEach(r => {
+        r.classList.toggle('selected', r.dataset.file === name);
+      });
+    }
+
+    function enterFile(name) {
+      if (!name) return;
+      localStorage.setItem(LAST_FILE_KEY, name);
+      window.location.href = 'app.html?file=' + encodeURIComponent(name);
+    }
+
+    function addAction(label, id) {
+      const btn = document.createElement('button');
+      btn.className = 'btn-enter sm';
+      btn.id = id;
+      btn.textContent = label;
+      actionsEl().appendChild(btn);
+      return btn;
+    }
+
+    function renderActions(mode) {
+      const actions = actionsEl();
+      actions.innerHTML = '';
+
+      if (Storage.supportsDirectory()) {
+        addAction(folderConnected ? 'CHANGE DATA FOLDER' : 'OPEN DATA FOLDER', 'btn-open-folder').onclick = openFolder;
+      }
+      addAction('OPEN PROFILE FILE', 'btn-open-file').onclick = openFile;
+      setModeNote(mode);
+    }
+
+    function setModeNote(mode) {
+      if (mode === 'classic') {
+        statusEl().textContent = 'FILE MODE — OPEN A PROFILE FILE OR CREATE ONE';
+        modeNoteEl().textContent = 'FILE MODE: EDITS ARE SAVED IN THIS BROWSER. USE "SAVE FILE" INSIDE THE APP TO DOWNLOAD YOUR PROFILE.';
+      } else {
+        statusEl().textContent = 'FOLDER MODE — YOUR DATA LIVES IN REAL .JSON FILES';
+        modeNoteEl().textContent = 'FOLDER MODE: FILES ARE READ/WRITTEN DIRECTLY IN THE FOLDER YOU CHOSE.';
+      }
+    }
+
+    async function openFolder() {
+      try {
+        // Always open the picker on click — never silently reconnect to a
+        // previously chosen folder. Auto-reconnect only happens on page load.
+        const dir = await Storage.pickNewFolder();
+        folderConnected = true;
+        selected = null;
+        renderActions('dir');
+        statusEl().textContent = 'CONNECTED — ' + (dir.name || 'DATA FOLDER');
+        await loadFiles('dir');
+      } catch (e) {
+        statusEl().textContent = 'FOLDER CONNECT FAILED: ' + (e.message || 'CANCELLED');
+      }
+    }
+
+    async function openFile() {
+      try {
+        const picked = await Storage.openFileDialog('.json');
+        if (!picked) return;
+        const name = Storage.normalizeFileName(picked.name);
+        if (!name) { statusEl().textContent = 'INVALID FILE NAME'; return; }
+        await Storage.setMode('classic');
+        Storage.setPendingOpen({ name, content: picked.content });
+        await enterFile(name);
+      } catch (e) {
+        statusEl().textContent = 'OPEN FAILED: ' + e.message;
+      }
+    }
+
+    async function loadFiles(mode) {
+      try {
+        const a = await Storage.get();
+        const files = await a.list();
+        const empty = document.getElementById('file-empty');
+        const list = listEl();
+        list.innerHTML = '';
+
+        if (!files || files.length === 0) {
+          empty.style.display = 'block';
+          return;
+        }
+        empty.style.display = 'none';
+
+        files.forEach(f => {
+          const row = document.createElement('div');
+          row.className = 'file-row';
+          row.dataset.file = f.name;
+          if (f.name === selected) row.classList.add('selected');
+          row.innerHTML =
+            '<div class="file-info">' +
+            '<span class="file-name">' + f.name.replace(/\.json$/i, '').toUpperCase() + '</span>' +
+            '<span class="file-meta">' + formatSize(f.size) + ' &middot; ' + formatModified(f.modified) + '</span>' +
+            '</div>' +
+            '<button class="file-enter">ENTER</button>';
+          list.appendChild(row);
+        });
+
+        if (files.length > 0 && !selected) selectFile(files[0].name);
+      } catch (e) {
+        statusEl().textContent = 'ERROR LOADING FILES: ' + e.message;
+      }
+    }
+
+    listEl().addEventListener('click', e => {
+      const row = e.target.closest('.file-row');
+      if (!row) return;
+      const name = row.dataset.file;
+      if (e.target.closest('.file-enter')) return enterFile(name);
+      selectFile(name);
+    });
+
+    async function createFile() {
+      const input = document.getElementById('new-file-name');
+      const raw = input.value.trim();
+      if (!raw) { statusEl().textContent = 'ENTER A PROFILE NAME'; return; }
+      const fileName = Storage.normalizeFileName(raw);
+      if (!fileName) { statusEl().textContent = 'INVALID NAME — USE LETTERS, NUMBERS, SPACES, - OR _'; return; }
+      try {
+        const a = await Storage.get();
+        const exists = (await a.read(fileName)) != null;
+        if (exists) { statusEl().textContent = 'PROFILE ALREADY EXISTS'; return; }
+        await a.write(fileName, JSON.stringify(EMPTY_DATA));
+        input.value = '';
+        statusEl().textContent = 'PROFILE CREATED';
+        if (a.kind === 'classic') {
+          Storage.download(fileName, JSON.stringify(EMPTY_DATA));
+          statusEl().textContent = 'PROFILE CREATED — FILE DOWNLOADED';
+        }
+        await loadFiles(a.kind);
+        selectFile(fileName);
+      } catch (e) {
+        statusEl().textContent = 'CREATE FAILED: ' + e.message;
+      }
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      if (document.activeElement && document.activeElement.id === 'new-file-name') return;
+      if (selected) enterFile(selected);
+    });
+
+    async function loadVersion() {
+      try {
+        const res = await fetch('version.txt');
+        if (res.ok) {
+          const ver = (await res.text()).trim();
+          if (ver) {
+            const el = document.getElementById('app-version');
+            if (el) el.textContent = ver;
+          }
+        }
+      } catch (e) {
+        // fallback to v1.0
+      }
+    }
+
+    async function init() {
+      let mode = 'classic';
+      let connected = false;
+      try {
+        const a = await Storage.get();
+        mode = a.kind;
+        if (mode === 'dir') {
+          // Auto-reconnect to the previously chosen folder when permission is still granted.
+          const dir = await a.connect();
+          connected = true;
+          statusEl().textContent = 'CONNECTED — ' + (dir.name || 'DATA FOLDER');
+        }
+      } catch (e) {
+        mode = 'dir';
+      }
+      folderConnected = connected;
+      renderActions(mode);
+      if (mode === 'classic') {
+        await loadFiles(mode);
+      } else if (connected) {
+        await loadFiles('dir');
+      } else {
+        statusEl().textContent = 'FOLDER MODE — PICK YOUR DATA FOLDER';
+      }
+    }
+
+    init();
+    loadVersion();
+  </script>
+</body>
+</html>

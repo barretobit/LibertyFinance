@@ -1,8 +1,6 @@
-# Build output
-Desktop/**/bin/
-Desktop/**/obj/
-Desktop/**/publish/
-*.user
-
 # IDE
 .vs/
+*.user
+
+# Node (local dev server only — no runtime deps)
+node_modules/

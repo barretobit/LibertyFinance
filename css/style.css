@@ -145,6 +145,16 @@ html, body {
   letter-spacing: 2px;
 }
 
+.landing-actions {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 auto 22px;
+  width: 460px;
+  max-width: 92vw;
+}
+
 .file-list {
   width: 460px;
   max-width: 92vw;
