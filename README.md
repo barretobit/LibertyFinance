@@ -124,7 +124,7 @@ Current version: **v1.0** · Themed "Liberty City Network" 🌆
 - `js/storage.js`: the **storage layer**: two interchangeable adapters plus a small IndexedDB helper (see below) 📂
 - `js/utils.js`: currency formatting, **date based FX conversion**, asset depreciation math
 - `js/app.js`: router, modals and CRUD orchestration
-- `js/pages.js`: all page renderers: dashboard, portfolios, accounts, metals, assets, incomes, expenses, debts, goals, custodians, exchange rates, metal prices
+- `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals)
 - `server.js`: **local preview only** (static files; GitHub Pages serves the same files in production)
 
 **Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices). Zero SQL, zero cloud. 📄
@@ -230,7 +230,13 @@ LibertyFinance/
 │   ├── db.js               # data layer (DB.* API on top of storage)
 │   ├── utils.js            # FX conversion, formatting, depreciation
 │   ├── app.js              # router, modals, CRUD orchestration
-│   └── pages.js            # all page renderers
+│   ├── pages-shared.js     # renderer helpers + Pages namespace
+│   ├── pages-dashboard.js  # dashboard renderer
+│   ├── pages-portfolios.js # portfolios + portfolio detail
+│   ├── pages-accounts.js   # account detail
+│   ├── pages-money.js      # custodians, incomes, expenses, debts
+│   ├── pages-goals.js      # goals
+│   └── pages-market.js     # exchange rates + metal prices
 ├── logo.png
 ├── version.txt             # web UI version tag
 ├── server.js               # static dev server (local preview only)
