@@ -97,7 +97,7 @@ const Pages = {
     transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
       .forEach(t => {
         const prev = accTxs[t.accountId];
-        if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
+        if (!prev || (t.date || '') >= (prev.date || '')) accTxs[t.accountId] = t;
       });
 
     let totalValue = 0;
@@ -2067,7 +2067,7 @@ const Pages = {
     transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
       .forEach(t => {
         const prev = accTxs[t.accountId];
-        if (!prev || (t.date || '') > (prev.date || '')) accTxs[t.accountId] = t;
+        if (!prev || (t.date || '') >= (prev.date || '')) accTxs[t.accountId] = t;
       });
     const accountAssets = {};
     assets.forEach(a => {

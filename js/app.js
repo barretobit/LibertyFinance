@@ -25,6 +25,8 @@ const App = {
       return;
     }
 
+    try { await this._recomputeAllBalances(); } catch (e) { /* non-fatal */ }
+
     this._applyRadius();
 
     (async () => {
@@ -259,8 +261,10 @@ const App = {
     const pmFields = document.getElementById('pm-fields');
     const startingFields = document.getElementById('starting-value-fields');
     const startingValueField = document.getElementById('account-starting-value');
+    const startingContribField = document.getElementById('account-starting-contrib');
     const startingDateField = document.getElementById('account-starting-date');
     const startingSymbol = document.getElementById('account-starting-symbol');
+    const contribSymbol = document.getElementById('account-contrib-symbol');
 
     function toggleAccountTypeFields() {
       const t = typeField.value;
@@ -271,6 +275,7 @@ const App = {
 
     function updateStartingSymbol() {
       if (startingSymbol) startingSymbol.textContent = currencyField.value || mainCurrency;
+      if (contribSymbol) contribSymbol.textContent = currencyField.value || mainCurrency;
     }
     currencyField.onchange = updateStartingSymbol;
 
@@ -303,6 +308,7 @@ const App = {
         qtyField.value = a.quantity || 0;
         toggleAccountTypeFields();
         startingValueField.value = '';
+        startingContribField.value = '';
         this._modals.account.show();
       });
     } else {
@@ -321,6 +327,7 @@ const App = {
       qtyField.value = 0;
       toggleAccountTypeFields();
       startingValueField.value = '';
+      startingContribField.value = '';
       startingDateField.value = todayStr();
       updateStartingSymbol();
       this._modals.account.show();
@@ -960,6 +967,7 @@ const App = {
     const isNew = !id;
     const accountType = document.getElementById('account-type').value;
     const startingValue = isNew && accountType !== 'Tangible Asset' ? (parseFloat(document.getElementById('account-starting-value').value) || 0) : 0;
+    const startingContrib = isNew && accountType !== 'Tangible Asset' ? (parseFloat(document.getElementById('account-starting-contrib').value) || 0) : 0;
     const startingDate = isNew ? (document.getElementById('account-starting-date').value || todayStr()) : todayStr();
 
     let existingValue = 0;
@@ -975,6 +983,20 @@ const App = {
       data.pricePerGram = 0;
       const accountId = await DB.add('accounts', data);
       if (startingValue > 0) {
+        // Opening balance split: contributed portion is a deposit, the rest is opening performance.
+        const isSplit = startingContrib > 0 && startingContrib < startingValue;
+        const createdAt = nowISO();
+        if (isSplit) {
+          await DB.add('transactions', {
+            accountId,
+            type: 'deposit',
+            amount: startingContrib,
+            date: startingDate,
+            notes: 'OPENING CONTRIBUTION',
+            balanceAfter: startingContrib,
+            createdAt
+          });
+        }
         const txData = {
           accountId,
           type: 'valuation',
@@ -982,7 +1004,7 @@ const App = {
           date: startingDate,
           notes: 'OPENING VALUATION',
           balanceAfter: startingValue,
-          createdAt: nowISO()
+          createdAt: isSplit ? nowISO() : createdAt
         };
         if (data.accountType === 'Precious Metal' && (data.quantity || 0) > 0) {
           const derived = startingValue / data.quantity;
@@ -992,6 +1014,7 @@ const App = {
         await DB.add('transactions', txData);
         data.currentValue = startingValue;
         await DB.put('accounts', data);
+        await this._recomputeAccountBalances(accountId);
       }
     }
     this._modals.account.hide();
@@ -1026,6 +1049,7 @@ const App = {
 
     account.currentValue = balanceAfter;
     await DB.put('accounts', account);
+    await this._recomputeAccountBalances(accountId);
 
     this._modals.transaction.hide();
     this.toast((type === 'deposit' ? 'DEPOSIT' : 'WITHDRAWAL') + ' RECORDED');
@@ -1070,6 +1094,7 @@ const App = {
 
     account.currentValue = amount;
     await DB.put('accounts', account);
+    await this._recomputeAccountBalances(accountId);
 
     this._modals.valuation.hide();
     this.toast('VALUE UPDATED');
@@ -1258,6 +1283,7 @@ const App = {
       }
     }
     await DB.del('transactions', id);
+    await this._recomputeAccountBalances(tx.accountId);
     this.toast('TRANSACTION DELETED');
     this.route();
   },
@@ -1349,6 +1375,68 @@ const App = {
       account[field] = checked;
       await DB.put('accounts', account);
     }
+  },
+
+  // ==================== BALANCE REPLAY ====================
+
+  // Recomputes the running balance for a cash-like account by replaying its
+  // transactions in chronological order. Fixes out-of-order backfills, where the
+  // stored balanceAfter was snapshotted against the account's current value and
+  // is therefore wrong for historical dates (e.g. an old deposit inheriting the
+  // latest balance).
+  async _recomputeAccountBalances(accountId) {
+    const account = await DB.getById('accounts', accountId);
+    if (!account) return;
+    const type = account.accountType;
+    if (type === 'Tangible Asset' || type === 'Precious Metal') return; // computed from assets/quantity
+    const flowTypes = ['deposit', 'withdrawal', 'valuation', 'buy', 'sell'];
+    const txs = (await DB.getByIndex('transactions', 'accountId', accountId))
+      .filter(t => flowTypes.includes(t.type))
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    if (txs.length === 0) return;
+
+    let balance = 0;
+    for (let i = 0; i < txs.length; i++) {
+      const tx = txs[i];
+      const abs = Math.abs(tx.amount || 0);
+      if (i === 0) {
+        // Seed with the opening level. A first deposit/buy has nothing before it,
+        // so the balance equals the amount itself (avoids inheriting a wrong
+        // snapshot from an out-of-order entry). A first valuation carries its own value.
+        if (tx.type === 'deposit' || tx.type === 'buy') balance = abs;
+        else balance = tx.balanceAfter != null ? tx.balanceAfter : (tx.amount != null ? tx.amount : 0);
+      } else if (tx.type === 'deposit' || tx.type === 'buy') {
+        balance += abs;
+      } else if (tx.type === 'withdrawal' || tx.type === 'sell') {
+        balance -= abs;
+      } else if (tx.type === 'valuation') {
+        balance = tx.amount != null ? tx.amount : balance;
+      }
+      if (tx.balanceAfter !== balance) {
+        tx.balanceAfter = balance;
+        await DB.put('transactions', tx);
+      }
+    }
+
+    if ((account.currentValue || 0) !== balance) {
+      account.currentValue = balance;
+      await DB.put('accounts', account);
+    }
+  },
+
+  async _recomputeAllBalances() {
+    const accounts = await DB.getAll('accounts');
+    for (const a of accounts) {
+      await this._recomputeAccountBalances(a.id);
+    }
+  },
+
+  async recalcAccount() {
+    const id = this.currentAccId;
+    if (!id) { this.toast('NO ACCOUNT SELECTED'); return; }
+    await this._recomputeAccountBalances(id);
+    this.toast('BALANCES RECOMPUTED');
+    this.route();
   },
 
   // ==================== TOAST ====================
