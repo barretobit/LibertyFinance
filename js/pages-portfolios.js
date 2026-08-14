@@ -81,7 +81,7 @@ Object.assign(Pages, {
     // Render the portfolio cards
     pfData.forEach(p => {
       const col = document.createElement('div');
-      col.className = 'mb-3';
+      col.className = 'col-12';
       col.innerHTML = `<div class="pf-card" onclick="App.navigate('portfolio-detail?id=${p.id}')">
         <div class="pf-name">${escapeHtml(p.name)}</div>
         <div class="pf-value">${formatCurrency(p.value, mainCurrency)}</div>
@@ -278,7 +278,8 @@ Object.assign(Pages, {
     empty.style.display = 'none';
 
     accounts.forEach(a => {
-      const { effVal, pl } = effMap[a.id] || { effVal: 0, pl: 0 };
+      const { effVal, pl, costBasis } = effMap[a.id] || { effVal: 0, pl: 0, costBasis: 0 };
+      const plPct = costBasis !== 0 ? (pl / costBasis) * 100 : null;
       let metaExtra = '';
       if (a.accountType === 'Precious Metal' && a.quantity) {
         const spot = metalSpotPerGram(metalEntry, a.metalType, a.currency || 'CHF', rateEntries, todayStr());
@@ -316,7 +317,7 @@ Object.assign(Pages, {
         </div>
         <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${metaExtra}</div>
         <div class="acc-value">${formatCurrency(effVal, a.currency)}</div>
-        <div class="acc-pl ${plClass(pl)}">${pl >= 0 ? '+' : ''}${formatCurrency(pl, a.currency)}</div>
+        <div class="acc-pl ${plClass(pl)}">${pl >= 0 ? '+' : ''}${formatCurrency(pl, a.currency)}<span class="acc-pl-pct">${plPct != null ? (plPct >= 0 ? '+' : '') + plPct.toFixed(2) + '%' : '&mdash;'}</span></div>
       </div>`;
       list.appendChild(col);
     });

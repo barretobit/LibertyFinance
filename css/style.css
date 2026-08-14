@@ -295,9 +295,65 @@ body {
 .landing-tutorial {
   display: flex;
   justify-content: center;
+  gap: 12px;
   width: 460px;
   max-width: 92vw;
-  margin: 18px auto 0;
+  margin: 44px auto 0;
+}
+.landing-tutorial .btn-enter.ghost {
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 3px;
+  padding: 8px 16px;
+  text-shadow: none;
+}
+.landing-tutorial .btn-enter.ghost:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+/* ===== MAKE IT RAIN EASTER EGG ===== */
+.rain-hint {
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--border-color);
+  margin-top: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.3s;
+}
+.rain-hint:hover {
+  color: var(--text-secondary);
+}
+.rain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  pointer-events: none;
+  overflow: hidden;
+}
+.rain-bill {
+  position: absolute;
+  top: -8vh;
+  animation-name: rain-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+  will-change: transform;
+  user-select: none;
+}
+@keyframes rain-fall {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  100% {
+    transform: translate(var(--sway, 0px), 112vh) rotate(var(--spin, 180deg));
+  }
 }
 .file-input {
   flex: 1;
@@ -458,6 +514,48 @@ body {
   justify-content: flex-end;
   padding: 14px 20px;
   border-top: 1px solid var(--border-color);
+}
+
+/* ===== VERSIONS / CHANGELOG MODAL ===== */
+.versions-loading {
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  text-align: center;
+  padding: 12px 0;
+}
+.versions-entry {
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+.versions-entry:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.versions-ver {
+  font-family: var(--font-title);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 2px;
+  text-shadow: 0 0 15px var(--accent-glow);
+}
+.versions-date {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  text-shadow: none;
+  margin-left: 8px;
+}
+.versions-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.versions-list li {
+  margin-bottom: 6px;
 }
 
 /* ===== TOP NAV ===== */
@@ -698,6 +796,10 @@ body {
 
 /* ===== DASHBOARD ===== */
 .dash-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
   text-align: center;
   padding: 40px 20px;
 }
@@ -1014,7 +1116,7 @@ body {
 }
 .acc-card .acc-name {
   font-family: var(--font-title);
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--accent);
   display: flex;
@@ -1043,6 +1145,9 @@ body {
 }
 .acc-card .acc-pl.neg {
   color: var(--danger);
+}
+.acc-card .acc-pl-pct {
+  margin-left: 24px;
 }
 
 /* ===== GOAL CARDS ===== */
@@ -1421,8 +1526,8 @@ body {
 /* ===== TYPE BADGE ===== */
 .type-badge {
   font-family: var(--font-title);
-  font-size: 9px;
-  padding: 1px 5px;
+  font-size: 13px;
+  padding: 2px 8px;
   border: 1px solid;
   letter-spacing: 0.5px;
 }

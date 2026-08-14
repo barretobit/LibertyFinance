@@ -1,1 +1,33 @@
-v1.0
+v1.0 — 14 Aug 2026
+- Added a VERSIONS & CHANGES modal on the landing page
+- Added "CHANGE FROM LAST YEAR" comparison cards on the Incomes and Expenses pages
+- Portfolio cards now show P&L percentage alongside the value
+- Landing page buttons refined to a subtler ghost style
+- Added a hidden "make it rain" Easter egg
+
+v0.93 — 30 Jul 2026
+- Performance calculation engine revisited for more accurate yearly figures
+- Code split into per-page modules for faster maintenance
+
+v0.87 — 14 Jul 2026
+- HOW IT WORKS tutorial and FAQ section on the landing page
+- Visual tuning with user settings support
+
+v0.79 — 21 Jun 2026
+- Dashboard redesigned with live net worth, liquid net worth and 12-month forecast
+- More debt information shown across all pages
+
+v0.64 — 19 May 2026
+- Precious Metals accounts reworked
+- Date-based exchange rate handling improved
+
+v0.52 — 2 Apr 2026
+- Multiple profiles support with profile creation and selection
+- New file icon set and overall styling pass
+
+v0.38 — 11 Feb 2026
+- Project reorganized to run fully static
+- Added a companion Windows Shell application that connects the web app to local files
+
+v0.27 — 8 Jan 2026
+- Initial public release of the web version

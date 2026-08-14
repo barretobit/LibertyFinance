@@ -27,12 +27,16 @@
         </div>
 
         <div class="landing-tutorial">
-          <button class="btn-enter sm" onclick="openTutorial()">HOW IT WORKS</button>
+          <button class="btn-enter sm ghost" onclick="openTutorial()">HOW IT WORKS</button>
+          <button class="btn-enter sm ghost" onclick="openVersions()">VERSIONS</button>
         </div>
 
         <div class="landing-footer" id="landing-mode-note"></div>
+        <div class="rain-hint" onclick="makeItRain()" title="">make it rain</div>
       </div>
     </div>
+
+    <div id="rain-overlay" class="rain-overlay" style="display: none" aria-hidden="true"></div>
 
     <!-- ===== HOW IT WORKS / TUTORIAL MODAL ===== -->
     <div class="tutorial-overlay" id="tutorial-overlay" style="display: none">
@@ -108,6 +112,22 @@
       </div>
     </div>
 
+    <!-- ===== VERSIONS / CHANGELOG MODAL ===== -->
+    <div class="tutorial-overlay" id="versions-overlay" style="display: none">
+      <div class="tutorial-dialog">
+        <div class="tutorial-header">
+          <span>VERSIONS &amp; CHANGES</span>
+          <button class="tutorial-close" onclick="closeVersions()" title="CLOSE" aria-label="Close">&times;</button>
+        </div>
+        <div class="tutorial-body" id="versions-body">
+          <div class="versions-loading">LOADING&hellip;</div>
+        </div>
+        <div class="tutorial-footer">
+          <button class="btn-enter sm" onclick="closeVersions()">CLOSE</button>
+        </div>
+      </div>
+    </div>
+
     <script src="js/storage.js?v=1"></script>
     <script>
       const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
@@ -170,6 +190,27 @@
         document.body.style.overflow = "hidden";
       }
 
+      function makeItRain() {
+        const bills = ["\uD83D\uDCB5", "\uD83D\uDCB6", "\uD83D\uDCB0", "\uD83D\uDCB4", "\uD83D\uDCB3", "\uD83E\uDE99"];
+        const container = document.getElementById("rain-overlay");
+        container.style.display = "block";
+        const count = 60;
+        for (let i = 0; i < count; i++) {
+          const bill = document.createElement("div");
+          bill.className = "rain-bill";
+          bill.textContent = bills[Math.floor(Math.random() * bills.length)];
+          bill.style.left = Math.random() * 100 + "vw";
+          bill.style.fontSize = 16 + Math.random() * 28 + "px";
+          bill.style.animationDuration = 3 + Math.random() * 3 + "s";
+          bill.style.animationDelay = Math.random() * 2.5 + "s";
+          bill.style.setProperty("--sway", (Math.random() * 2 - 1) * 40 + "px");
+          bill.style.setProperty("--spin", (Math.random() * 720 - 360) + "deg");
+          bill.style.opacity = 0.6 + Math.random() * 0.4;
+          bill.addEventListener("animationend", () => bill.remove());
+          container.appendChild(bill);
+        }
+      }
+
       function closeTutorial() {
         document.getElementById("tutorial-overlay").style.display = "none";
         document.body.style.overflow = "";
@@ -179,8 +220,79 @@
         if (e.target === e.currentTarget) closeTutorial();
       });
 
+      function openVersions() {
+        document.getElementById("versions-overlay").style.display = "flex";
+        document.body.style.overflow = "hidden";
+        loadVersions();
+      }
+
+      function closeVersions() {
+        document.getElementById("versions-overlay").style.display = "none";
+        document.body.style.overflow = "";
+      }
+
+      document.getElementById("versions-overlay").addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeVersions();
+      });
+
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      function parseVersions(text) {
+        const entries = [];
+        let current = null;
+        text.split(/\r?\n/).forEach((line) => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+          const m = trimmed.match(/^v(\d+(?:\.\d+)*)(?:\s*[—-]\s*(.*))?$/i);
+          if (m) {
+            current = { version: "v" + m[1], date: (m[2] || "").trim(), changes: [] };
+            entries.push(current);
+            return;
+          }
+          if (current && trimmed.startsWith("-")) {
+            current.changes.push(trimmed.replace(/^-\s*/, ""));
+          }
+        });
+        return entries;
+      }
+
+      async function loadVersions() {
+        const body = document.getElementById("versions-body");
+        try {
+          const res = await fetch("version.txt");
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const entries = parseVersions(await res.text());
+          if (entries.length === 0) {
+            body.innerHTML = '<div class="versions-loading">NO VERSION INFO</div>';
+            return;
+          }
+          body.innerHTML = entries
+            .map(
+              (e) =>
+                '<div class="versions-entry"><div class="versions-ver">' +
+                escapeHtml(e.version) +
+                (e.date ? ' <span class="versions-date">' + escapeHtml(e.date) + "</span>" : "") +
+                "</div>" +
+                (e.changes.length
+                  ? '<ul class="versions-list">' + e.changes.map((c) => "<li>" + escapeHtml(c) + "</li>").join("") + "</ul>"
+                  : '<div class="versions-loading">NO CHANGES</div>') +
+                "</div>"
+            )
+            .join("");
+        } catch (e) {
+          body.innerHTML = '<div class="versions-loading">COULD NOT LOAD VERSION.TXT</div>';
+        }
+      }
+
       document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeTutorial();
+        if (e.key === "Escape") {
+          closeTutorial();
+          closeVersions();
+        }
       });
 
       function setModeNote(mode) {
@@ -305,10 +417,12 @@
         try {
           const res = await fetch("version.txt");
           if (res.ok) {
-            const ver = (await res.text()).trim();
-            if (ver) {
+            const text = (await res.text()).trim();
+            const first = text.split(/\r?\n/)[0].trim();
+            const m = first.match(/^v(\d+(?:\.\d+)*)/i);
+            if (m) {
               const el = document.getElementById("app-version");
-              if (el) el.textContent = ver;
+              if (el) el.textContent = "v" + m[1];
             }
           }
         } catch (e) {

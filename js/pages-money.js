@@ -55,6 +55,18 @@ Object.assign(Pages, {
     document.getElementById('income-avg-monthly').textContent =
       formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0, mainCurrency);
 
+    const prevYearStr = String(Number(selectedYear) - 1);
+    const prevFiltered = allIncomes.filter(inc => (inc.month || '').startsWith(prevYearStr));
+    const prevTotal = prevFiltered.reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
+    const changeEl = document.getElementById('income-change');
+    if (prevFiltered.length === 0) {
+      changeEl.textContent = '-';
+    } else {
+      const change = total - prevTotal;
+      const pct = prevTotal !== 0 ? (change / prevTotal) * 100 : null;
+      changeEl.textContent = (change >= 0 ? '+' : '') + formatCurrency(change, mainCurrency) + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : '');
+    }
+
     const tbody = document.getElementById('income-list-body');
     const empty = document.getElementById('income-empty');
     tbody.innerHTML = '';
@@ -114,6 +126,23 @@ Object.assign(Pages, {
 
     document.getElementById('expense-total').textContent = formatCurrency(totalAnnual, mainCurrency);
     document.getElementById('expense-total-monthly').textContent = formatCurrency(totalMonthly, mainCurrency);
+
+    const prevYearStr = String(Number(selectedYear) - 1);
+    const prevFiltered = allExpenses.filter(exp => exp.year === prevYearStr);
+    let prevTotalAnnual = 0;
+    prevFiltered.forEach(exp => {
+      const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'));
+      if (exp.type === 'monthly') prevTotalAnnual += v * 12;
+      else prevTotalAnnual += v;
+    });
+    const changeEl = document.getElementById('expense-change');
+    if (prevFiltered.length === 0) {
+      changeEl.textContent = '-';
+    } else {
+      const change = totalAnnual - prevTotalAnnual;
+      const pct = prevTotalAnnual !== 0 ? (change / prevTotalAnnual) * 100 : null;
+      changeEl.textContent = (change >= 0 ? '+' : '') + formatCurrency(change, mainCurrency) + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : '');
+    }
 
     const tbody = document.getElementById('expense-list-body');
     const empty = document.getElementById('expense-empty');
