@@ -86,7 +86,6 @@ Object.assign(Pages, {
     const accTxsSorted = [...transactions]
       .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    const firstTx = accTxsSorted.length > 0 ? accTxsSorted[0] : null;
 
     function _accPerfSince(cutoffDate) {
       if (isTa) {
@@ -104,11 +103,11 @@ Object.assign(Pages, {
       let netDeposits = 0;
       accTxsSorted.forEach(tx => {
         if (tx.date < cutoffDate) return;
-        if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount);
+        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) netDeposits += Math.abs(tx.amount);
         if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount);
         if (tx.type === 'buy') netDeposits += Math.abs(tx.amount);
         if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount);
-        if (tx.type === 'valuation' && firstTx && firstTx.id === tx.id) {
+        if (_isOpeningTx(tx)) {
           netDeposits += tx.amount;
         }
       });
@@ -258,8 +257,8 @@ Object.assign(Pages, {
     } else {
       empty.style.display = 'none';
       sorted.forEach(tx => {
-        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : tx.type.toUpperCase();
-        const typeClass = (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
+        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : _isOpeningTx(tx) ? 'OPENING VALUATION' : tx.type.toUpperCase();
+        const typeClass = _isOpeningTx(tx) ? 'opening' : (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
         let displayAmount;
         if (tx.type === 'valuation') {
           displayAmount = formatCurrency(tx.amount, account.currency);

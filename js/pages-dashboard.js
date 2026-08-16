@@ -108,23 +108,15 @@ Object.assign(Pages, {
         Object.values(bal).forEach(b => t += b);
         totalAtCutoff = t;
       });
-      // Find each account's first-ever transaction
-      const firstOfAccount = {};
-      txList.forEach(tx => {
-        const key = tx.accountId;
-        if (!firstOfAccount[key] || tx.date < firstOfAccount[key].date) {
-          firstOfAccount[key] = tx;
-        }
-      });
       let netDeposits = 0;
       txList.forEach(tx => {
         if (tx.date < cutoffDate) return;
-        if (tx.type === 'deposit') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'buy') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        // Opening valuations count as deposit (pre-existing wealth entered tracking)
-        if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
+        // Opening valuations count as capital (pre-existing wealth entered tracking)
+        if (_isOpeningTx(tx)) {
           netDeposits += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
         }
       });
@@ -134,14 +126,9 @@ Object.assign(Pages, {
       return { abs, pct };
     }
 
-    // Investment-only scope (Investment Account type)
-    const investAccountIds = new Set(accounts.filter(a => a.accountType === 'Investment Account').map(a => a.id));
-    const investTxs = perfTxs.filter(t => investAccountIds.has(t.accountId));
-    const investBal = {};
-    investAccountIds.forEach(id => investBal[id] = 0);
-    investTxs.forEach(tx => { investBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date); });
-    const investCurrentTotal = Object.values(investBal).reduce((s, v) => s + v, 0);
-    const _invPerfSince = (cutoffDate) => _computePerfSince(investAccountIds, investTxs, cutoffDate, investCurrentTotal);
+    // Performance scope — accounts flagged "Include in Performance" (trackPerformance)
+    const perfCurrentTotal = Object.values(_perfBal).reduce((s, v) => s + v, 0);
+    const _invPerfSince = (cutoffDate) => _computePerfSince(perfAccountIds, perfTxs, cutoffDate, perfCurrentTotal);
 
     const today = todayStr();
     const curYear = today.substring(0, 4);
@@ -153,7 +140,7 @@ Object.assign(Pages, {
     // Set initial YTD
     const perfEl = document.getElementById('dash-perf-value');
     const activePerf = document.querySelector('#perf-selectors .perf-btn.active');
-    const perfMap = { ytd: _invPerfSince(ytdCutoff), '1y': _invPerfSince(oneYearAgo), '2y': _invPerfSince(twoYearsAgo), '3y': _invPerfSince(threeYearsAgo), max: _invPerfSince(investTxs.length > 0 ? investTxs[0].date : today) };
+    const perfMap = { ytd: _invPerfSince(ytdCutoff), '1y': _invPerfSince(oneYearAgo), '2y': _invPerfSince(twoYearsAgo), '3y': _invPerfSince(threeYearsAgo), max: _invPerfSince(perfTxs.length > 0 ? perfTxs[0].date : today) };
     const initial = perfMap[activePerf ? activePerf.dataset.perf : 'ytd'];
     perfEl.innerHTML = (initial.abs >= 0 ? '+' : '') + formatCurrency(initial.abs, mainCurrency) + ' <span class="perf-pct">(' + (initial.pct >= 0 ? '+' : '') + initial.pct.toFixed(2) + '%)</span>';
     perfEl.style.color = initial.abs >= 0 ? '#33ff33' : '#ff3333';
@@ -199,10 +186,55 @@ Object.assign(Pages, {
     if (!earningGrid) return;
     earningGrid.innerHTML = '';
 
-    const monthlyRoi = _monthlyPctSeries(investAccountIds, investTxs);
+    const monthlyRoi = _monthlyPctSeries(perfAccountIds, perfTxs);
     const monthCards = [];
     const MAX_VISIBLE = 4;
     let hasData = false;
+
+    // Net worth / liquid net worth at the end of a given month (replicates yearly logic)
+    const monthEndDate = (mk) => {
+      if (mk === todayStr().substring(0, 7)) return todayStr();
+      const y = Number(mk.substring(0, 4));
+      const m = Number(mk.substring(5, 7));
+      return mk + '-' + String(new Date(y, m, 0).getDate()).padStart(2, '0');
+    };
+    const flowSorted = transactions
+      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const netWorthAtMonth = (mk) => {
+      const end = monthEndDate(mk);
+      const lastByAccount = {};
+      flowSorted.forEach(t => {
+        if ((t.date || '') > end) return;
+        const prev = lastByAccount[t.accountId];
+        if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
+      });
+      const accountValueAt = (a) => {
+        if (a.accountType === 'Tangible Asset') {
+          const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
+          return { value: assetAccountMetrics(accountAssets[a.id], end, rateToAcc).value, date: end };
+        }
+        if (a.accountType === 'Precious Metal' && end === todayStr()) {
+          return { value: metalAccountValue(a, metalEntry, rateEntries, end), date: end };
+        }
+        const last = lastByAccount[a.id];
+        if (last) return { value: last.balanceAfter || 0, date: last.date };
+        if (end === todayStr()) return { value: a.currentValue || 0, date: end };
+        return { value: 0, date: end };
+      };
+      let netWorth = 0;
+      let liqNetWorth = 0;
+      accounts.forEach(a => {
+        if (a.includeInNetWorth === false) return;
+        const v = accountValueAt(a);
+        const val = v.value * rateFor(accCurrency[a.id], v.date);
+        netWorth += val;
+        if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) liqNetWorth += val;
+      });
+      return { netWorth, liqNetWorth };
+    };
+    let prevNw = null;
+    let prevLq = null;
 
     months.forEach(monthKey => {
       const year = monthKey.substring(0, 4);
@@ -235,31 +267,47 @@ Object.assign(Pages, {
         if (tx.type === 'sell') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         return sum;
       }, 0);
+      const grossDeposits = monthTxs
+        .filter(tx => tx.type === 'deposit')
+        .reduce((sum, tx) => sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date), 0);
 
       if (monthIncome > 0 || netDeposits !== 0) hasData = true;
-
-      let perfColor, perfText;
-      if (expected > 0) {
-        const pct = (netDeposits / expected) * 100;
-        perfColor = pct >= 0 ? '#33ff33' : '#ff3333';
-        perfText = pct.toFixed(0) + '%';
-      } else {
-        perfColor = '#555';
-        perfText = 'N/A';
-      }
 
       const roiVal = monthlyRoi[monthKey];
       const roiText = roiVal ? formatCurrency(roiVal.abs, mainCurrency) + ' (' + (roiVal.abs >= 0 ? '+' : '') + roiVal.pct.toFixed(2) + '%)' : 'N/A';
       const roiColor = roiVal ? (roiVal.abs >= 0 ? '#33ff33' : '#ff3333') : '#555';
 
+      const savingsRate = monthIncome > 0 ? (expected / monthIncome) * 100 : null;
+      const savingsRateText = savingsRate === null ? 'N/A' : (savingsRate >= 0 ? '+' : '') + savingsRate.toFixed(1) + '%';
+      const savingsRateColor = savingsRate === null ? '#555' : (savingsRate >= 0 ? '#33ff33' : '#ff3333');
+      const capDeployment = expected > 0 ? (netDeposits / expected) * 100 : null;
+      const capDeploymentText = capDeployment === null ? 'N/A' : capDeployment.toFixed(1) + '%';
+
+      const nw = netWorthAtMonth(monthKey);
+      const nwGrowth = prevNw !== null ? nw.netWorth - prevNw : null;
+      const lqGrowth = prevLq !== null ? nw.liqNetWorth - prevLq : null;
+      prevNw = nw.netWorth;
+      prevLq = nw.liqNetWorth;
+      const growthHtml = (amt) => {
+        if (amt === null || amt === undefined) return '<span class="val" style="color:#555">N/A</span>';
+        return '<span class="val" style="color:' + (amt >= 0 ? '#33ff33' : '#ff3333') + '">' + (amt >= 0 ? '+' : '') + formatCurrency(amt, mainCurrency) + '</span>';
+      };
+
       const col = document.createElement('div');
       col.className = 'col-3 earning-col';
       col.innerHTML = '<div class="earning-month">' +
         '<div class="earning-month-label">' + monthLabel + '</div>' +
-        '<div class="earning-month-line"><span class="lbl">INCOME - EXPENSES</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">INVESTED + SAVED</span><span class="val">' + formatCurrency(netDeposits, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">MANAGEMENT PERFORMANCE</span><span class="val" style="color:' + perfColor + '">' + perfText + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">INCOME</span><span class="val">' + formatCurrency(monthIncome, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">EXPENSES</span><span class="val">' + formatCurrency(totalExpenses, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">NET INCOME</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">SAVINGS RATE</span><span class="val" style="color:' + savingsRateColor + '">' + savingsRateText + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">TOTAL SAVED</span><span class="val">' + formatCurrency(grossDeposits, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">CAPITAL DEPLOYMENT<span class="info-icon" title="How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) \u00F7 NET INCOME \u00D7 100. Above 100% means you also drew on existing cash.">i</span></span><span class="val" style="color:#33ff33">' + capDeploymentText + '</span></div>' +
         '<div class="earning-month-line"><span class="lbl">INVESTMENT PERFORMANCE</span><span class="val" style="color:' + roiColor + '">' + roiText + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">NET WORTH EoM</span><span class="val">' + formatCurrency(nw.netWorth, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH</span>' + growthHtml(nwGrowth) + '</div>' +
+        '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EoM</span><span class="val">' + formatCurrency(nw.liqNetWorth, mainCurrency) + '</span></div>' +
+        '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH</span>' + growthHtml(lqGrowth) + '</div>' +
         '</div>';
       monthCards.push(col);
       earningGrid.appendChild(col);
@@ -372,11 +420,6 @@ Object.assign(Pages, {
       function _liquidMonthlyRoi() {
         const b = {};
         liquidAccountIds.forEach(id => b[id] = 0);
-        const firstOfAccount = {};
-        liquidTxs.forEach(tx => {
-          const key = tx.accountId;
-          if (!firstOfAccount[key] || tx.date < firstOfAccount[key].date) firstOfAccount[key] = tx;
-        });
         const totalB = () => Object.values(b).reduce((s, v) => s + v, 0);
         const results = {};
         let mkActive = null;
@@ -396,11 +439,11 @@ Object.assign(Pages, {
             monthFlows = 0;
           }
           b[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-          if (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') {
+          if ((tx.type === 'deposit' && !_isOpeningContribution(tx)) || tx.type === 'buy' || tx.type === 'asset-add') {
             monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
           } else if (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') {
             monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-          } else if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
+          } else if (_isOpeningTx(tx)) {
             monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
           }
         });
@@ -633,6 +676,134 @@ Object.assign(Pages, {
         else if (t.type === 'sell') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
       });
 
+      // Gross deposits per year (saving performance)
+      const depositsByYear = {};
+      sortedTxs.forEach(t => {
+        const y = (t.date || '').substring(0, 4);
+        if (!y || t.type !== 'deposit') return;
+        depositsByYear[y] = (depositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+      });
+
+      // Gross deposits per year into performance-tracked accounts only
+      const perfDepositsByYear = {};
+      perfTxs.forEach(t => {
+        const y = (t.date || '').substring(0, 4);
+        if (!y || t.type !== 'deposit') return;
+        perfDepositsByYear[y] = (perfDepositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+      });
+
+      // Value of performance-tracked accounts at a given date
+      const perfValueAt = (date) => {
+        const lastByAccount = {};
+        perfTxs.forEach(t => {
+          if ((t.date || '') > date) return;
+          const prev = lastByAccount[t.accountId];
+          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
+        });
+        let total = 0;
+        perfAccountIds.forEach(id => {
+          const last = lastByAccount[id];
+          if (last) total += (last.balanceAfter || 0) * rateFor(accCurrency[id], last.date);
+          else if (date === todayStr()) {
+            const acc = accounts.find(a => a.id === id);
+            total += (acc ? (acc.currentValue || 0) : 0) * rateFor(accCurrency[id], date);
+          }
+        });
+        return total;
+      };
+
+      // Net flows (deposits/withdrawals/buys/sells) within a date window for perf-tracked accounts
+      const perfNetFlows = (startDate, endDate) => {
+        let net = 0;
+        perfTxs.forEach(t => {
+          if ((t.date || '') < startDate || (t.date || '') > endDate) return;
+          if (t.type === 'deposit' && !_isOpeningContribution(t)) net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+          else if (t.type === 'withdrawal') net -= Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+          else if (t.type === 'buy') net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+          else if (t.type === 'sell') net -= Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+          else if (_isOpeningTx(t)) net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        });
+        return net;
+      };
+
+      // Unrealized P/L of perf-tracked accounts for a given year
+      const perfPlForYear = (year) => {
+        const boy = year + '-01-01';
+        const eoy = year === curYear ? todayStr() : year + '-12-31';
+        const valueEoy = perfValueAt(eoy);
+        const valueBoy = perfValueAt(boy);
+        const flows = perfNetFlows(boy, eoy);
+        const abs = valueEoy - valueBoy - flows;
+        const base = valueBoy + flows;
+        return { abs, pct: base !== 0 ? (abs / base) * 100 : 0, roiPct: valueBoy !== 0 ? (abs / valueBoy) * 100 : null };
+      };
+
+      // Value of perf-tracked accounts using last snapshot strictly before a given date
+      const perfValueBefore = (date) => {
+        const lastByAccount = {};
+        perfTxs.forEach(t => {
+          if ((t.date || '') >= date) return;
+          const prev = lastByAccount[t.accountId];
+          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
+        });
+        let total = 0;
+        perfAccountIds.forEach(id => {
+          const last = lastByAccount[id];
+          if (last) total += (last.balanceAfter || 0) * rateFor(accCurrency[id], last.date);
+        });
+        return total;
+      };
+
+      // Time-weighted return: geometrically links sub-period returns between cash-flow dates
+      const twrForYear = (year) => {
+        const boy = year + '-01-01';
+        const eoy = year === curYear ? todayStr() : year + '-12-31';
+        const flowDates = [...new Set(
+          perfTxs
+            .filter(t => (t.date || '') >= boy && (t.date || '') <= eoy && (['deposit', 'withdrawal', 'buy', 'sell'].includes(t.type) ? !_isOpeningContribution(t) : _isOpeningTx(t)))
+            .map(t => t.date)
+        )].sort();
+
+        let product = 1;
+        let prevVal = perfValueAt(boy);
+        flowDates.forEach(d => {
+          const before = perfValueBefore(d);
+          if (prevVal !== 0) product *= (before / prevVal);
+          prevVal = perfValueAt(d);
+        });
+        const valEoy = perfValueAt(eoy);
+        if (prevVal !== 0) product *= (valEoy / prevVal);
+        return (product - 1) * 100;
+      };
+
+      // Money-weighted return (IRR): rate r solving NPV of all flows = 0
+      const mwrForYear = (year) => {
+        const boy = year + '-01-01';
+        const eoy = year === curYear ? todayStr() : year + '-12-31';
+        const t0 = new Date(boy).getTime();
+        const tEoy = new Date(eoy).getTime();
+        const flows = [{ t: 0, v: -perfValueAt(boy) }];
+        perfTxs.forEach(t => {
+          if ((t.date || '') < boy || (t.date || '') > eoy) return;
+          const y = (new Date(t.date).getTime() - t0) / (tEoy - t0);
+          const amt = Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+          if ((t.type === 'deposit' && !_isOpeningContribution(t)) || t.type === 'buy' || _isOpeningTx(t)) flows.push({ t: y, v: -amt });
+          else if (t.type === 'withdrawal' || t.type === 'sell') flows.push({ t: y, v: amt });
+        });
+        flows.push({ t: 1, v: perfValueAt(eoy) });
+
+        const npv = (r) => flows.reduce((s, f) => s + f.v / Math.pow(1 + r, f.t), 0);
+        let lo = -0.999;
+        let hi = 10;
+        if (npv(lo) * npv(hi) > 0) return null;
+        for (let i = 0; i < 200; i++) {
+          const mid = (lo + hi) / 2;
+          if (npv(mid) * npv(lo) > 0) lo = mid;
+          else hi = mid;
+        }
+        return ((lo + hi) / 2) * 100;
+      };
+
       const netWorthAt = (eoyDate) => {
         const lastByAccount = {};
         sortedTxs.forEach(t => {
@@ -667,29 +838,41 @@ Object.assign(Pages, {
         return { netWorth, liqNetWorth };
       };
 
+      const curMonthKey = todayStr().substring(0, 7);
+      const curMonthNum = Number(curMonthKey.substring(5, 7));
+      const monthsElapsedCur = Math.max(0, curMonthNum - 1);
+
+      const incomeUpTo = (year, upToMonth) => allIncomes
+        .filter(inc => (inc.month || '').startsWith(year) && (!upToMonth || Number((inc.month || '').substring(5, 7)) <= upToMonth))
+        .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || (year + '-01')) + '-01')), 0);
+
+      const expensesUpTo = (year, monthsCount) => {
+        let tot = 0;
+        allExpenses.filter(exp => exp.year === year).forEach(exp => {
+          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
+          tot += exp.type === 'monthly' ? v * monthsCount : v;
+        });
+        return tot;
+      };
+
       const yearStats = {};
       candidateYears.forEach(year => {
         const eoyDate = year === curYear ? todayStr() : (year + '-12-31');
         const { netWorth, liqNetWorth } = netWorthAt(eoyDate);
 
         const isCurYear = year === curYear;
-        const curMonthKey = todayStr().substring(0, 7);
-        const income = allIncomes
-          .filter(inc => (inc.month || '').startsWith(year) && (!isCurYear || (inc.month || '') <= curMonthKey))
-          .reduce((s, inc) => s + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || (year + '-01')) + '-01')), 0);
-
-        const monthsElapsed = isCurYear ? Math.max(0, Number(curMonthKey.substring(5, 7)) - 1) : 12;
-        let expenses = 0;
-        allExpenses.filter(exp => exp.year === year).forEach(exp => {
-          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
-          expenses += exp.type === 'monthly' ? v * monthsElapsed : v;
-        });
+        const income = isCurYear ? incomeUpTo(year, curMonthNum) : incomeUpTo(year, null);
+        const expenses = isCurYear ? expensesUpTo(year, monthsElapsedCur) : expensesUpTo(year, 12);
 
         const investedSaved = investedByYear[year] || 0;
         const surplus = income - expenses;
-        const mgmtPct = surplus > 0 ? (investedSaved / surplus) * 100 : null;
+        const savingPerf = depositsByYear[year] || 0;
+        const savingsRate = income > 0 ? (surplus / income) * 100 : null;
+        const investPerf = perfPlForYear(year);
+        const twr = twrForYear(year);
+        const mwr = mwrForYear(year);
 
-        yearStats[year] = { netWorth, liqNetWorth, mgmtPct };
+        yearStats[year] = { netWorth, liqNetWorth, netDeposits: investedSaved, income, expenses, surplus, savingPerf, savingsRate, investPerf, twr, mwr };
       });
 
       const years = candidateYears.filter(year => {
@@ -697,6 +880,22 @@ Object.assign(Pages, {
         const hasInc = allIncomes.some(inc => (inc.month || '').startsWith(year));
         const hasExp = allExpenses.some(exp => exp.year === year);
         return hasTx || hasInc || hasExp;
+      });
+      const yearsSet = new Set(years);
+
+      // Year-over-year deltas (previous calendar year as base; only if that year has data).
+      // For the current (partial) year, the previous year is prorated to the same period for a fair comparison.
+      Object.keys(yearStats).forEach(year => {
+        const prevYear = String(Number(year) - 1);
+        const prev = yearsSet.has(prevYear) ? yearStats[prevYear] : null;
+        const s = yearStats[year];
+        const isCurYear = year === curYear;
+        const prevIncome = isCurYear && prev ? incomeUpTo(prevYear, curMonthNum) : (prev ? prev.income : null);
+        const prevExpenses = isCurYear && prev ? expensesUpTo(prevYear, monthsElapsedCur) : (prev ? prev.expenses : null);
+        s.incomeDelta = prevIncome === null ? null : s.income - prevIncome;
+        s.expenseDelta = prevExpenses === null ? null : s.expenses - prevExpenses;
+        s.savingsRateDelta = (prev && s.savingsRate !== null && prev.savingsRate !== null) ? s.savingsRate - prev.savingsRate : null;
+        s.capitalDeployment = s.surplus > 0 ? (s.netDeposits / s.surplus) * 100 : null;
       });
 
       const firstYear = years[0];
@@ -716,18 +915,52 @@ Object.assign(Pages, {
           return '<span class="val" style="color:' + (amt >= 0 ? '#33ff33' : '#ff3333') + '">' + (amt >= 0 ? '+' : '') + formatCurrency(amt, mainCurrency) + '</span>';
         };
 
-        const mgmtColor = s.mgmtPct === null ? '#555' : (s.mgmtPct >= 0 ? '#33ff33' : '#ff3333');
-        const mgmtText = s.mgmtPct === null ? 'N/A' : (s.mgmtPct >= 0 ? '+' : '') + s.mgmtPct.toFixed(0) + '%';
+        const investPerfText = (s.investPerf.abs >= 0 ? '+' : '') + formatCurrency(s.investPerf.abs, mainCurrency) + ' (' + (s.investPerf.pct >= 0 ? '+' : '') + s.investPerf.pct.toFixed(2) + '%)';
+        const investPerfColor = s.investPerf.abs >= 0 ? '#33ff33' : '#ff3333';
+        const savingsRateText = s.savingsRate === null ? 'N/A' : (s.savingsRate >= 0 ? '+' : '') + s.savingsRate.toFixed(1) + '%';
+        const savingsRateColor = s.savingsRate === null ? '#555' : (s.savingsRate >= 0 ? '#33ff33' : '#ff3333');
+
+        const deltaHtml = (delta, opts) => {
+          if (delta === null || delta === undefined) return '<span class="val" style="color:#555">N/A</span>';
+          const good = opts && opts.invert ? delta < 0 : delta >= 0;
+          const color = good ? '#33ff33' : '#ff3333';
+          let txt = (delta >= 0 ? '+' : '-') + formatCurrency(Math.abs(delta), mainCurrency);
+          if (opts && opts.pct && opts.base) txt += ' (' + (delta >= 0 ? '+' : '-') + ((Math.abs(delta) / Math.abs(opts.base)) * 100).toFixed(1) + '%)';
+          return '<span class="val" style="color:' + color + '">' + txt + '</span>';
+        };
+
+        const info = (title) => '<span class="info-icon" title="' + title + '">i</span>';
+
+        const incomeDeltaHtml = deltaHtml(s.incomeDelta, { pct: true, base: s.income - (s.incomeDelta || 0) });
+        const expenseDeltaHtml = deltaHtml(s.expenseDelta, { pct: true, base: s.expenses - (s.expenseDelta || 0), invert: true });
+        const savingsDeltaColor = s.savingsRateDelta === null || s.savingsRateDelta >= 0 ? '#33ff33' : '#ff3333';
+        const savingsDeltaText = s.savingsRateDelta === null ? 'N/A' : (s.savingsRateDelta >= 0 ? '+' : '') + s.savingsRateDelta.toFixed(1) + 'pp';
+        const capDeployText = s.capitalDeployment === null ? 'N/A' : s.capitalDeployment.toFixed(1) + '%';
+        const twrText = s.twr === null || s.twr === undefined ? 'N/A' : (s.twr >= 0 ? '+' : '') + s.twr.toFixed(2) + '%';
+        const twrColor = s.twr >= 0 ? '#33ff33' : '#ff3333';
+        const mwrText = s.mwr === null || s.mwr === undefined ? 'N/A' : (s.mwr >= 0 ? '+' : '') + s.mwr.toFixed(2) + '%';
+        const mwrColor = s.mwr >= 0 ? '#33ff33' : '#ff3333';
 
         const col = document.createElement('div');
         col.className = 'col-3 earning-col';
         col.innerHTML = '<div class="earning-month">' +
           '<div class="earning-month-label">' + year + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">NET WORTH EOY</span><span class="val">' + formatCurrency(s.netWorth, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH</span>' + growthHtml(nwGrowth) + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EOY</span><span class="val">' + formatCurrency(s.liqNetWorth, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH</span>' + growthHtml(lqGrowth) + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">MANAGEMENT PERFORMANCE</span><span class="val" style="color:' + mgmtColor + '">' + mgmtText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">INCOME</span><span class="val">' + formatCurrency(s.income, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">INCOME YoY' + info('Change in income vs previous year') + '</span>' + incomeDeltaHtml + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">EXPENSES</span><span class="val">' + formatCurrency(s.expenses, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">EXPENSES YoY' + info('Change in expenses vs previous year') + '</span>' + expenseDeltaHtml + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">NET INCOME</span><span class="val">' + formatCurrency(s.surplus, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">SAVINGS RATE' + info('Share of income not spent. Formula: NET INCOME \u00F7 INCOME \u00D7 100') + '</span><span class="val" style="color:' + savingsRateColor + '">' + savingsRateText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">SAVINGS RATE YoY' + info('Change in savings rate vs previous year, in percentage points') + '</span><span class="val" style="color:' + savingsDeltaColor + '">' + savingsDeltaText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">TOTAL SAVED' + info('Gross deposits made into all accounts during the year') + '</span><span class="val">' + formatCurrency(s.savingPerf, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">CAPITAL DEPLOYMENT' + info('How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) \u00F7 NET INCOME \u00D7 100. Above 100% means you also drew on existing cash.') + '</span><span class="val" style="color:#33ff33">' + capDeployText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">INVESTMENTS PERFORMANCE' + info('Gain in investment accounts relative to capital deployed. Formula: (value EoY - value BoY - net flows) \u00F7 (value BoY + net flows) \u00D7 100') + '</span><span class="val" style="color:' + investPerfColor + '">' + investPerfText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">TWR' + info('Time-weighted return: isolates market performance by removing the effect of cash flow timing. Best measure to compare against an index.') + '</span><span class="val" style="color:' + twrColor + '">' + twrText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">MWR' + info('Money-weighted return (IRR): accounts for the size and timing of every deposit/withdrawal, weighted by how long money was invested. Best measure of your personal experience.') + '</span><span class="val" style="color:' + mwrColor + '">' + mwrText + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">NET WORTH EoY</span><span class="val">' + formatCurrency(s.netWorth, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH' + info('Change in net worth vs previous year-end') + '</span>' + growthHtml(nwGrowth) + '</div>' +
+          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EoY</span><span class="val">' + formatCurrency(s.liqNetWorth, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH' + info('Change in liquid net worth vs previous year-end') + '</span>' + growthHtml(lqGrowth) + '</div>' +
           '</div>';
         cards.push(col);
         grid.appendChild(col);
@@ -890,6 +1123,7 @@ Object.assign(Pages, {
           borderDash: [6, 4],
           borderWidth: 2,
           pointRadius: 0,
+          pointHitRadius: 12,
           fill: false,
           tension: 0
         });
@@ -905,7 +1139,17 @@ Object.assign(Pages, {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 9, family: "'Share Tech Mono', monospace" } } }
+            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 9, family: "'Share Tech Mono', monospace" } } },
+            tooltip: {
+              callbacks: {
+                title: items => items.length ? labels[items[0].dataIndex] : '',
+                label: item => {
+                  const fmt = isPercent ? v => v.toFixed(2) + '%' : v => formatCurrency(v, mainCurrency);
+                  if (item.datasetIndex === 1 && showAverage) return 'AVG: ' + fmt(item.parsed.y);
+                  return item.dataset.label + ': ' + fmt(item.parsed.y);
+                }
+              }
+            }
           },
           scales: {
             x: {
@@ -925,11 +1169,6 @@ Object.assign(Pages, {
     function _monthlyPctSeries(idSet, txList) {
       const bal = {};
       idSet.forEach(id => bal[id] = 0);
-      const firstOfAccount = {};
-      txList.forEach(tx => {
-        const key = tx.accountId;
-        if (!firstOfAccount[key] || tx.date < firstOfAccount[key].date) firstOfAccount[key] = tx;
-      });
       const totalBal = () => Object.values(bal).reduce((s, v) => s + v, 0);
       const results = {};
       let curMonth = null;
@@ -949,11 +1188,11 @@ Object.assign(Pages, {
           monthFlows = 0;
         }
         bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'deposit') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'withdrawal') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'buy') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
         if (tx.type === 'sell') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'valuation' && firstOfAccount[tx.accountId] && firstOfAccount[tx.accountId].id === tx.id) {
+        if (_isOpeningTx(tx)) {
           monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
         }
       });
@@ -978,7 +1217,7 @@ Object.assign(Pages, {
     if (investCanvas) {
       const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
       const range = activeRange ? activeRange.dataset.range : '1y';
-      _renderRangeChart(investCanvas, 'investment', investAccountIds, investTxs, range, '#33ccff', { percent: true, average: true });
+      _renderRangeChart(investCanvas, 'investment', perfAccountIds, perfTxs, range, '#33ccff', { percent: true, average: true });
     }
 
     // Recent transactions (last 10)
@@ -996,8 +1235,8 @@ Object.assign(Pages, {
       accounts.forEach(a => accMap[a.id] = a);
       recent.forEach(tx => {
         const acc = accMap[tx.accountId];
-        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : tx.type.toUpperCase();
-        const typeClass = (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
+        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : _isOpeningTx(tx) ? 'OPENING VALUATION' : tx.type.toUpperCase();
+        const typeClass = _isOpeningTx(tx) ? 'opening' : (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
         const displayAmount = tx.type === 'valuation' ? formatCurrency(tx.amount, acc ? acc.currency : 'CHF')
           : formatCurrency(Math.abs(tx.amount), acc ? acc.currency : 'CHF');
         const tr = document.createElement('tr');

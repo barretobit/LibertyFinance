@@ -131,7 +131,7 @@
     <script src="js/storage.js?v=1"></script>
     <script>
       const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
-      const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} };
+      const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { borderRadius: 10 } };
       let selected = localStorage.getItem(LAST_FILE_KEY);
       let folderConnected = false;
 

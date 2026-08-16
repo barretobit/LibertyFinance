@@ -52,6 +52,7 @@ function _effCostBasis(transactions) {
   transactions.forEach(t => {
     if (t.type === 'deposit') { basis += Math.abs(t.amount); hasFlow = true; }
     if (t.type === 'withdrawal') { basis -= Math.abs(t.amount); hasFlow = true; }
+    if (_isOpeningTx(t)) { basis += Math.abs(t.amount); hasFlow = true; }
   });
   if (!hasFlow) {
     const vals = [...transactions].filter(t => t.type === 'valuation')
@@ -59,6 +60,19 @@ function _effCostBasis(transactions) {
     if (vals.length > 0) basis = vals[0].amount || 0;
   }
   return basis;
+}
+
+// True for transactions that represent pre-existing wealth entering tracking
+// (recorded as a valuation carrying its own value, not as a deposit).
+function _isOpeningTx(tx) {
+  return !!(tx && tx.type === 'valuation' && (tx.opening === true || tx.notes === 'OPENING VALUATION'));
+}
+
+// Deposits created alongside an opening valuation at account creation; their
+// amount is already part of the paired OPENING VALUATION, so they must not be
+// counted again as capital in performance calculations.
+function _isOpeningContribution(tx) {
+  return !!(tx && tx.type === 'deposit' && tx.notes === 'OPENING CONTRIBUTION');
 }
 
 const Pages = {};

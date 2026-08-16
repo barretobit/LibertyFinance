@@ -7,7 +7,7 @@
 
 const DB = (() => {
   const DATA_FILE = new URLSearchParams(window.location.search).get('file');
-  const EMPTY = () => ({ custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: {} });
+  const EMPTY = () => ({ custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { borderRadius: 10 } });
   let data = EMPTY();
   let market = { exchangeRates: [], metalPrices: [] };
   let adapter = null;

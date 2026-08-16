@@ -1,4 +1,4 @@
-v1.0 — 14 Aug 2026
+v1.0 — 7 Aug 2026
 - Added a VERSIONS & CHANGES modal on the landing page
 - Added "CHANGE FROM LAST YEAR" comparison cards on the Incomes and Expenses pages
 - Portfolio cards now show P&L percentage alongside the value

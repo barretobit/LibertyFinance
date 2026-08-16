@@ -344,6 +344,7 @@
             <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccId)">UPDATE VALUE</button>
             <button class="btn btn-gta" onclick="App.showModal('deposit', App.currentAccId)">DEPOSIT</button>
             <button class="btn btn-gta" onclick="App.showModal('withdrawal', App.currentAccId)">WITHDRAWAL</button>
+            <button class="btn btn-gta" onclick="App.showModal('opening', App.currentAccId)" title="RECORD PRE-EXISTING MONEY IN THIS ACCOUNT (NOT A NEW DEPOSIT)">OPENING VALUE</button>
             <button class="btn btn-gta" onclick="App.recalcAccount()" title="RECOMPUTE BALANCES FROM TRANSACTION HISTORY">RECALC</button>
           </div>
           <div class="gap-2 mb-4 flex-wrap" id="pm-actions" style="display:none">
@@ -849,7 +850,7 @@
       <div class="modal-dialog">
         <div class="modal-content modal-gta">
           <div class="modal-header">
-            <h5 class="modal-title">UPDATE VALUE</h5>
+            <h5 class="modal-title" id="modal-val-title">UPDATE VALUE</h5>
             <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
           </div>
           <div class="modal-body">

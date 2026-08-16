@@ -135,6 +135,9 @@ const App = {
       case 'valuation':
         this._showValuationModal(args[0]);
         break;
+      case 'opening':
+        this._showValuationModal(args[0], true);
+        break;
       case 'metal':
         this._showMetalModal(args[0], args[1]);
         break;
@@ -168,7 +171,7 @@ const App = {
     ).join('');
     const slider = document.getElementById('settings-radius');
     const label = document.getElementById('settings-radius-label');
-    const radius = settings.borderRadius != null ? settings.borderRadius : 0;
+    const radius = settings.borderRadius != null ? settings.borderRadius : 10;
     slider.value = radius;
     label.textContent = radius + 'px';
     const preview = () => {
@@ -182,7 +185,7 @@ const App = {
 
   async _applyRadius() {
     const settings = await DB.getSettings();
-    const radius = settings.borderRadius != null ? settings.borderRadius : 0;
+    const radius = settings.borderRadius != null ? settings.borderRadius : 10;
     document.documentElement.style.setProperty('--radius', radius + 'px');
   },
 
@@ -360,7 +363,7 @@ const App = {
     this._modals.transaction.show();
   },
 
-  _showValuationModal(accountId) {
+  _showValuationModal(accountId, isOpening) {
     const accIdField = document.getElementById('val-account-id');
     const amountField = document.getElementById('val-amount');
     const priceGramField = document.getElementById('val-price-gram');
@@ -369,18 +372,26 @@ const App = {
     const notesField = document.getElementById('val-notes');
     const dateField = document.getElementById('val-date');
     const symbol = document.getElementById('val-currency-symbol');
+    const titleEl = document.getElementById('modal-val-title');
 
     accIdField.value = accountId;
     amountField.value = '';
     priceGramField.value = '';
     notesField.value = '';
     dateField.value = todayStr();
+    if (titleEl) titleEl.textContent = isOpening ? 'OPENING VALUE' : 'UPDATE VALUE';
+    this._valOpening = !!isOpening;
 
     DB.getById('accounts', accountId).then(async a => {
       const cur = a ? a.currency || 'CHF' : 'CHF';
       symbol.textContent = cur;
       pgSymbol.textContent = cur;
-      if (a && a.accountType === 'Precious Metal') {
+      if (isOpening) {
+        // Opening valuations are recorded for standard accounts; leave the
+        // amount empty and pre-fill the marker note.
+        priceGramGroup.style.display = 'none';
+        notesField.value = 'OPENING VALUATION';
+      } else if (a && a.accountType === 'Precious Metal') {
         // Show price/gram and pre-fill from today's spot price
         priceGramGroup.style.display = 'block';
         const qty = a.quantity || 0;
@@ -1003,6 +1014,7 @@ const App = {
           amount: startingValue,
           date: startingDate,
           notes: 'OPENING VALUATION',
+          opening: true,
           balanceAfter: startingValue,
           createdAt: isSplit ? nowISO() : createdAt
         };
@@ -1061,6 +1073,7 @@ const App = {
     const amount = parseFloat(document.getElementById('val-amount').value);
     const notes = document.getElementById('val-notes').value.trim();
     const date = this._pickedValDate || document.getElementById('val-date').value || todayStr();
+    const isOpening = !!this._valOpening;
 
     if (isNaN(amount) || amount < 0) { this.toast('ENTER A VALID VALUE'); return; }
 
@@ -1073,10 +1086,11 @@ const App = {
       type: 'valuation',
       amount,
       date,
-      notes,
+      notes: isOpening ? 'OPENING VALUATION' : notes,
       balanceAfter: amount,
       createdAt: nowISO()
     };
+    if (isOpening) txData.opening = true;
 
     if (account.accountType === 'Precious Metal') {
       const qty = account.quantity || 0;
@@ -1091,13 +1105,14 @@ const App = {
       txData.pricePerGram = priceGram;
     }
     await DB.add('transactions', txData);
+    this._valOpening = false;
 
     account.currentValue = amount;
     await DB.put('accounts', account);
     await this._recomputeAccountBalances(accountId);
 
     this._modals.valuation.hide();
-    this.toast('VALUE UPDATED');
+    this.toast(isOpening ? 'OPENING VALUE RECORDED' : 'VALUE UPDATED');
     this.route();
   },
 

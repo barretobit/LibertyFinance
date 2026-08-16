@@ -56,13 +56,31 @@ Object.assign(Pages, {
       formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0, mainCurrency);
 
     const prevYearStr = String(Number(selectedYear) - 1);
-    const prevFiltered = allIncomes.filter(inc => (inc.month || '').startsWith(prevYearStr));
+
+    // The current year is not finished: compare only months elapsed so far in both years.
+    const today = new Date();
+    const curYear = today.getFullYear().toString();
+    const curMonth = String(today.getMonth() + 1).padStart(2, '0');
+    const cutoff = selectedYear === curYear ? selectedYear + '-' + curMonth : null;
+
+    const inCutoff = (inc, yearStr) => {
+      const m = (inc.month || '');
+      return m.startsWith(yearStr) && (!cutoff || m.substring(0, 7) <= cutoff);
+    };
+    const prevCutoff = cutoff ? prevYearStr + '-' + curMonth : null;
+    const inPrevCutoff = (inc, yearStr) => {
+      const m = (inc.month || '');
+      return m.startsWith(yearStr) && (!prevCutoff || m.substring(0, 7) <= prevCutoff);
+    };
+
+    const prevFiltered = allIncomes.filter(inc => inPrevCutoff(inc, prevYearStr));
     const prevTotal = prevFiltered.reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
+    const changeTotal = allIncomes.filter(inc => inCutoff(inc, selectedYear)).reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
     const changeEl = document.getElementById('income-change');
     if (prevFiltered.length === 0) {
       changeEl.textContent = '-';
     } else {
-      const change = total - prevTotal;
+      const change = changeTotal - prevTotal;
       const pct = prevTotal !== 0 ? (change / prevTotal) * 100 : null;
       changeEl.textContent = (change >= 0 ? '+' : '') + formatCurrency(change, mainCurrency) + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : '');
     }
@@ -77,7 +95,7 @@ Object.assign(Pages, {
     }
     empty.style.display = 'none';
 
-    const sorted = filtered.sort((a, b) => new Date(b.date || b.id) - new Date(a.date || a.id));
+    const sorted = filtered.sort((a, b) => new Date(a.date || a.id) - new Date(b.date || b.id));
     sorted.forEach(inc => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(inc.source)}</td>
