@@ -1431,18 +1431,6 @@ Object.assign(Pages, {
                 yAxisID: 'y'
               },
               {
-                label: 'NET INCOME AVG',
-                data: netIncomeValues.map(() => avgNet),
-                borderColor: '#33ff3366',
-                borderDash: [6, 4],
-                borderWidth: 1.5,
-                pointRadius: 0,
-                pointHitRadius: 12,
-                fill: false,
-                tension: 0,
-                yAxisID: 'y'
-              },
-              {
                 label: 'TOTAL SAVED',
                 data: totalSavedValues,
                 borderColor: '#33ccff',
@@ -1452,18 +1440,6 @@ Object.assign(Pages, {
                 pointRadius: 3,
                 pointBackgroundColor: '#33ccff',
                 borderWidth: 2,
-                yAxisID: 'y'
-              },
-              {
-                label: 'TOTAL SAVED AVG',
-                data: totalSavedValues.map(() => avgSaved),
-                borderColor: '#33ccff66',
-                borderDash: [6, 4],
-                borderWidth: 1.5,
-                pointRadius: 0,
-                pointHitRadius: 12,
-                fill: false,
-                tension: 0,
                 yAxisID: 'y'
               }
             ]
@@ -1477,9 +1453,7 @@ Object.assign(Pages, {
                 callbacks: {
                   label: item => {
                     if (item.datasetIndex === 0) return 'NET INCOME: ' + formatCurrency(item.parsed.y, mainCurrency);
-                    if (item.datasetIndex === 1) return 'NET INCOME AVG: ' + formatCurrency(item.parsed.y, mainCurrency);
-                    if (item.datasetIndex === 2) return 'TOTAL SAVED: ' + formatCurrency(item.parsed.y, mainCurrency);
-                    return 'TOTAL SAVED AVG: ' + formatCurrency(item.parsed.y, mainCurrency);
+                    return 'TOTAL SAVED: ' + formatCurrency(item.parsed.y, mainCurrency);
                   }
                 }
               }
