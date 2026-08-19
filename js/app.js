@@ -780,6 +780,8 @@ const App = {
     const typeField = document.getElementById('expense-type');
     const yearField = document.getElementById('expense-year');
     const notesField = document.getElementById('expense-notes');
+    const monthGroup = document.getElementById('expense-month-group');
+    const monthField = document.getElementById('expense-month');
 
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
@@ -796,6 +798,11 @@ const App = {
       yearField.appendChild(opt);
     }
 
+    const toggleMonth = () => {
+      monthGroup.style.display = typeField.value === 'yearly' ? '' : 'none';
+    };
+    typeField.onchange = toggleMonth;
+
     if (editId) {
       title.textContent = 'EDIT EXPENSE';
       DB.getById('expenses', editId).then(exp => {
@@ -806,7 +813,9 @@ const App = {
         currencyField.value = exp.currency || mainCurrency;
         typeField.value = exp.type || 'monthly';
         yearField.value = exp.year || String(curYear);
+        monthField.value = exp.paymentMonth || '';
         notesField.value = exp.notes || '';
+        toggleMonth();
         this._modals.expense.show();
       });
     } else {
@@ -817,7 +826,9 @@ const App = {
       currencyField.value = mainCurrency;
       typeField.value = 'monthly';
       yearField.value = String(curYear);
+      monthField.value = '';
       notesField.value = '';
+      toggleMonth();
       this._modals.expense.show();
     }
   },
@@ -1143,11 +1154,12 @@ const App = {
     const type = document.getElementById('expense-type').value;
     const year = document.getElementById('expense-year').value;
     const notes = document.getElementById('expense-notes').value.trim();
+    const paymentMonth = type === 'yearly' ? (document.getElementById('expense-month').value || null) : null;
 
     if (!text) { this.toast('TEXT IS REQUIRED'); return; }
     if (!amount || amount <= 0) { this.toast('ENTER A VALID AMOUNT'); return; }
 
-    const data = { text, amount, type, year, notes, currency: document.getElementById('expense-currency').value || 'CHF' };
+    const data = { text, amount, type, year, notes, currency: document.getElementById('expense-currency').value || 'CHF', paymentMonth };
     if (id) { data.id = parseInt(id); await DB.put('expenses', data); }
     else { await DB.add('expenses', data); }
 

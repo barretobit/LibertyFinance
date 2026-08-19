@@ -229,11 +229,14 @@ Object.assign(Pages, {
       });
     }
 
+    const monthNames = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
     filtered.sort((a, b) => (b.amount || 0) - (a.amount || 0)).forEach(exp => {
       const annualCost = exp.type === 'monthly' ? (exp.amount || 0) * 12 : (exp.amount || 0);
+      const paymentLabel = exp.type === 'yearly' && exp.paymentMonth ? monthNames[Number(exp.paymentMonth) - 1] : '-';
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${escapeHtml(exp.text)}</td>
         <td><span class="tx-badge ${exp.type === 'monthly' ? 'deposit' : 'valuation'}">${exp.type.toUpperCase()}</span></td>
+        <td>${paymentLabel}</td>
         <td>${formatCurrency(exp.amount, exp.currency)}</td>
         <td>${formatCurrency(annualCost, exp.currency)}</td>
         <td>${escapeHtml(exp.notes || '')}</td>
@@ -243,6 +246,95 @@ Object.assign(Pages, {
         </td>`;
       tbody.appendChild(tr);
     });
+
+    // ==================== CASH FLOW CALENDAR ====================
+    (async function() {
+      const canvas = document.getElementById('chart-cashflow');
+      const empty = document.getElementById('cashflow-empty');
+      if (!canvas || !empty) return;
+      const chartKey = 'cashflow';
+      if (App._charts[chartKey]) { try { App._charts[chartKey].destroy(); } catch (e) {} delete App._charts[chartKey]; }
+
+      const allIncomes = await DB.getAll('incomes');
+      const cfMonthNames = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+      const monthIncome = [];
+      const monthExpense = [];
+      let hasData = false;
+
+      for (let m = 1; m <= 12; m++) {
+        const mk = selectedYear + '-' + String(m).padStart(2, '0');
+        const inc = allIncomes
+          .filter(i => i.month === mk)
+          .reduce((sum, i) => sum + (i.amount || 0) * rateFor(i.currency || 'CHF', i.date || (mk + '-01')), 0);
+        const monthlyExp = filtered
+          .filter(e => e.type === 'monthly')
+          .reduce((sum, e) => sum + (e.amount || 0) * rateFor(e.currency || 'CHF', e.date || (selectedYear + '-01-01')), 0);
+        const yearlyExp = filtered
+          .filter(e => e.type === 'yearly' && (!e.paymentMonth || Number(e.paymentMonth) === m))
+          .reduce((sum, e) => sum + (e.amount || 0) * rateFor(e.currency || 'CHF', e.date || (selectedYear + '-01-01')), 0);
+        monthIncome.push(inc);
+        monthExpense.push(monthlyExp + yearlyExp);
+        if (inc > 0 || (monthlyExp + yearlyExp) > 0) hasData = true;
+      }
+
+      if (!hasData) {
+        empty.style.display = 'block';
+        canvas.style.display = 'none';
+        return;
+      }
+      empty.style.display = 'none';
+      canvas.style.display = '';
+
+      App._charts[chartKey] = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: {
+          labels: cfMonthNames,
+          datasets: [
+            {
+              label: 'INCOME',
+              data: monthIncome,
+              backgroundColor: '#33ff3388',
+              borderColor: '#33ff33',
+              borderWidth: 1
+            },
+            {
+              label: 'EXPENSES',
+              data: monthExpense.map(v => -v),
+              backgroundColor: '#ff333388',
+              borderColor: '#ff3333',
+              borderWidth: 1
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: true, labels: { color: '#aaa', boxWidth: 14, font: { size: 9, family: "'Share Tech Mono', monospace" } } },
+            tooltip: {
+              callbacks: {
+                label: ctx => {
+                  const val = Math.abs(ctx.parsed.y);
+                  return ctx.dataset.label + ': ' + formatCurrency(val, mainCurrency);
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              stacked: false,
+              ticks: { color: '#888', font: { size: 11, family: "'Share Tech Mono', monospace" } },
+              grid: { color: '#222' }
+            },
+            y: {
+              stacked: false,
+              ticks: { color: '#888', font: { size: 10, family: "'Share Tech Mono', monospace" }, callback: v => formatCurrency(Math.abs(v), mainCurrency) },
+              grid: { color: '#222' }
+            }
+          }
+        }
+      });
+    })();
   },
 
   async debts() {

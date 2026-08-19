@@ -249,10 +249,10 @@ Object.assign(Pages, {
       const monthlyTot = yearExpenses
         .filter(exp => exp.type === 'monthly')
         .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
-      const yearlyTot = yearExpenses
-        .filter(exp => exp.type === 'yearly')
+      const yearlyForMonth = yearExpenses
+        .filter(exp => exp.type === 'yearly' && (!exp.paymentMonth || Number(exp.paymentMonth) === mNum))
         .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
-      const totalExpenses = monthlyTot + yearlyTot / 12;
+      const totalExpenses = monthlyTot + yearlyForMonth;
 
       const expected = monthIncome - totalExpenses;
 
@@ -268,8 +268,11 @@ Object.assign(Pages, {
         return sum;
       }, 0);
       const grossDeposits = monthTxs
-        .filter(tx => tx.type === 'deposit')
-        .reduce((sum, tx) => sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date), 0);
+        .filter(tx => tx.type === 'deposit' || tx.type === 'withdrawal')
+        .reduce((sum, tx) => {
+          if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+          return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+        }, 0);
 
       if (monthIncome > 0 || netDeposits !== 0) hasData = true;
 
@@ -610,7 +613,7 @@ Object.assign(Pages, {
               position: 'bottom',
               labels: {
                 color: '#d0d0d0',
-                font: { family: "'Share Tech Mono', monospace", size: 10 },
+                font: { family: "'Share Tech Mono', monospace", size: 12 },
                 padding: 8
               }
             },
@@ -628,7 +631,7 @@ Object.assign(Pages, {
             x: {
               ticks: {
                 color: '#888',
-                font: { size: 10, family: "'Share Tech Mono', monospace" },
+                font: { size: 12, family: "'Share Tech Mono', monospace" },
                 callback: v => {
                   const d = new Date(labels[v] + '-01');
                   return d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
@@ -639,7 +642,7 @@ Object.assign(Pages, {
             y: {
               ticks: {
                 color: '#888',
-                font: { size: 10, family: "'Share Tech Mono', monospace" },
+                font: { size: 12, family: "'Share Tech Mono', monospace" },
                 callback: v => formatCurrency(v, mainCurrency)
               },
               grid: { color: '#222' }
@@ -676,12 +679,13 @@ Object.assign(Pages, {
         else if (t.type === 'sell') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
       });
 
-      // Gross deposits per year (saving performance)
+      // Net deposits per year (saving performance)
       const depositsByYear = {};
       sortedTxs.forEach(t => {
         const y = (t.date || '').substring(0, 4);
-        if (!y || t.type !== 'deposit') return;
-        depositsByYear[y] = (depositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        if (!y) return;
+        if (t.type === 'deposit') depositsByYear[y] = (depositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
+        else if (t.type === 'withdrawal') depositsByYear[y] = (depositsByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
       });
 
       // Gross deposits per year into performance-tracked accounts only
@@ -850,7 +854,8 @@ Object.assign(Pages, {
         let tot = 0;
         allExpenses.filter(exp => exp.year === year).forEach(exp => {
           const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
-          tot += exp.type === 'monthly' ? v * monthsCount : v;
+          if (exp.type === 'monthly') tot += v * monthsCount;
+          else if (!exp.paymentMonth || Number(exp.paymentMonth) <= monthsCount) tot += v;
         });
         return tot;
       };
@@ -952,7 +957,7 @@ Object.assign(Pages, {
           '<div class="earning-month-line"><span class="lbl">NET INCOME</span><span class="val">' + formatCurrency(s.surplus, mainCurrency) + '</span></div>' +
           '<div class="earning-month-line"><span class="lbl">SAVINGS RATE' + info('Share of income not spent. Formula: NET INCOME \u00F7 INCOME \u00D7 100') + '</span><span class="val" style="color:' + savingsRateColor + '">' + savingsRateText + '</span></div>' +
           '<div class="earning-month-line"><span class="lbl">SAVINGS RATE YoY' + info('Change in savings rate vs previous year, in percentage points') + '</span><span class="val" style="color:' + savingsDeltaColor + '">' + savingsDeltaText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">TOTAL SAVED' + info('Gross deposits made into all accounts during the year') + '</span><span class="val">' + formatCurrency(s.savingPerf, mainCurrency) + '</span></div>' +
+          '<div class="earning-month-line"><span class="lbl">TOTAL SAVED' + info('Deposits minus withdrawals made into all accounts during the year') + '</span><span class="val">' + formatCurrency(s.savingPerf, mainCurrency) + '</span></div>' +
           '<div class="earning-month-line"><span class="lbl">CAPITAL DEPLOYMENT' + info('How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) \u00F7 NET INCOME \u00D7 100. Above 100% means you also drew on existing cash.') + '</span><span class="val" style="color:#33ff33">' + capDeployText + '</span></div>' +
           '<div class="earning-month-line"><span class="lbl">INVESTMENTS PERFORMANCE' + info('Gain in investment accounts relative to capital deployed. Formula: (value EoY - value BoY - net flows) \u00F7 (value BoY + net flows) \u00D7 100') + '</span><span class="val" style="color:' + investPerfColor + '">' + investPerfText + '</span></div>' +
           '<div class="earning-month-line"><span class="lbl">TWR' + info('Time-weighted return: isolates market performance by removing the effect of cash flow timing. Best measure to compare against an index.') + '</span><span class="val" style="color:' + twrColor + '">' + twrText + '</span></div>' +
@@ -1102,16 +1107,81 @@ Object.assign(Pages, {
         values = points.map(p => p.value);
       }
 
+      const zeroFillPlugin = isPercent ? {
+        id: 'zeroFillSplit',
+        beforeDatasetsDraw(chart) {
+          const meta = chart.getDatasetMeta(0);
+          if (!meta || meta.hidden) return;
+          const ctx = chart.ctx;
+          const yScale = chart.scales.y;
+          const pts = meta.data;
+          if (!pts || pts.length < 2) return;
+
+          const zeroY = yScale.getPixelForValue(0);
+          ctx.save();
+
+          for (let i = 0; i < pts.length - 1; i++) {
+            const x0 = pts[i].x, y0 = pts[i].y;
+            const x1 = pts[i + 1].x, y1 = pts[i + 1].y;
+            const v0 = values[i], v1 = values[i + 1];
+            const pos0 = v0 >= 0, pos1 = v1 >= 0;
+
+            if (pos0 === pos1) {
+              ctx.beginPath();
+              ctx.moveTo(x0, zeroY);
+              ctx.lineTo(x0, y0);
+              ctx.lineTo(x1, y1);
+              ctx.lineTo(x1, zeroY);
+              ctx.closePath();
+              ctx.fillStyle = pos0 ? 'rgba(51,255,51,0.18)' : 'rgba(255,51,51,0.18)';
+              ctx.fill();
+            } else {
+              const t = (0 - v0) / (v1 - v0);
+              const xCross = x0 + t * (x1 - x0);
+              if (pos0) {
+                ctx.beginPath(); ctx.moveTo(x0, zeroY); ctx.lineTo(x0, y0); ctx.lineTo(xCross, zeroY); ctx.closePath();
+                ctx.fillStyle = 'rgba(51,255,51,0.18)'; ctx.fill();
+              }
+              if (pos1) {
+                ctx.beginPath(); ctx.moveTo(xCross, zeroY); ctx.lineTo(x1, y1); ctx.lineTo(x1, zeroY); ctx.closePath();
+                ctx.fillStyle = 'rgba(51,255,51,0.18)'; ctx.fill();
+              }
+              if (!pos0) {
+                ctx.beginPath(); ctx.moveTo(x0, zeroY); ctx.lineTo(x0, y0); ctx.lineTo(xCross, zeroY); ctx.closePath();
+                ctx.fillStyle = 'rgba(255,51,51,0.18)'; ctx.fill();
+              }
+              if (!pos1) {
+                ctx.beginPath(); ctx.moveTo(xCross, zeroY); ctx.lineTo(x1, y1); ctx.lineTo(x1, zeroY); ctx.closePath();
+                ctx.fillStyle = 'rgba(255,51,51,0.18)'; ctx.fill();
+              }
+            }
+          }
+
+          pts.forEach((pt, i) => {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = values[i] >= 0 ? '#33ff33' : '#ff3333';
+            ctx.fill();
+            ctx.strokeStyle = '#1a1a2e';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          });
+
+          ctx.restore();
+        }
+      } : null;
+
       const showAverage = opts && opts.average;
       const datasets = [{
         label: isPercent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
         data: values,
         borderColor: color,
-        backgroundColor: color + '0d',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 4,
-        pointBackgroundColor: color,
+        backgroundColor: isPercent ? 'transparent' : color + '0d',
+        fill: isPercent ? false : true,
+        tension: isPercent ? 0.15 : 0.3,
+        pointRadius: isPercent ? 0 : 4,
+        pointBackgroundColor: isPercent ? undefined : color,
+        pointHitRadius: isPercent ? 8 : undefined,
         borderWidth: 2
       }];
       if (showAverage) {
@@ -1135,11 +1205,12 @@ Object.assign(Pages, {
           labels,
           datasets
         },
+        plugins: zeroFillPlugin ? [zeroFillPlugin] : [],
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 9, family: "'Share Tech Mono', monospace" } } },
+            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: "'Share Tech Mono', monospace" } } },
             tooltip: {
               callbacks: {
                 title: items => items.length ? labels[items[0].dataIndex] : '',
@@ -1153,11 +1224,11 @@ Object.assign(Pages, {
           },
           scales: {
             x: {
-              ticks: { color: '#888', font: { size: 10, family: "'Share Tech Mono', monospace" } },
+              ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" } },
               grid: { color: '#222' }
             },
             y: {
-              ticks: { color: '#888', font: { size: 10, family: "'Share Tech Mono', monospace" }, callback: v => isPercent ? v.toFixed(2) + '%' : formatCurrency(v, mainCurrency) },
+              ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" }, callback: v => isPercent ? v.toFixed(2) + '%' : formatCurrency(v, mainCurrency) },
               grid: { color: '#222' }
             }
           }
@@ -1219,6 +1290,225 @@ Object.assign(Pages, {
       const range = activeRange ? activeRange.dataset.range : '1y';
       _renderRangeChart(investCanvas, 'investment', perfAccountIds, perfTxs, range, '#33ccff', { percent: true, average: true });
     }
+
+    // ==================== SAVINGS RATE TREND ====================
+    (function() {
+      const canvas = document.getElementById('chart-savings-rate');
+      const empty = document.getElementById('savings-rate-empty');
+      const statsCard = document.getElementById('sr-stats-card');
+      if (!canvas || !empty) return;
+
+      // Build months going back 5 years (60+ months) for range filtering
+      const srMonths = [];
+      for (let i = 60; i >= 0; i--) {
+        const d = new Date(todayDate.getFullYear(), todayDate.getMonth() - i, 1);
+        srMonths.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
+      }
+
+      const allMonthData = [];
+      srMonths.forEach(monthKey => {
+        const year = monthKey.substring(0, 4);
+        const mNum = parseInt(monthKey.substring(5, 7));
+        const monthIncome = allIncomes
+          .filter(inc => inc.month === monthKey)
+          .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || (monthKey + '-01')), 0);
+        const yearExpenses = allExpenses.filter(exp => exp.year === year);
+        const monthlyTot = yearExpenses
+          .filter(exp => exp.type === 'monthly')
+          .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
+        const yearlyForMonth = yearExpenses
+          .filter(exp => exp.type === 'yearly' && (!exp.paymentMonth || Number(exp.paymentMonth) === mNum))
+          .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
+        const totalExpenses = monthlyTot + yearlyForMonth;
+        const net = monthIncome - totalExpenses;
+        const rate = monthIncome > 0 ? (net / monthIncome) * 100 : null;
+
+        const monthTxs = transactions.filter(tx =>
+          (tx.date || '').startsWith(monthKey) &&
+          (tx.type === 'deposit' || tx.type === 'withdrawal' || tx.type === 'buy' || tx.type === 'sell')
+        );
+        const grossDeposits = monthTxs
+          .filter(tx => tx.type === 'deposit' || tx.type === 'withdrawal')
+          .reduce((sum, tx) => {
+            if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+            return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
+          }, 0);
+
+        if (rate !== null) {
+          const d = new Date(monthKey + '-01');
+          allMonthData.push({
+            key: monthKey,
+            label: d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }),
+            netIncome: net,
+            totalSaved: grossDeposits
+          });
+        }
+      });
+
+      function renderSavingsRateTrend() {
+        if (App._charts.savingsRate) { try { App._charts.savingsRate.destroy(); } catch (e) {} delete App._charts.savingsRate; }
+
+        // Read active range
+        const activeBtn = document.querySelector('#sr-range-selectors .perf-btn.active');
+        const range = activeBtn ? activeBtn.dataset.range : '1y';
+
+        // Filter by range
+        let filtered = allMonthData;
+        if (allMonthData.length > 0) {
+          const latest = allMonthData[allMonthData.length - 1].key;
+          const latestDate = new Date(latest + '-01');
+          let cutoff;
+          if (range === 'ytd') {
+            cutoff = new Date(latestDate.getFullYear(), 0, 1);
+          } else if (range === 'max') {
+            cutoff = null;
+          } else {
+            const years = parseInt(range.replace('y', '')) || 1;
+            cutoff = new Date(latestDate);
+            cutoff.setMonth(cutoff.getMonth() - (years * 12 - 1));
+          }
+          if (cutoff) {
+            const cutoffKey = cutoff.getFullYear() + '-' + String(cutoff.getMonth() + 1).padStart(2, '0');
+            filtered = allMonthData.filter(m => m.key >= cutoffKey);
+          }
+        }
+
+        if (filtered.length === 0) {
+          empty.style.display = 'block';
+          canvas.style.display = 'none';
+          if (statsCard) statsCard.style.display = 'none';
+          return;
+        }
+        empty.style.display = 'none';
+        canvas.style.display = '';
+        if (statsCard) statsCard.style.display = '';
+
+        const monthLabels = filtered.map(m => m.label);
+        const netIncomeValues = filtered.map(m => m.netIncome);
+        const totalSavedValues = filtered.map(m => m.totalSaved);
+
+        // Stats from filtered data
+        const avgNet = netIncomeValues.reduce((s, v) => s + v, 0) / netIncomeValues.length;
+        const minNet = Math.min(...netIncomeValues);
+        const maxNet = Math.max(...netIncomeValues);
+        const avgSaved = totalSavedValues.reduce((s, v) => s + v, 0) / totalSavedValues.length;
+        const minSaved = Math.min(...totalSavedValues);
+        const maxSaved = Math.max(...totalSavedValues);
+
+        function _srCurHtml(val) {
+          const color = val >= 0 ? '#33ff33' : '#ff3333';
+          return '<span style="color:' + color + '">' + (val >= 0 ? '+' : '') + formatCurrency(val, mainCurrency) + '</span>';
+        }
+
+        const minEl = document.getElementById('sr-min');
+        const avgEl = document.getElementById('sr-avg');
+        const maxEl = document.getElementById('sr-max');
+        const minSavedEl = document.getElementById('sr-min-saved');
+        const avgSavedEl = document.getElementById('sr-avg-saved');
+        const maxSavedEl = document.getElementById('sr-max-saved');
+        if (minEl) minEl.innerHTML = _srCurHtml(minNet);
+        if (avgEl) avgEl.innerHTML = _srCurHtml(avgNet);
+        if (maxEl) maxEl.innerHTML = _srCurHtml(maxNet);
+        if (minSavedEl) minSavedEl.innerHTML = _srCurHtml(minSaved);
+        if (avgSavedEl) avgSavedEl.innerHTML = _srCurHtml(avgSaved);
+        if (maxSavedEl) maxSavedEl.innerHTML = _srCurHtml(maxSaved);
+
+        App._charts.savingsRate = new Chart(canvas.getContext('2d'), {
+          type: 'line',
+          data: {
+            labels: monthLabels,
+            datasets: [
+              {
+                label: 'NET INCOME',
+                data: netIncomeValues,
+                borderColor: '#33ff33',
+                backgroundColor: 'rgba(51,255,51,0.08)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: netIncomeValues.map(v => v >= 0 ? '#33ff33' : '#ff3333'),
+                borderWidth: 2,
+                yAxisID: 'y'
+              },
+              {
+                label: 'NET INCOME AVG',
+                data: netIncomeValues.map(() => avgNet),
+                borderColor: '#33ff3366',
+                borderDash: [6, 4],
+                borderWidth: 1.5,
+                pointRadius: 0,
+                pointHitRadius: 12,
+                fill: false,
+                tension: 0,
+                yAxisID: 'y'
+              },
+              {
+                label: 'TOTAL SAVED',
+                data: totalSavedValues,
+                borderColor: '#33ccff',
+                backgroundColor: 'rgba(51,204,255,0.08)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: '#33ccff',
+                borderWidth: 2,
+                yAxisID: 'y'
+              },
+              {
+                label: 'TOTAL SAVED AVG',
+                data: totalSavedValues.map(() => avgSaved),
+                borderColor: '#33ccff66',
+                borderDash: [6, 4],
+                borderWidth: 1.5,
+                pointRadius: 0,
+                pointHitRadius: 12,
+                fill: false,
+                tension: 0,
+                yAxisID: 'y'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: true, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: "'Share Tech Mono', monospace" } } },
+              tooltip: {
+                callbacks: {
+                  label: item => {
+                    if (item.datasetIndex === 0) return 'NET INCOME: ' + formatCurrency(item.parsed.y, mainCurrency);
+                    if (item.datasetIndex === 1) return 'NET INCOME AVG: ' + formatCurrency(item.parsed.y, mainCurrency);
+                    if (item.datasetIndex === 2) return 'TOTAL SAVED: ' + formatCurrency(item.parsed.y, mainCurrency);
+                    return 'TOTAL SAVED AVG: ' + formatCurrency(item.parsed.y, mainCurrency);
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" } },
+                grid: { color: '#222' }
+              },
+              y: {
+                ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" }, callback: v => formatCurrency(v, mainCurrency) },
+                grid: { color: '#222' }
+              }
+            }
+          }
+        });
+      }
+
+      renderSavingsRateTrend();
+
+      // Range selector click handler
+      document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(btn => {
+        btn.onclick = function() {
+          document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(b => b.classList.remove('active'));
+          this.classList.add('active');
+          renderSavingsRateTrend();
+        };
+      });
+    })();
 
     // Recent transactions (last 10)
     const sortedTxs = [...transactions].sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));

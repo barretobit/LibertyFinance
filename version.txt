@@ -1,4 +1,9 @@
-v1.0 — 7 Aug 2026
+v1.01 — 19 Aug 2026
+- Dashboard Savings Rate Trend chart now supports time range filtering (YTD, 1Y, 2Y, 3Y, MAX)
+- Statistics card updates dynamically with the selected range
+- Stats card layout narrowed for better proportion
+
+v1.00 — 7 Aug 2026
 - Added a VERSIONS & CHANGES modal on the landing page
 - Added "CHANGE FROM LAST YEAR" comparison cards on the Incomes and Expenses pages
 - Portfolio cards now show P&L percentage alongside the value

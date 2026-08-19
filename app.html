@@ -132,6 +132,41 @@
             <div class="col-12">
               <div class="card-gta">
                 <div class="card-gta-header d-flex justify-content-between align-items-center">
+                  <span>SAVINGS RATE TREND</span>
+                  <div class="d-flex gap-1" id="sr-range-selectors">
+                    <span class="perf-btn" data-range="ytd">YTD</span>
+                    <span class="perf-btn active" data-range="1y">1Y</span>
+                    <span class="perf-btn" data-range="2y">2Y</span>
+                    <span class="perf-btn" data-range="3y">3Y</span>
+                    <span class="perf-btn" data-range="max">MAX</span>
+                  </div>
+                </div>
+                <div class="card-gta-body">
+                  <div class="row">
+                    <div class="col-lg-10">
+                      <div class="forecast-chart-wrap"><canvas id="chart-savings-rate"></canvas></div>
+                    </div>
+                    <div class="col-lg-2">
+                      <div class="earning-month" id="sr-stats-card">
+                        <div class="earning-month-label">STATISTICS</div>
+                        <div class="earning-month-line"><span class="lbl">MIN NET INCOME</span><span class="val" id="sr-min"></span></div>
+                        <div class="earning-month-line"><span class="lbl">AVG NET INCOME</span><span class="val" id="sr-avg"></span></div>
+                        <div class="earning-month-line"><span class="lbl">MAX NET INCOME</span><span class="val" id="sr-max"></span></div>
+                        <div class="earning-month-line"><span class="lbl">MIN TOTAL SAVED</span><span class="val" id="sr-min-saved"></span></div>
+                        <div class="earning-month-line"><span class="lbl">AVG TOTAL SAVED</span><span class="val" id="sr-avg-saved"></span></div>
+                        <div class="earning-month-line"><span class="lbl">MAX TOTAL SAVED</span><span class="val" id="sr-max-saved"></span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div id="savings-rate-empty" class="empty-state">NO INCOME DATA FOR THE LAST 12 MONTHS.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="row mb-3">
+            <div class="col-12">
+              <div class="card-gta">
+                <div class="card-gta-header d-flex justify-content-between align-items-center">
                   <span>GOALS</span>
                   <a class="tx-link" href="#goals">MANAGE</a>
                 </div>
@@ -495,6 +530,7 @@
                     <tr>
                       <th>TEXT</th>
                       <th>TYPE</th>
+                      <th>PAYMENT</th>
                       <th>AMOUNT</th>
                       <th>ANNUAL COST</th>
                       <th>NOTES</th>
@@ -507,11 +543,24 @@
               <div id="expense-empty" class="empty-state">NO EXPENSES ADDED YET.</div>
             </div>
           </div>
-          <div class="card-gta mt-3">
-            <div class="card-gta-header">EXPENSE WEIGHT (ANNUAL)</div>
-            <div class="card-gta-body">
-              <div class="expense-chart-wrap" id="expense-chart-wrap"><canvas id="chart-expense-weight"></canvas></div>
-              <div id="expense-chart-empty" class="empty-state">NO EXPENSES FOR SELECTED YEAR.</div>
+          <div class="row mt-3">
+            <div class="col-lg-6 mb-3">
+              <div class="card-gta">
+                <div class="card-gta-header">EXPENSE WEIGHT (ANNUAL)</div>
+                <div class="card-gta-body">
+                  <div class="expense-chart-wrap" id="expense-chart-wrap"><canvas id="chart-expense-weight"></canvas></div>
+                  <div id="expense-chart-empty" class="empty-state">NO EXPENSES FOR SELECTED YEAR.</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-6 mb-3">
+              <div class="card-gta">
+                <div class="card-gta-header">CASH FLOW CALENDAR</div>
+                <div class="card-gta-body">
+                  <div class="expense-chart-wrap" id="cashflow-chart-wrap"><canvas id="chart-cashflow"></canvas></div>
+                  <div id="cashflow-empty" class="empty-state">NO INCOME OR EXPENSE DATA FOR SELECTED YEAR.</div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1000,6 +1049,24 @@
               <label class="form-label">YEAR</label>
               <select class="form-select form-gta" id="expense-year"></select>
             </div>
+            <div class="mb-3" id="expense-month-group" style="display:none">
+              <label class="form-label">PAYMENT MONTH</label>
+              <select class="form-select form-gta" id="expense-month">
+                <option value="">— SELECT —</option>
+                <option value="1">JANUARY</option>
+                <option value="2">FEBRUARY</option>
+                <option value="3">MARCH</option>
+                <option value="4">APRIL</option>
+                <option value="5">MAY</option>
+                <option value="6">JUNE</option>
+                <option value="7">JULY</option>
+                <option value="8">AUGUST</option>
+                <option value="9">SEPTEMBER</option>
+                <option value="10">OCTOBER</option>
+                <option value="11">NOVEMBER</option>
+                <option value="12">DECEMBER</option>
+              </select>
+            </div>
             <div class="mb-3"><label class="form-label">NOTES</label><textarea class="form-control form-gta" id="expense-notes" rows="2"></textarea></div>
           </div>
           <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveExpense()">SAVE</button></div>
@@ -1127,6 +1194,14 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script>
+      Chart.defaults.font.family = "'Share Tech Mono', monospace";
+      Chart.defaults.font.size = 12;
+      Chart.defaults.plugins.legend.labels.font = { size: 11, family: "'Share Tech Mono', monospace" };
+      Chart.defaults.plugins.legend.labels.boxWidth = 14;
+      Chart.defaults.plugins.tooltip.titleFont = { size: 12, family: "'Share Tech Mono', monospace" };
+      Chart.defaults.plugins.tooltip.bodyFont = { size: 12, family: "'Share Tech Mono', monospace" };
+    </script>
     <script src="js/storage.js?v=1"></script>
     <script src="js/db.js?v=23"></script>
     <script src="js/utils.js?v=23"></script>
