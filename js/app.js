@@ -39,6 +39,7 @@ const App = {
       portfolio: new bootstrap.Modal(document.getElementById('modal-portfolio')),
       account: new bootstrap.Modal(document.getElementById('modal-account')),
       transaction: new bootstrap.Modal(document.getElementById('modal-transaction')),
+      txEdit: new bootstrap.Modal(document.getElementById('modal-tx-edit')),
       valuation: new bootstrap.Modal(document.getElementById('modal-valuation')),
       metal: new bootstrap.Modal(document.getElementById('modal-metal')),
       asset: new bootstrap.Modal(document.getElementById('modal-asset')),
@@ -227,6 +228,8 @@ const App = {
     const idField = document.getElementById('portfolio-id');
     const nameField = document.getElementById('portfolio-name');
     const descField = document.getElementById('portfolio-desc');
+    const deleteBtn = document.getElementById('portfolio-delete-btn');
+    if (deleteBtn) deleteBtn.style.display = editId ? '' : 'none';
     if (editId) {
       title.textContent = 'EDIT PORTFOLIO';
       DB.getById('portfolios', editId).then(p => {
@@ -268,6 +271,8 @@ const App = {
     const startingDateField = document.getElementById('account-starting-date');
     const startingSymbol = document.getElementById('account-starting-symbol');
     const contribSymbol = document.getElementById('account-contrib-symbol');
+    const deleteBtn = document.getElementById('account-delete-btn');
+    if (deleteBtn) deleteBtn.style.display = editId ? '' : 'none';
 
     function toggleAccountTypeFields() {
       const t = typeField.value;
@@ -1271,8 +1276,11 @@ const App = {
   // ==================== DELETE ====================
 
   async deleteAccount(id) {
+    id = parseInt(id);
+    if (!id) return;
     const confirmed = await this.confirm('DELETE ACCOUNT?', 'This will also delete all transactions for this account. Are you sure?');
     if (!confirmed) return;
+    this._modals.account.hide();
 
     const txs = await DB.getByIndex('transactions', 'accountId', id);
     for (const tx of txs) {
@@ -1284,7 +1292,122 @@ const App = {
     }
     await DB.del('accounts', id);
     this.toast('ACCOUNT DELETED');
-    this.navigate('portfolio-detail?id=' + this.currentPfId);
+    this.navigate(this.currentPfId ? 'portfolio-detail?id=' + this.currentPfId : 'portfolios');
+  },
+
+  async deletePortfolio(id) {
+    id = parseInt(id);
+    if (!id) return;
+    const accounts = (await DB.getAll('accounts')).filter(a => Number(a.portfolioId) === Number(id));
+    const msg = accounts.length > 0
+      ? 'This will also delete ' + pluralize(accounts.length, 'ACCOUNT') + ' with all their transactions. Are you sure?'
+      : 'Remove this portfolio?';
+    const confirmed = await this.confirm('DELETE PORTFOLIO?', msg);
+    if (!confirmed) return;
+    this._modals.portfolio.hide();
+
+    for (const acc of accounts) {
+      const txs = await DB.getByIndex('transactions', 'accountId', acc.id);
+      for (const tx of txs) {
+        await DB.del('transactions', tx.id);
+      }
+      const assets = await DB.getByIndex('assets', 'accountId', acc.id);
+      for (const asset of assets) {
+        await DB.del('assets', asset.id);
+      }
+      await DB.del('accounts', acc.id);
+    }
+    await DB.del('portfolios', id);
+    this.toast('PORTFOLIO DELETED');
+    this.navigate('portfolios');
+  },
+
+  // ==================== EDIT TRANSACTION ====================
+
+  async showEditTransaction(id) {
+    const tx = await DB.getById('transactions', id);
+    if (!tx) return;
+    if (tx.type === 'asset-add' || tx.type === 'asset-sell') { this.toast('EDIT THE ASSET INSTEAD'); return; }
+
+    const isMetal = tx.type === 'buy' || tx.type === 'sell';
+    document.getElementById('txedit-id').value = tx.id;
+    document.getElementById('txedit-type').textContent = _isOpeningTx(tx) ? 'OPENING VALUATION' : tx.type.toUpperCase();
+    document.getElementById('txedit-amount-group').style.display = isMetal ? 'none' : '';
+    document.getElementById('txedit-metal-group').style.display = isMetal ? '' : 'none';
+
+    const account = await DB.getById('accounts', tx.accountId);
+    const cur = account ? account.currency || 'CHF' : 'CHF';
+    document.getElementById('txedit-currency-symbol').textContent = cur;
+    document.getElementById('txedit-price-symbol').textContent = cur + '/g';
+
+    if (isMetal) {
+      document.getElementById('txedit-qty').value = tx.quantity || 0;
+      document.getElementById('txedit-price').value = tx.pricePerGram || '';
+    } else {
+      document.getElementById('txedit-amount').value = Math.abs(tx.amount || 0);
+    }
+    document.getElementById('txedit-notes').value = tx.notes || '';
+    document.getElementById('txedit-date').value = tx.date || todayStr();
+
+    this._modals.txEdit.show();
+  },
+
+  async saveTransactionEdit() {
+    const id = parseInt(document.getElementById('txedit-id').value);
+    const tx = await DB.getById('transactions', id);
+    if (!tx) return;
+    const account = await DB.getById('accounts', tx.accountId);
+    if (!account) { this.toast('ACCOUNT NOT FOUND'); return; }
+
+    const date = document.getElementById('txedit-date').value || todayStr();
+    const notes = document.getElementById('txedit-notes').value.trim();
+    const isMetal = tx.type === 'buy' || tx.type === 'sell';
+
+    if (isMetal) {
+      const qty = parseFloat(document.getElementById('txedit-qty').value);
+      const price = parseFloat(document.getElementById('txedit-price').value);
+      if (!qty || qty <= 0) { this.toast('ENTER A VALID QUANTITY'); return; }
+      if (!price || price <= 0) { this.toast('ENTER A VALID PRICE'); return; }
+      tx.quantity = qty;
+      tx.pricePerGram = price;
+      tx.amount = tx.type === 'buy' ? qty * price : -(qty * price);
+    } else {
+      const amount = parseFloat(document.getElementById('txedit-amount').value);
+      if (isNaN(amount) || amount <= 0) { this.toast('ENTER A VALID AMOUNT'); return; }
+      tx.amount = tx.type === 'withdrawal' ? -amount : amount;
+      if (account.accountType === 'Precious Metal' && tx.type === 'valuation' && (account.quantity || 0) > 0) {
+        tx.pricePerGram = amount / account.quantity;
+      }
+    }
+    tx.date = date;
+    // keep the OPENING VALUATION marker intact so performance math stays correct
+    if (!_isOpeningTx(tx)) tx.notes = notes;
+
+    await DB.put('transactions', tx);
+
+    if (isMetal && account.accountType === 'Precious Metal') {
+      // replay quantities so quantityAfter and the holding stay consistent
+      const metalTxs = (await DB.getByIndex('transactions', 'accountId', tx.accountId))
+        .filter(t => t.type === 'buy' || t.type === 'sell')
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      let q = 0;
+      for (const t of metalTxs) {
+        q = t.type === 'buy' ? q + (t.quantity || 0) : Math.max(0, q - (t.quantity || 0));
+        if (t.quantityAfter !== q) { t.quantityAfter = q; await DB.put('transactions', t); }
+      }
+      account.quantity = q;
+      const last = metalTxs.length > 0 ? metalTxs[metalTxs.length - 1] : null;
+      if (last && last.pricePerGram) account.pricePerGram = last.pricePerGram;
+      account.currentValue = q * (account.pricePerGram || 0);
+      await DB.put('accounts', account);
+    }
+
+    // full recalc across all portfolios/accounts so every derived value stays consistent
+    await this._recomputeAllBalances();
+
+    this._modals.txEdit.hide();
+    this.toast('TRANSACTION UPDATED');
+    this.route();
   },
 
   async deleteTransaction(id) {

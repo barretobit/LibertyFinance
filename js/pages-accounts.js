@@ -281,13 +281,18 @@ Object.assign(Pages, {
         } else if (tx.pricePerGram) {
           notesHtml += '<br><small style="color:#888">' + tx.pricePerGram.toFixed(2) + ' ' + account.currency + '/g</small>';
         }
+        const isAssetEvent = tx.type === 'asset-add' || tx.type === 'asset-sell';
+        const actionsHtml = isAssetEvent
+          ? '<a class="tx-link" onclick="App.deleteTransaction(' + tx.id + ')">DELETE</a>'
+          : '<a class="tx-link me-2" onclick="App.showEditTransaction(' + tx.id + ')">EDIT</a>' +
+            '<a class="tx-link" onclick="App.deleteTransaction(' + tx.id + ')">DELETE</a>';
         const tr = document.createElement('tr');
         tr.innerHTML = `<td>${formatDate(tx.date)}</td>
           <td><span class="tx-badge ${typeClass}">${typeLabel}</span></td>
           <td>${displayAmount}</td>
           <td>${formatCurrency(tx.balanceAfter || 0, account.currency)}</td>
           <td>${notesHtml}</td>
-          <td><a class="tx-link" onclick="App.deleteTransaction(${tx.id})">DELETE</a></td>`;
+          <td>${actionsHtml}</td>`;
         tbody.appendChild(tr);
       });
     }

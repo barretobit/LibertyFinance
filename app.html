@@ -314,8 +314,7 @@
           <div class="d-flex justify-content-between align-items-center mb-4 mt-2">
             <h2 class="page-title" id="acc-detail-name">ACCOUNT</h2>
             <div>
-              <button class="btn btn-gta me-2" onclick="App.showModal('account', App.currentPfId, App.currentAccId)">EDIT</button>
-              <button class="btn btn-gta me-2 btn-danger-del" onclick="App.deleteAccount(App.currentAccId)">DELETE</button>
+              <button class="btn btn-gta" onclick="App.showModal('account', App.currentPfId, App.currentAccId)">EDIT</button>
             </div>
           </div>
           <div class="row mb-4">
@@ -782,7 +781,10 @@
             <div class="mb-3"><label class="form-label">NAME</label><input type="text" class="form-control form-gta" id="portfolio-name" /></div>
             <div class="mb-3"><label class="form-label">DESCRIPTION</label><textarea class="form-control form-gta" id="portfolio-desc" rows="2"></textarea></div>
           </div>
-          <div class="modal-footer"><button class="btn btn-gta" onclick="App.savePortfolio()">SAVE</button></div>
+          <div class="modal-footer">
+            <button class="btn btn-gta btn-danger-del me-auto" id="portfolio-delete-btn" style="display:none" onclick="App.deletePortfolio(document.getElementById('portfolio-id').value)">DELETE PORTFOLIO</button>
+            <button class="btn btn-gta" onclick="App.savePortfolio()">SAVE</button>
+          </div>
         </div>
       </div>
     </div>
@@ -866,7 +868,10 @@
               <label class="form-check-label" for="account-include-liq">INCLUDE IN LIQUID NET WORTH</label>
             </div>
           </div>
-          <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveAccount()">SAVE</button></div>
+          <div class="modal-footer">
+            <button class="btn btn-gta btn-danger-del me-auto" id="account-delete-btn" style="display:none" onclick="App.deleteAccount(document.getElementById('account-id').value)">DELETE ACCOUNT</button>
+            <button class="btn btn-gta" onclick="App.saveAccount()">SAVE</button>
+          </div>
         </div>
       </div>
     </div>
@@ -890,6 +895,40 @@
             <div class="mb-3"><label class="form-label">DATE</label><input type="date" class="form-control form-gta" id="tx-date" /></div>
           </div>
           <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveTransaction()">SAVE</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Transaction Modal -->
+    <div class="modal fade" id="modal-tx-edit" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title">EDIT TRANSACTION</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="txedit-id" />
+            <div class="mb-3"><span class="text-muted">TYPE: <span id="txedit-type">&mdash;</span></span></div>
+            <div class="mb-3" id="txedit-amount-group">
+              <label class="form-label">AMOUNT</label>
+              <div class="input-group"><span class="input-group-text input-gta-addon" id="txedit-currency-symbol">CHF</span><input type="number" step="0.01" class="form-control form-gta" id="txedit-amount" /></div>
+            </div>
+            <div id="txedit-metal-group" style="display:none">
+              <div class="mb-3">
+                <label class="form-label">QUANTITY (grams)</label>
+                <input type="number" step="0.01" min="0" class="form-control form-gta" id="txedit-qty" />
+              </div>
+              <div class="mb-3">
+                <label class="form-label">PRICE PER GRAM</label>
+                <div class="input-group"><span class="input-group-text input-gta-addon" id="txedit-price-symbol">CHF/g</span><input type="number" step="0.01" min="0" class="form-control form-gta" id="txedit-price" /></div>
+              </div>
+            </div>
+            <div class="mb-3"><label class="form-label">NOTES</label><textarea class="form-control form-gta" id="txedit-notes" rows="2"></textarea></div>
+            <div class="mb-3"><label class="form-label">DATE</label><input type="date" class="form-control form-gta" id="txedit-date" /></div>
+            <small class="text-muted">BALANCES ARE RECOMPUTED AUTOMATICALLY AFTER SAVING.</small>
+          </div>
+          <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveTransactionEdit()">SAVE</button></div>
         </div>
       </div>
     </div>
@@ -1205,11 +1244,11 @@
     <script src="js/storage.js?v=1"></script>
     <script src="js/db.js?v=23"></script>
     <script src="js/utils.js?v=23"></script>
-    <script src="js/app.js?v=23"></script>
+    <script src="js/app.js?v=26"></script>
     <script src="js/pages-shared.js?v=27"></script>
     <script src="js/pages-dashboard.js?v=27"></script>
     <script src="js/pages-portfolios.js?v=27"></script>
-    <script src="js/pages-accounts.js?v=27"></script>
+    <script src="js/pages-accounts.js?v=28"></script>
     <script src="js/pages-money.js?v=27"></script>
     <script src="js/pages-goals.js?v=27"></script>
     <script src="js/pages-market.js?v=27"></script>
