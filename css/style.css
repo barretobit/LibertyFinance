@@ -1851,6 +1851,10 @@ body {
   vertical-align: baseline;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
+.ws-flag-sq {
+  width: 15px;
+  height: 15px;
+}
 .ws-tick-value {
   font-family: 'Share Tech Mono', monospace;
   font-size: 20px;
@@ -1987,7 +1991,7 @@ body {
 }
 .ws-stock-item-name {
   font-family: var(--font-title);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.5px;
   color: var(--text-primary);
   white-space: nowrap;
@@ -2008,20 +2012,27 @@ body {
 }
 .ws-stock-item-right {
   display: flex;
-  align-items: flex-end;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   flex-shrink: 0;
 }
 .ws-stock-item-price {
+  width: 108px;
+  text-align: right;
   font-family: 'Share Tech Mono', monospace;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--text-primary);
   white-space: nowrap;
 }
+.ws-stock-item-ccy {
+  font-size: 12px;
+  color: var(--text-muted);
+}
 .ws-stock-item-change {
+  width: 74px;
+  text-align: right;
   font-family: 'Share Tech Mono', monospace;
-  font-size: 11px;
+  font-size: 14px;
   white-space: nowrap;
 }
 .ws-stock-item-change.pos { color: #33ff33; }

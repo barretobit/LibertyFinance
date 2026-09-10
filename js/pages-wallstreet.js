@@ -85,6 +85,7 @@ let _wsStockQuery = "";
 let _wsSelectedStock = null;
 let _wsStockCtx = null;
 let _wsStockSort = "perf";
+let _wsStockRegion = "";
 
 // Crypto chart scale toggle (false = linear, true = logarithmic).
 let _wsCryptoLogScale = false;
@@ -204,14 +205,12 @@ function wsCurrencyScale(usdPer, fromCode, toCode) {
 function wsFmtValue(v, decimals) {
   if (v == null || isNaN(v)) return "—";
   if (decimals != null) {
-    return v.toLocaleString("en-GB", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    const d = Math.max(0, Math.min(2, decimals));
+    return v.toLocaleString("en-GB", { minimumFractionDigits: d, maximumFractionDigits: d });
   }
   const a = Math.abs(v);
-  if (a < 1) return v.toLocaleString("en-GB", { minimumFractionDigits: 5, maximumFractionDigits: 5 });
-  if (a < 100) return v.toLocaleString("en-GB", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
   if (a < 1000) return v.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (a < 100000) return v.toLocaleString("en-GB", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  return Math.round(v).toLocaleString("en-GB");
+  return v.toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 function wsFmtPct(pct) {
@@ -383,6 +382,7 @@ Object.assign(Pages, {
           if (settings.wsMetalWeight && _WS_METAL_WEIGHTS[settings.wsMetalWeight]) _wsMetalWeight = settings.wsMetalWeight;
           if (typeof settings.wsCryptoLog === "boolean") _wsCryptoLogScale = settings.wsCryptoLog;
           if (settings.wsStockSort) _wsStockSort = settings.wsStockSort;
+          if (settings.wsStockRegion) _wsStockRegion = settings.wsStockRegion;
         }
       } catch (e) {}
 
@@ -539,6 +539,7 @@ Object.assign(Pages, {
       settings.wsMetalWeight = _wsMetalWeight;
       settings.wsCryptoLog = _wsCryptoLogScale;
       settings.wsStockSort = _wsStockSort;
+      settings.wsStockRegion = _wsStockRegion;
       await DB.saveSettings(settings);
     } catch (e) {}
   },
@@ -629,7 +630,7 @@ Object.assign(Pages, {
         escapeHtml(it.meta.name || it.symbol) +
         "</span>" +
         (code || flag
-          ? '<span class="ws-tick-code' + (flag ? " ws-tick-flag" : "") + '" title="' + escapeHtml(code || it.meta.region || "") + '">' + (flag ? '<img class="ws-flag" src="flags/' + flag + '.svg?v=2" alt="' + escapeHtml(code || "") + '" loading="lazy"/>' : escapeHtml(code)) + "</span>"
+          ? '<span class="ws-tick-code' + (flag ? " ws-tick-flag" : "") + '" title="' + escapeHtml(code || it.meta.region || "") + '">' + (flag ? '<img class="ws-flag' + (flag === "ch" ? " ws-flag-sq" : "") + '" src="flags/' + flag + '.svg?v=3" alt="' + escapeHtml(code || "") + '" loading="lazy"/>' : escapeHtml(code)) + "</span>"
           : "") +
         "</div>" +
         '<div class="ws-tick-value">' +
@@ -672,6 +673,7 @@ Object.assign(Pages, {
     const emptyList = document.getElementById("ws-stock-empty");
     const searchEl = document.getElementById("ws-stock-search");
     const sortEl = document.getElementById("ws-stock-sort");
+    const regionEl = document.getElementById("ws-stock-region");
     if (!listEl || !wrap || !canvas || !empty) return;
 
     _wsStockCtx = { stocks, data, metaBySym, startDate, usdPer, range };
@@ -691,12 +693,22 @@ Object.assign(Pages, {
         this._wsRenderStockPanel(_wsStockCtx.stocks, _wsStockCtx.data, _wsStockCtx.metaBySym, _wsStockCtx.startDate, _wsStockCtx.usdPer, _wsStockCtx.range);
       };
     }
+    if (regionEl) {
+      regionEl.value = _wsStockRegion;
+      regionEl.onchange = () => {
+        _wsStockRegion = regionEl.value;
+        this._wsSavePrefs();
+        this._wsRenderStockPanel(_wsStockCtx.stocks, _wsStockCtx.data, _wsStockCtx.metaBySym, _wsStockCtx.startDate, _wsStockCtx.usdPer, _wsStockCtx.range);
+      };
+    }
 
     listEl.innerHTML = "";
     emptyList.style.display = stocks.length ? "none" : "block";
 
     const q = _wsStockQuery;
+    const region = _wsStockRegion;
     const visible = [...stocks].sort(wsStockComparer(_wsStockSort)).filter((it) => {
+      if (region && wsStockRegion(it.symbol) !== region) return false;
       if (!q) return true;
       const name = ((it.meta && it.meta.name) || "").toLowerCase();
       const sym = (it.symbol || "").toLowerCase();
@@ -714,17 +726,19 @@ Object.assign(Pages, {
       const region = wsStockRegion(it.symbol);
       const flag = _WS_FLAG_FILES[region] || "";
       const up = it.chg ? it.chg.pct >= 0 : true;
+      const ccyTxt = escapeHtml(_WS_CCY_SYMBOL[_wsCurrency] || _wsCurrency);
+      const chgTxt = it.chg ? (up ? "&#9650;" : "&#9660;") + " " + wsFmtPct(it.chg.pct) : "—";
       row.innerHTML =
         '<div class="ws-stock-item-main">' +
         (flag
-          ? '<img class="ws-flag" src="flags/' + flag + '.svg" alt="' + escapeHtml(region) + '" loading="lazy"/>'
+          ? '<img class="ws-flag' + (flag === "ch" ? " ws-flag-sq" : "") + '" src="flags/' + flag + '.svg?v=3" alt="' + escapeHtml(region) + '" loading="lazy"/>'
           : '<span class="ws-stock-item-region">' + escapeHtml(region) + "</span>") +
         '<div class="ws-stock-item-names"><span class="ws-stock-item-name">' + escapeHtml(it.meta.name || it.symbol) + "</span>" +
         '<span class="ws-stock-item-symbol">' + escapeHtml(it.symbol) + "</span></div>" +
         "</div>" +
         '<div class="ws-stock-item-right">' +
-        '<span class="ws-stock-item-price">' + wsFmtValue(it.displayValue != null ? it.displayValue : it.last.close) + "</span>" +
-        '<span class="ws-stock-item-change ' + (up ? "pos" : "neg") + '">' + (it.chg ? (up ? "&#9650;" : "&#9660;") + " " + wsFmtPct(it.chg.pct) : "—") + "</span>" +
+        '<span class="ws-stock-item-change ' + (up ? "pos" : "neg") + '">' + chgTxt + "</span>" +
+        '<span class="ws-stock-item-price"><span class="ws-stock-item-ccy">' + ccyTxt + "</span>&nbsp;" + wsFmtValue(it.displayValue != null ? it.displayValue : it.last.close) + "</span>" +
         "</div>";
       row.onclick = () => {
         _wsSelectedStock = it.symbol;
@@ -836,13 +850,7 @@ Object.assign(Pages, {
               label: (c) => {
                 if (c.datasetIndex === 1) return null;
                 const d = c.parsed;
-                let prec = 2;
-                const lastVal = candles.length ? candles[candles.length - 1].c : 0;
-                if (lastVal < 1) prec = 4;
-                else if (lastVal < 100) prec = 2;
-                else if (lastVal < 1000) prec = 1;
-                else prec = 0;
-                return ccy + " " + d.c.toLocaleString("en-GB", { maximumFractionDigits: prec });
+                return ccy + " " + d.c.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
               },
             },
           },
