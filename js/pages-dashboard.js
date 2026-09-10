@@ -518,9 +518,9 @@ Object.assign(Pages, {
         const mk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
         labels.push(mk);
         histVals.push(null);
-        nRun *= (1 + mean);
-        pRun *= (1 + mean - stdev);
-        oRun *= (1 + mean + stdev);
+        nRun *= (1 + mean + stdev);
+        pRun *= (1 + mean);
+        oRun *= (1 + mean + 2 * stdev);
         pessVals.push(Math.max(0, pRun));
         neutralVals.push(nRun);
         optVals.push(oRun);

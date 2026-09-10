@@ -1,3 +1,10 @@
+v1.20 — 11 Sep 2026
+- New WALL STREET market overview page (Indexes, ETFs, Stocks, Cryptos, Metals)
+- Randata API sync with per-class cache in the Resources/ folder, served offline afterwards
+- Candlestick + volume charts, stock search/sort, and chart range selection (1M/1Y/YTD/5Y)
+- Vertical clickable legends, outlook stat cards, crypto log/linear toggle, and per-asset currency conversion
+- Global ETFs (VT, VXUS, VEA, VWO) get a dedicated globe flag
+
 v1.01 — 19 Aug 2026
 - Dashboard Savings Rate Trend chart now supports time range filtering (YTD, 1Y, 2Y, 3Y, MAX)
 - Statistics card updates dynamically with the selected range

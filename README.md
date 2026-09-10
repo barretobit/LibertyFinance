@@ -1,6 +1,6 @@
 # 💰 LIBERTY FINANCE
 
-> **Wealth Management System**: Track, manage and forecast your entire financial life from one place, with a slick retro inspired dark UI. 🎮
+**Wealth Management System**: Track, manage and forecast your entire financial life from one place, with a slick retro inspired dark UI. 🎮
 
 [![Open WebApp](https://img.shields.io/badge/Open_WebApp-Liberty_Finance-brightgreen.svg)](https://barretobit.github.io/LibertyFinance/)
 
@@ -11,7 +11,7 @@
 
 Liberty Finance is a **personal wealth management application** that runs **entirely in your browser**. No install, no `.exe`, no server: a pure static web app that reads and writes your data as **plain JSON files in a folder you choose**. Works on **Windows, macOS and Linux**, in Chrome, Edge, Firefox and Safari.
 
-Current version: **v1.0** · Themed "Liberty City Network" 🌆
+Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
 ---
 
@@ -78,6 +78,16 @@ Current version: **v1.0** · Themed "Liberty City Network" 🌆
 - **Waterfall funding engine**: available balance is claimed by goals in priority order automatically ⛲
 - Live progress bars with "SHORT BY / EXCEED BY / TARGET REACHED" status
 
+### 📈 Wall Street (Market Overview)
+
+- Live market overview for **Indexes** (S&P 500, SMI, DAX, Nikkei…), **ETFs**, **Stocks** and **Cryptos**, plus precious **Metals**
+- Normalized **performance charts** (1M / 1Y / YTD / 5Y) with a clickable legend on the right, one legend row per asset
+- **Candlestick + volume** chart per stock, with clean price tooltips in your main currency
+- **Outlook stats** per range: market change, breadth, max drawdown, volatility, expected next move and win rate
+- Search + **sort** the stock list by performance, name, symbol, price or region
+- Crypto **log/linear scale toggle**, per-asset currency conversion and color coding
+- Every asset class is synced into its own local `Resources/` cache file (Randata API) and kept fully **offline afterwards**
+
 ### 💱 Exchange Rates
 
 - Fully **date based**: rates are stored per day, so historical values convert correctly 🗓️
@@ -103,7 +113,7 @@ Current version: **v1.0** · Themed "Liberty City Network" 🌆
 │  └───────────────┘   └──────────┬────────────────────────┘    │
 │                                 │ reads / writes via          │
 │                                 v                             │
-│  ┌───────────────────────────────────────────────────┐        │
+│  ┌────────────────────────────────────────────────────┐       │
 │  │             js/storage.js · 2 adapters             │       │
 │  │   Folder mode (Chrome/Edge/Opera)                  │       │
 │  │     File System Access API → real files on disk    │       │
@@ -111,8 +121,8 @@ Current version: **v1.0** · Themed "Liberty City Network" 🌆
 │  │     open/download + in browser mirror              │       │
 │  └──────────────────────┬─────────────────────────────┘       │
 │                         │                                     │
-│         YOUR DATA:  <profile>.json · market.json · Backups/   │
-│                     (in a folder you choose; see below)       │
+│         YOUR DATA:  <profile>.json · Backups · Resources      │
+│              (in a folder you choose; see below)              │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -124,10 +134,11 @@ Current version: **v1.0** · Themed "Liberty City Network" 🌆
 - `js/storage.js`: the **storage layer**: two interchangeable adapters plus a small IndexedDB helper (see below) 📂
 - `js/utils.js`: currency formatting, **date based FX conversion**, asset depreciation math
 - `js/app.js`: router, modals and CRUD orchestration
-- `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals)
+- `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals), `pages-wallstreet` (market overview)
+- `js/randata.js`: the **market data client**: fetches the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
 - `server.js`: **local preview only** (static files; GitHub Pages serves the same files in production)
 
-**Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices). Zero SQL, zero cloud. 📄
+**Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices, and a `Resources/` folder holding the market data cache — one file per asset class). Zero SQL, zero cloud. 📄
 
 ---
 
@@ -141,6 +152,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - The button becomes **CHANGE DATA FOLDER** once connected. Click it anytime to switch to a different folder (e.g. if you picked the wrong one).
 - Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
 - A `Backups/` subfolder is created next to your data; every time you open a profile, a timestamped snapshot is saved (newest 30 kept).
+- A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`). Each page reads only the resources it needs.
 - FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.
 - **Your files are just files**: copy them, back them up, open them in another device, anything.
 
@@ -149,7 +161,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - Click **OPEN PROFILE FILE** to open a single `.json` profile.
 - Edits are kept safe in an in browser mirror (IndexedDB), so nothing is lost between visits.
 - Use **SAVE FILE** (settings menu inside the app) to **download** the current profile. That's how you keep a real updated file on disk.
-- Backups and market data live in the browser's own storage, not on disk.
+- Backups, market data and the `Resources/` market cache live in the browser's own storage, not on disk.
 - **EXPORT** (settings menu) gives you a JSON backup file you can carry anywhere; **IMPORT** restores it.
 
 ### Same app, same data, everywhere
@@ -158,14 +170,15 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - Profiles are fully interchangeable between browsers and devices via EXPORT/IMPORT, or in folder mode, by copying the files themselves.
 - The app never requires you to switch browsers; it simply adapts to what yours allows.
 
-| Aspect      | Folder mode (Chrome/Edge/Opera)              | File mode (Firefox/Safari/…)         |
-| ----------- | -------------------------------------------- | ------------------------------------ |
-| Opening     | Pick a **folder** once → all profiles listed | Open **one `.json` file** at a time  |
-| Saving      | Silent write back into that folder           | **SAVE FILE** downloads the profile  |
-| Backups     | Real `Backups/` folder next to your data     | Inside browser storage (invisible)   |
-| Market data | `market.json` in your folder                 | Inside browser storage               |
-| Next visit  | Autoreconnects to your folder               | Reopens profile from browser storage |
-| Moving data | Copy the files directly                      | Use EXPORT / IMPORT                  |
+| Aspect        | Folder mode (Chrome/Edge/Opera)                | File mode (Firefox/Safari/…)           |
+| ------------- | ---------------------------------------------- | -------------------------------------- |
+| Opening       | Pick a **folder** once → all profiles listed   | Open **one `.json` file** at a time    |
+| Saving        | Silent write back into that folder             | **SAVE FILE** downloads the profile    |
+| Backups       | Real `Backups/` folder next to your data       | Inside browser storage (invisible)     |
+| Market data   | `market.json` in your folder                   | Inside browser storage                 |
+| Randata cache | `Resources/` folder (one file per asset class) | Inside browser storage (`Resources/…`) |
+| Next visit    | Autoreconnects to your folder                  | Reopens profile from browser storage   |
+| Moving data   | Copy the files directly                        | Use EXPORT / IMPORT                    |
 
 ---
 
@@ -178,13 +191,14 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 
 The **only** online activities are a few one click market data refreshes, and none involve your data:
 
-| Activity          | What it does                                   | Your data?                                 |
-| ----------------- | ---------------------------------------------- | ------------------------------------------ |
-| 💱 Exchange rates | Downloads public FX rates from Frankfurter     | ❌ Only currency codes (e.g. EUR, USD)     |
-| 🥇 Metal prices   | Downloads public spot prices from gold-api.com | ❌ Only metal symbols (XAU, XAG, XPT, XPD) |
-| 🎨 UI styling     | Bootstrap / fonts / charts loaded from CDNs    | ❌ Never sent                              |
+| Activity           | What it does                                   | Your data?                                 |
+| ------------------ | ---------------------------------------------- | ------------------------------------------ |
+| 💱 Exchange rates  | Downloads public FX rates from Frankfurter     | ❌ Only currency codes (e.g. EUR, USD)     |
+| 🥇 Metal prices    | Downloads public spot prices from gold-api.com | ❌ Only metal symbols (XAU, XAG, XPT, XPD) |
+| 📈 Market overview | Downloads public quotes from the Randata API   | ❌ Only asset symbols (^GSPC, NVDA, …)     |
+| 🎨 UI styling      | Bootstrap / Chart.js / Luxon loaded from CDNs  | ❌ Never sent                              |
 
-> 🔒 **Not critical data:** The requests that fetch **gold prices** and **FX rates** only transmit public, non sensitive identifiers: **currency codes** (e.g. `EUR`, `USD`) and **metal symbols** (e.g. `XAU`, `XAG`). No account balances, transaction amounts or personal data are ever sent.
+> 🔒 **Not critical data:** The requests that fetch **gold prices**, **FX rates** and **market quotes** only transmit public, non sensitive identifiers: **currency codes** (e.g. `EUR`, `USD`), **metal symbols** (e.g. `XAU`, `XAG`) and **asset symbols** (e.g. `^GSPC`, `NVDA`). No account balances, transaction amounts or personal data are ever sent.
 
 Delete your data folder (or clear browser storage) and nobody can ever recover it. **What's yours stays yours.** 🔐
 
@@ -206,15 +220,16 @@ Open the link, choose a data folder or file, and you're in. Bookmark it.
 
 ## 🧰 Tech Stack
 
-| Layer            | Technology                                            |
-| ---------------- | ----------------------------------------------------- |
-| 🏠 Hosting       | GitHub Pages (static, free, HTTPS)                    |
-| 🎨 Frontend      | HTML5 · CSS3 · Vanilla JavaScript                     |
-| 📦 UI Library    | Bootstrap 5 · Chart.js                                |
-| 📂 Storage       | File System Access API + IndexedDB / plain JSON files |
-| 💱 FX Data       | Frankfurter API (optional, userinitiated)            |
-| 🥇 Metal Data    | gold-api.com (optional, user initiated)                   |
-| 🧪 Local preview | `server.js` (static only) or any static file server   |
+| Layer            | Technology                                                                  |
+| ---------------- | --------------------------------------------------------------------------- |
+| 🏠 Hosting       | GitHub Pages (static, free, HTTPS)                                          |
+| 🎨 Frontend      | HTML5 · CSS3 · Vanilla JavaScript                                           |
+| 📦 UI Library    | Bootstrap 5 · Chart.js · Luxon (+ chartjs-chart-financial for candlesticks) |
+| 📂 Storage       | File System Access API + IndexedDB / plain JSON files                       |
+| 💱 FX Data       | Frankfurter API (optional, userinitiated)                                   |
+| 🥇 Metal Data    | gold-api.com (optional, user initiated)                                     |
+| 📈 Market Data   | Randata API (optional, one click sync into `Resources/`)                    |
+| 🧪 Local preview | `server.js` (static only) or any static file server                         |
 
 ---
 
@@ -236,7 +251,10 @@ LibertyFinance/
 │   ├── pages-accounts.js   # account detail
 │   ├── pages-money.js      # custodians, incomes, expenses, debts
 │   ├── pages-goals.js      # goals
-│   └── pages-market.js     # exchange rates + metal prices
+│   ├── pages-market.js     # exchange rates + metal prices
+│   ├── pages-wallstreet.js # market overview (Wall Street)
+│   └── randata.js          # Randata API client + Resources/ cache
+├── flags/                  # region flag SVGs (used across pages)
 ├── logo.png
 ├── version.txt             # web UI version tag
 ├── server.js               # static dev server (local preview only)

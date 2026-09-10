@@ -1373,6 +1373,14 @@ body {
   width: 100% !important;
   height: 100% !important;
 }
+.acc-index-chart-wrap {
+  position: relative;
+  height: 320px;
+}
+.acc-index-chart-wrap canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
 
 /* ===== PAGE TITLES ===== */
 .page-title {
@@ -1637,4 +1645,431 @@ body {
 .expense-chart-wrap {
   position: relative;
   height: 300px;
+}
+
+/* ===== WALL STREET ===== */
+.ws-header-note {
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+}
+.ws-overview-wrap {
+  position: relative;
+  height: 320px;
+}
+.ws-overview-short {
+  height: 280px;
+}
+/* Chart + clickable right-side legend layout. Legend width is fixed and equal
+   for all sections; sized to fit the longest ETF names. */
+.ws-norm-body {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+.ws-norm-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+.ws-norm-legend {
+  width: 190px;
+  flex: 0 0 auto;
+  height: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--border-color);
+  padding-left: 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+.ws-norm-legend::-webkit-scrollbar {
+  width: 5px;
+}
+.ws-norm-legend::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ws-norm-legend::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+.ws-norm-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-primary);
+  line-height: 1.3;
+  user-select: none;
+}
+.ws-norm-legend-item:hover {
+  color: var(--accent);
+}
+.ws-norm-legend-item.off {
+  opacity: 0.35;
+}
+.ws-norm-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+.ws-outlook-row {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+.ws-pref-label {
+  font-family: var(--font-title);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+}
+.ws-pref-select {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font-family: var(--font-title);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ws-pref-select:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+.ws-pref-select option {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+.ws-outlook-value {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 24px;
+}
+.ws-outlook-note {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+.ws-loading {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 10, 0.55);
+  z-index: 1050;
+}
+.ws-loading.show {
+  display: flex;
+}
+.ws-loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(51, 255, 51, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ws-spin 0.8s linear infinite;
+}
+@keyframes ws-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ws-tick {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+}
+/* 5 cards per row on desktop; cards only shrink in width, height stays equal. */
+@media (min-width: 992px) {
+  .ws-tick-col {
+    flex: 0 0 auto;
+    width: 20%;
+  }
+}
+.ws-tick:hover {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.ws-tick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ws-tick-name {
+  font-family: var(--font-title);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-tick-code {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.ws-tick-code.ws-tick-flag {
+  font-size: 0;
+  line-height: 1;
+  letter-spacing: 0;
+}
+.ws-flag {
+  width: 22px;
+  height: 15px;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 2px;
+  vertical-align: baseline;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+.ws-tick-value {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 20px;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+  line-height: 1.15;
+}
+.ws-tick-ccy {
+  font-size: 0.6em;
+  color: var(--text-primary);
+}
+.ws-tick-unit {
+  font-size: 0.55em;
+  color: var(--text-primary);
+}
+.ws-tick-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ws-tick-change {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+.ws-tick-change.pos {
+  color: #33ff33;
+}
+.ws-tick-change.neg {
+  color: #ff3333;
+}
+.ws-tick-sub {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-spark {
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin-top: auto;
+}
+
+/* ===== STOCK PANEL ===== */
+.ws-stock-search {
+  width: 100%;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font-family: var(--font-title);
+  font-size: 12px;
+  letter-spacing: 1px;
+  padding: 8px 10px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.ws-stock-search:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+.ws-stock-search::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.ws-stock-sort {
+  width: 100%;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  font-family: var(--font-title);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  padding: 6px 8px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.ws-stock-sort:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+.ws-stock-sort option {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+.ws-stock-list {
+  height: 480px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 6px;
+}
+.ws-stock-list::-webkit-scrollbar { width: 5px; }
+.ws-stock-list::-webkit-scrollbar-track { background: transparent; }
+.ws-stock-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+.ws-stock-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.ws-stock-item:hover {
+  border-color: var(--border-accent);
+}
+.ws-stock-item.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.ws-stock-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ws-stock-item-names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ws-stock-item-name {
+  font-family: var(--font-title);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-stock-item-symbol {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+.ws-stock-item-region {
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 20px;
+}
+.ws-stock-item-right {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ws-stock-item-price {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 14px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.ws-stock-item-change {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.ws-stock-item-change.pos { color: #33ff33; }
+.ws-stock-item-change.neg { color: #ff3333; }
+.ws-stock-chart-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.ws-stock-chart-name {
+  font-family: var(--font-title);
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: var(--text-primary);
+}
+.ws-stock-chart-symbol {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+.ws-stock-chart-price {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 18px;
+  color: var(--text-primary);
+  margin-left: auto;
+}
+.ws-stock-chart-change {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px;
+}
+.ws-stock-chart-change.pos { color: #33ff33; }
+.ws-stock-chart-change.neg { color: #ff3333; }
+
+/* Taller stock panel so the candlestick + volume chart has room to breathe. */
+.ws-overview-stock {
+  height: 360px;
+}
+
+/* Vertical breathing room between the charts and the tick/stat cards. */
+.ws-card-grid {
+  margin-top: 20px;
+}
+
+/* Crypto log/linear toggle button keeps a stable width. */
+.ws-log-btn {
+  min-width: 44px;
+  text-align: center;
 }

@@ -26,6 +26,10 @@ const Storage = (() => {
   const PENDING_OPEN_KEY = 'classic-pending-open';
   const MAX_BACKUPS = 30;
 
+  // Shared data files written by features (rates, market cache, randata cache).
+  // They are not user profiles and must never appear in the profile picker.
+  const SharedFiles = new Set(['market.json', 'randata.json', 'shell.settings.json']);
+
   let adapter = null;
 
   // ==================== IndexedDB helpers ====================
@@ -174,12 +178,18 @@ const Storage = (() => {
         if (handle.kind !== 'file') continue;
         const lower = name.toLowerCase();
         if (!lower.endsWith('.json')) continue;
-        if (lower === 'market.json' || lower === 'shell.settings.json') continue;
+        if (SharedFiles.has(lower)) continue;
         const fh = await handle.getFile();
         files.push({ name, size: fh.size, modified: fh.lastModified });
       }
       files.sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
       return files;
+    },
+
+    async _subHandle(folder, name, create) {
+      const dir = await this.connect();
+      const sub = await dir.getDirectoryHandle(folder, create ? { create: true } : undefined);
+      return sub.getFileHandle(name, create ? { create: true } : undefined);
     },
 
     async read(name) {
@@ -199,6 +209,34 @@ const Storage = (() => {
     async remove(name) {
       const dir = await this.connect();
       await dir.removeEntry(name);
+    },
+
+    async readIn(folder, name) {
+      try {
+        const fh = await this._subHandle(folder, name, false);
+        if (!fh) return null;
+        const file = await fh.getFile();
+        return await file.text();
+      } catch (e) {
+        if (e && e.name === 'NotFoundError') return null;
+        throw e;
+      }
+    },
+
+    async writeIn(folder, name, json) {
+      const fh = await this._subHandle(folder, name, true);
+      const w = await fh.createWritable();
+      await w.write(json);
+      await w.close();
+    },
+
+    async removeIn(folder, name) {
+      const dir = await this.connect();
+      let sub = dir;
+      try {
+        sub = await dir.getDirectoryHandle(folder);
+        await sub.removeEntry(name);
+      } catch (e) { /* already gone */ }
     },
 
     async backup(name, json) {
@@ -240,6 +278,8 @@ const Storage = (() => {
       const names = (await idbGet(CLASSIC_FILES_KEY)) || [];
       const files = [];
       for (const name of names) {
+        if (SharedFiles.has(name.toLowerCase())) continue;
+        if (name.indexOf('/') !== -1) continue; // never show files inside folders
         const meta = await idbGet(CLASSIC_FILE_PREFIX + 'meta:' + name);
         files.push({ name, size: meta ? meta.size : 0, modified: meta ? meta.modified : 0 });
       }
@@ -266,6 +306,20 @@ const Storage = (() => {
       await idbDel(CLASSIC_FILE_PREFIX + 'meta:' + name);
       const names = ((await idbGet(CLASSIC_FILES_KEY)) || []).filter(n => n !== name);
       await idbSet(CLASSIC_FILES_KEY, names);
+    },
+
+    async readIn(folder, name) {
+      return (await idbGet(CLASSIC_FILE_PREFIX + folder + '/' + name)) || null;
+    },
+
+    async writeIn(folder, name, json) {
+      // Files inside folders live outside the profile picker, so they are stored
+      // with a path-mirroring key and never registered in the profile list.
+      await idbSet(CLASSIC_FILE_PREFIX + folder + '/' + name, json);
+    },
+
+    async removeIn(folder, name) {
+      await idbDel(CLASSIC_FILE_PREFIX + folder + '/' + name);
     },
 
     async backup(name, json) {

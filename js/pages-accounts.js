@@ -242,8 +242,192 @@ Object.assign(Pages, {
         this.classList.add('active');
         _renderAccPerf(accPerfMap[this.dataset.perf]);
         _renderAccPerfChart(this.dataset.perf);
+        _renderAccIndexChart(this.dataset.perf);
       };
     });
+
+    // ===== VS INDEXES comparison chart =====
+    const _IDX_SYMBOLS = ['^GSPC', '^SSMI', '^IXIC', '^DJI', '^GDAXI', '^STOXX50E'];
+    const _IDX_COLORS = {
+      '^GSPC': '#33ff33', '^SSMI': '#ff4d4d', '^IXIC': '#33ccff',
+      '^DJI': '#ffcc00', '^GDAXI': '#ff9900', '^STOXX50E': '#ff66cc'
+    };
+    const _IDX_NAMES = {
+      '^GSPC': 'S&P 500', '^SSMI': 'SMI', '^IXIC': 'NASDAQ',
+      '^DJI': 'Dow Jones', '^GDAXI': 'DAX', '^STOXX50E': 'Euro Stoxx 50'
+    };
+
+    let _randataData = null;
+    (async function() {
+      const section = document.getElementById('acc-index-compare-section');
+      try {
+        const file = await Randata.readClass('index');
+        if (!file || !file.data) return;
+        const hasAny = _IDX_SYMBOLS.some(s => Array.isArray(file.data[s]) && file.data[s].length > 0);
+        if (!hasAny) return;
+        _randataData = file.data;
+        section.style.display = '';
+        _renderAccIndexChart(initialAccPerf);
+      } catch (e) { /* no randata data available */ }
+    })();
+
+    function _renderAccIndexChart(range) {
+      if (!_randataData) return;
+      const section = document.getElementById('acc-index-compare-section');
+      const wrap = document.getElementById('acc-index-chart-wrap');
+      const canvas = document.getElementById('acc-index-chart');
+      const empty = document.getElementById('acc-index-chart-empty');
+      if (!section || !wrap || !canvas || !empty) return;
+
+      const key = 'accIndexChart';
+      if (App._charts[key]) { try { App._charts[key].destroy(); } catch (e) {} delete App._charts[key]; }
+
+      const cutoff = accPerfCutoffs[range] || ytdCutoff;
+
+      // Investment monthly series (same logic as perf chart)
+      let invPoints = [];
+      if (isTa) {
+        let month = cutoff.substring(0, 7);
+        const curMonth = today.substring(0, 7);
+        let guard = 0;
+        while (month <= curMonth && guard < 720) {
+          guard++;
+          const [y, mo] = month.split('-').map(Number);
+          const lastDay = String(new Date(y, mo, 0).getDate()).padStart(2, '0');
+          const v = assetAccountMetrics(accountAssets, month + '-' + lastDay, rateToAcc).value;
+          invPoints.push({ month, value: v });
+          const next = new Date(y, mo, 1);
+          next.setMonth(next.getMonth() + 1);
+          month = next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0');
+        }
+      } else {
+        const byMonth = {};
+        accTxsSorted.forEach(tx => {
+          if (tx.date < cutoff) return;
+          const mk = (tx.date || '').substring(0, 7);
+          if (!mk) return;
+          byMonth[mk] = tx.balanceAfter != null ? tx.balanceAfter : (byMonth[mk] || 0);
+        });
+        const curMonth = today.substring(0, 7);
+        if (currentVal > 0) byMonth[curMonth] = currentVal;
+        invPoints = Object.entries(byMonth).map(([month, value]) => ({ month, value }));
+      }
+      invPoints.sort((a, b) => a.month.localeCompare(b.month));
+      if (invPoints.length < 2) {
+        section.style.display = 'none';
+        return;
+      }
+      const invBase = invPoints[0].value;
+      if (!invBase) { section.style.display = 'none'; return; }
+      const invNorm = invPoints.map(p => ({ month: p.month, value: (p.value / invBase) * 100 }));
+
+      // Index monthly series — last close per month, normalized to 100
+      const idxSeries = {};
+      _IDX_SYMBOLS.forEach(sym => {
+        const bars = _randataData[sym] || [];
+        const filtered = bars.filter(b => b.date >= cutoff && b.close != null);
+        if (filtered.length < 2) return;
+        const byMonth = {};
+        filtered.forEach(b => {
+          const mk = b.date.substring(0, 7);
+          byMonth[mk] = b.close;
+        });
+        const months = Object.keys(byMonth).sort();
+        if (months.length < 2) return;
+        const base = byMonth[months[0]];
+        if (!base) return;
+        idxSeries[sym] = months.map(m => ({ month: m, value: (byMonth[m] / base) * 100 }));
+      });
+
+      const availableIdx = _IDX_SYMBOLS.filter(s => idxSeries[s]);
+      if (availableIdx.length === 0) {
+        section.style.display = 'none';
+        return;
+      }
+
+      // Collect all months and align series
+      const allMonths = new Set(invNorm.map(p => p.month));
+      availableIdx.forEach(sym => idxSeries[sym].forEach(p => allMonths.add(p.month)));
+      const months = [...allMonths].sort();
+
+      function valueAt(series, month) {
+        if (!series) return null;
+        let last = null;
+        for (let i = 0; i < series.length; i++) {
+          if (series[i].month <= month) last = series[i].value;
+          else break;
+        }
+        return last;
+      }
+
+      const invData = months.map(m => valueAt(invNorm, m));
+      const idxDatasets = availableIdx.map(sym => ({
+        label: _IDX_NAMES[sym] || sym,
+        data: months.map(m => valueAt(idxSeries[sym], m)),
+        borderColor: _IDX_COLORS[sym],
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        fill: false
+      }));
+
+      wrap.style.display = '';
+      empty.style.display = 'none';
+
+      const monthLabel = (mk) => {
+        const [y, mo] = mk.split('-').map(Number);
+        return new Date(y, mo - 1, 1).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+      };
+
+      App._charts[key] = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: months.map(monthLabel),
+          datasets: [
+            {
+              label: account.name || 'ACCOUNT',
+              data: invData,
+              borderColor: '#33ff33',
+              backgroundColor: 'rgba(51,255,51,0.05)',
+              borderWidth: 2.5,
+              pointRadius: 2,
+              pointBackgroundColor: '#33ff33',
+              tension: 0.2,
+              fill: false
+            },
+            ...idxDatasets
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'nearest', intersect: false },
+          plugins: {
+            legend: { display: true, position: 'bottom', labels: { color: '#aaaaaa', boxWidth: 12, padding: 12 } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const pct = (ctx.parsed.y - 100).toFixed(2);
+                  return ctx.dataset.label + ': ' + (pct >= 0 ? '+' : '') + pct + '%';
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#999999', font: { family: "'Share Tech Mono', monospace", size: 10 }, maxTicksLimit: 8 }, grid: { color: '#222222' } },
+            y: {
+              ticks: {
+                color: '#999999',
+                font: { family: "'Share Tech Mono', monospace", size: 10 },
+                callback: (v) => v.toFixed(0) + '%'
+              },
+              grid: { color: '#222222' }
+            }
+          }
+        }
+      });
+    }
 
     // Transaction history
     const tbody = document.getElementById('acc-tx-body');
