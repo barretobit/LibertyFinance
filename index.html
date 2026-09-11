@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Liberty Finance</title>
     <link rel="icon" type="image/png" href="logo.png" />
-    <link rel="stylesheet" href="css/style.css?v=11" />
+    <link rel="stylesheet" href="css/style.css?v=44" />
   </head>
   <body>
     <div id="page-landing">
@@ -24,6 +24,10 @@
         <div class="file-create">
           <input type="text" id="new-file-name" class="file-input" placeholder="NEW PROFILE NAME" maxlength="40" />
           <button class="btn-enter sm" onclick="createFile()">+ CREATE</button>
+        </div>
+
+        <div class="landing-market">
+          <button class="btn-enter sm" onclick="window.location.href='market.html'">MARKET VIEW</button>
         </div>
 
         <div class="landing-tutorial">
@@ -128,7 +132,7 @@
       </div>
     </div>
 
-    <script src="js/storage.js?v=1"></script>
+    <script src="js/storage.js?v=3"></script>
     <script>
       const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
       const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { borderRadius: 10 } };

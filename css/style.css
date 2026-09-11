@@ -298,7 +298,18 @@ body {
   gap: 12px;
   width: 460px;
   max-width: 92vw;
-  margin: 44px auto 0;
+  margin: 14px auto 0;
+}
+
+/* Standalone MARKET VIEW button row (guest access, no profile required).
+   Styled and spaced like the OPEN PROFILE FILE action, sitting on its own
+   line just above the HOW IT WORKS / VERSIONS row. */
+.landing-market {
+  display: flex;
+  justify-content: center;
+  width: 460px;
+  max-width: 92vw;
+  margin: 24px auto 0;
 }
 .landing-tutorial .btn-enter.ghost {
   border: 1px solid var(--border-color);

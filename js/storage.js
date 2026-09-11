@@ -347,6 +347,16 @@ const Storage = (() => {
     return adapter;
   }
 
+  // Pin a storage mode for this page session without persisting the preference
+  // to localStorage. Used by the standalone market view so guests cache market
+  // data in this browser's IndexedDB and no folder picker is ever shown, while
+  // the main app keeps its chosen mode on the same machine.
+  async function setSessionMode(mode) {
+    if (mode !== 'dir' && mode !== 'classic') throw new Error('Unknown storage mode: ' + mode);
+    adapter = mode === 'dir' ? DirectoryAdapter : ClassicAdapter;
+    return adapter;
+  }
+
   // Pass an opened file through navigation (classic mode: index -> app)
   function setPendingOpen(entry) {
     try { sessionStorage.setItem(PENDING_OPEN_KEY, JSON.stringify(entry)); } catch (e) { /* ignored */ }
@@ -370,6 +380,7 @@ const Storage = (() => {
   return {
     get,
     setMode,
+    setSessionMode,
     supportsDirectory: () => !!window.showDirectoryPicker,
     currentKind: () => (adapter ? adapter.kind : null),
     pickNewFolder,
