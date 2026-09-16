@@ -317,9 +317,37 @@ Object.assign(Pages, {
         section.style.display = 'none';
         return;
       }
-      const invBase = invPoints[0].value;
-      if (!invBase) { section.style.display = 'none'; return; }
-      const invNorm = invPoints.map(p => ({ month: p.month, value: (p.value / invBase) * 100 }));
+      // Build a growth-only series so the account line ignores deposits: for
+      // each month, net flows (money in) are removed before linking growth.
+      let invNorm;
+      if (isTa) {
+        const invBase = invPoints[0].value;
+        if (!invBase) { section.style.display = 'none'; return; }
+        invNorm = invPoints.map(p => ({ month: p.month, value: (p.value / invBase) * 100 }));
+      } else {
+        if (!invPoints[0].value) { section.style.display = 'none'; return; }
+        const flowsByMonth = {};
+        accTxsSorted.forEach(tx => {
+          if (tx.date < cutoff) return;
+          const mk = (tx.date || '').substring(0, 7);
+          if (!mk) return;
+          let f = 0;
+          if (tx.type === 'deposit' && !_isOpeningContribution(tx)) f = Math.abs(tx.amount);
+          if (tx.type === 'withdrawal') f = -Math.abs(tx.amount);
+          if (tx.type === 'buy') f = Math.abs(tx.amount);
+          if (tx.type === 'sell') f = -Math.abs(tx.amount);
+          if (_isOpeningTx(tx)) f = tx.amount;
+          flowsByMonth[mk] = (flowsByMonth[mk] || 0) + (f || 0);
+        });
+        invNorm = [{ month: invPoints[0].month, value: 100 }];
+        for (let i = 1; i < invPoints.length; i++) {
+          const prevV = invPoints[i - 1].value || 0;
+          const v = invPoints[i].value || 0;
+          const f = flowsByMonth[invPoints[i].month] || 0;
+          const growth = prevV !== 0 ? (v - f) / prevV : 1;
+          invNorm.push({ month: invPoints[i].month, value: invNorm[i - 1].value * growth });
+        }
+      }
 
       // Index monthly series — last close per month, normalized to 100
       const idxSeries = {};
