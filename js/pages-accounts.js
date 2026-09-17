@@ -212,12 +212,12 @@ Object.assign(Pages, {
           datasets: [{
             label: account.name || 'ACCOUNT',
             data: points.map(p => p.value),
-            borderColor: readAccent(),
-            backgroundColor: shadeAccent(readAccent(), 1, 0.08),
+            borderColor: '#33ff33',
+            backgroundColor: 'rgba(51,255,51,0.08)',
             fill: true,
             tension: 0.25,
             pointRadius: 2,
-            pointBackgroundColor: readAccent()
+            pointBackgroundColor: '#33ff33'
           }]
         },
         options: {
@@ -249,7 +249,7 @@ Object.assign(Pages, {
     // ===== VS INDEXES comparison chart =====
     const _IDX_SYMBOLS = ['^GSPC', '^SSMI', '^IXIC', '^DJI', '^GDAXI', '^STOXX50E'];
     const _IDX_COLORS = {
-      '^GSPC': readAccent(), '^SSMI': '#ff4d4d', '^IXIC': '#33ccff',
+      '^GSPC': '#33ff33', '^SSMI': '#ff4d4d', '^IXIC': '#33ccff',
       '^DJI': '#ffcc00', '^GDAXI': '#ff9900', '^STOXX50E': '#ff66cc'
     };
     const _IDX_NAMES = {
@@ -416,11 +416,11 @@ Object.assign(Pages, {
             {
               label: account.name || 'ACCOUNT',
               data: invData,
-              borderColor: readAccent(),
-              backgroundColor: shadeAccent(readAccent(), 1, 0.05),
+              borderColor: '#33ff33',
+              backgroundColor: 'rgba(51,255,51,0.05)',
               borderWidth: 2.5,
               pointRadius: 2,
-              pointBackgroundColor: readAccent(),
+              pointBackgroundColor: '#33ff33',
               tension: 0.2,
               fill: false
             },

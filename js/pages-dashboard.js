@@ -559,12 +559,12 @@ Object.assign(Pages, {
             {
               label: 'HISTORY',
               data: histVals,
-              borderColor: readAccent(),
-              backgroundColor: shadeAccent(readAccent(), 1, 0.05),
+              borderColor: '#33ff33',
+              backgroundColor: '#33ff330d',
               fill: true,
               tension: 0.3,
               pointRadius: 3,
-              pointBackgroundColor: readAccent(),
+              pointBackgroundColor: '#33ff33',
               borderWidth: 2
             },
             {
@@ -1000,7 +1000,7 @@ Object.assign(Pages, {
       const values = [];
       const colors = [];
       const rows = [];
-      const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
+      const palette = ['#33ff33', '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
       let ci = 0;
       Object.values(pfValues).forEach(p => {
         if (p.value > 0) {
@@ -1280,7 +1280,7 @@ Object.assign(Pages, {
     if (perfCanvas) {
       const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
       const range = activeRange ? activeRange.dataset.range : '1y';
-      _renderRangeChart(perfCanvas, 'performance', perfAccountIds, perfTxs, range, readAccent());
+      _renderRangeChart(perfCanvas, 'performance', perfAccountIds, perfTxs, range, '#33ff33');
     }
 
     // Investment Performance chart (line) — same range selector, investments only, in %
@@ -1421,8 +1421,8 @@ Object.assign(Pages, {
               {
                 label: 'NET INCOME',
                 data: netIncomeValues,
-                borderColor: readAccent(),
-                backgroundColor: shadeAccent(readAccent(), 1, 0.08),
+                borderColor: '#33ff33',
+                backgroundColor: 'rgba(51,255,51,0.08)',
                 fill: true,
                 tension: 0.3,
                 pointRadius: 3,
