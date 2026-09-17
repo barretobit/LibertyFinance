@@ -32,6 +32,7 @@ const App = {
     }
 
     this._applyRadius();
+    this._applyAccent();
 
     (async () => {
       await Pages.fetchMetalPrices(true).catch(() => {});
@@ -198,6 +199,9 @@ const App = {
     const current = settings.mainCurrency || "CHF";
     const select = document.getElementById("settings-currency");
     select.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}" ${c.code === current ? "selected" : ""}>${c.code} - ${c.name}</option>`).join("");
+    const colorEl = document.getElementById("settings-accent");
+    colorEl.value = /^#[0-9a-fA-F]{6}$/.test(settings.accentColor || "") ? settings.accentColor : DEFAULT_ACCENT;
+    colorEl.oninput = () => this.applyAccent(colorEl.value);
     const slider = document.getElementById("settings-radius");
     const label = document.getElementById("settings-radius-label");
     const radius = settings.borderRadius != null ? settings.borderRadius : 10;
@@ -210,6 +214,20 @@ const App = {
     };
     slider.oninput = preview;
     this._modals.settings.show();
+  },
+
+  applyAccent(hex) {
+    const c = /^#[0-9a-fA-F]{6}$/.test(hex || "") ? hex : DEFAULT_ACCENT;
+    const root = document.documentElement;
+    root.style.setProperty("--accent", c);
+    root.style.setProperty("--border-accent", c);
+    root.style.setProperty("--accent-dim", shadeAccent(c, 0.5));
+    root.style.setProperty("--accent-glow", shadeAccent(c, 1, 0.15));
+  },
+
+  async _applyAccent() {
+    const settings = await DB.getSettings();
+    this.applyAccent(settings.accentColor || DEFAULT_ACCENT);
   },
 
   async _applyRadius() {
@@ -225,8 +243,9 @@ const App = {
       return;
     }
     const borderRadius = parseInt(document.getElementById("settings-radius").value) || 0;
+    const accentColor = document.getElementById("settings-accent").value || DEFAULT_ACCENT;
     const existing = await DB.getSettings();
-    await DB.saveSettings({ ...existing, mainCurrency: currency, borderRadius });
+    await DB.saveSettings({ ...existing, mainCurrency: currency, borderRadius, accentColor });
     this._modals.settings.hide();
     this.toast("SETTINGS SAVED");
   },

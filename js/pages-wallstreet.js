@@ -17,8 +17,8 @@ const _WS_RANGES = {
   "3y": { bars: 756, days: 1560 },
   "5y": { bars: 1260, days: 2600 },
 };
-const _WS_INDEX_COLORS = {
-  "^GSPC": "#33ff33",
+const _WS_INDEX_COLORS = () => ({
+  "^GSPC": readAccent(),
   "^SSMI": "#ff4d4d",
   "^IXIC": "#33ccff",
   "^DJI": "#ffcc00",
@@ -29,7 +29,7 @@ const _WS_INDEX_COLORS = {
   "^N225": "#66ffcc",
   "^HSI": "#ff8866",
   "^BVSP": "#aaccff",
-};
+});
 const _WS_METAL_COLORS = {
   "GC=F": "#ff9900",
   "SI=F": "#cc66ff",
@@ -37,8 +37,8 @@ const _WS_METAL_COLORS = {
   "PL=F": "#ffcc00",
   "PA=F": "#ff4d4d",
 };
-const _WS_ETF_COLORS = [
-  "#33ff33", "#33ccff", "#ffcc00", "#ff9900", "#ff66cc",
+const _WS_ETF_COLORS = () => [
+  readAccent(), "#33ccff", "#ffcc00", "#ff9900", "#ff66cc",
   "#9966ff", "#00cc88", "#66ffcc", "#ff8866", "#aaccff",
 ];
 // ETFs that track global/international markets get a GLO/INT tag instead of the
@@ -48,7 +48,7 @@ const _WS_ETF_REGION = {
   VT: "GLO", VEA: "INT", VXUS: "INT", VWO: "INT", BND: "US",
 };
 const _WS_STOCK_COLORS = [
-  "#33ff33", "#33ccff", "#ffcc00", "#ff9900", "#ff66cc",
+  readAccent(), "#33ccff", "#ffcc00", "#ff9900", "#ff66cc",
   "#9966ff", "#00cc88", "#66ffcc", "#ff8866", "#aaccff",
 ];
 const _WS_CRYPTO_COLORS = [
@@ -655,13 +655,13 @@ Object.assign(Pages, {
   },
 
   _wsRenderOverview(order, data, metaBySym, startDate, usdPer) {
-    this._wsNormChart("wsOverview", "ws-overview-wrap", "ws-overview-chart", "ws-overview-empty", order, data, metaBySym, startDate, (sym) => _WS_INDEX_COLORS[sym], usdPer);
+    this._wsNormChart("wsOverview", "ws-overview-wrap", "ws-overview-chart", "ws-overview-empty", order, data, metaBySym, startDate, (sym) => _WS_INDEX_COLORS()[sym], usdPer);
   },
 
   _wsRenderEtfChart(order, data, metaBySym, startDate, usdPer) {
     this._wsNormChart("wsEtf", "ws-etf-chart-wrap", "ws-etf-chart", "ws-etf-chart-empty", order, data, metaBySym, startDate, (sym) => {
       const idx = order.indexOf(sym);
-      return _WS_ETF_COLORS[idx % _WS_ETF_COLORS.length];
+      return _WS_ETF_COLORS()[idx % _WS_ETF_COLORS().length];
     }, usdPer);
   },
 
