@@ -7,7 +7,11 @@
 
 const DB = (() => {
   const DATA_FILE = new URLSearchParams(window.location.search).get('file');
-  const EMPTY = () => ({ custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { borderRadius: 10 } });
+  const DEFAULT_SETTINGS = { mainCurrency: 'CHF', borderRadius: 10, accentColor: '#33ff33' };
+  const EMPTY = () => ({ custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { ...DEFAULT_SETTINGS } });
+  function normalizeSettings(settings) {
+    return { ...DEFAULT_SETTINGS, ...(settings || {}) };
+  }
   let data = EMPTY();
   let market = { exchangeRates: [], metalPrices: [] };
   let adapter = null;
@@ -73,7 +77,7 @@ const DB = (() => {
     data.expenses = data.expenses || [];
     data.debts = data.debts || [];
     data.goals = data.goals || [];
-    data.settings = data.settings || {};
+    data.settings = normalizeSettings(data.settings);
 
     await loadMarket();
 
@@ -166,12 +170,12 @@ const DB = (() => {
 
   async function getSettings() {
     if (!loaded) await load();
-    return data.settings || {};
+    return normalizeSettings(data.settings);
   }
 
   async function saveSettings(settings) {
     if (!loaded) await load();
-    data.settings = settings || {};
+    data.settings = normalizeSettings(settings);
     await persist();
   }
 

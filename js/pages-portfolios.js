@@ -52,7 +52,7 @@ Object.assign(Pages, {
       accEff[a.id] = { value, cost, date };
     });
 
-    const palette = ['#33ff33', '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
+    const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
 
     // Effective values per portfolio and per account, all in main currency
     const pfData = portfolios.map((p, pi) => {

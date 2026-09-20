@@ -11,7 +11,7 @@
 
 Liberty Finance is a **personal wealth management application** that runs **entirely in your browser**. No install, no `.exe`, no server: a pure static web app that reads and writes your data as **plain JSON files in a folder you choose**. Works on **Windows, macOS and Linux**, in Chrome, Edge, Firefox and Safari.
 
-Current version: **v1.20** · Themed "Liberty City Network" 🌆
+Current version: **v1.21** · Themed "Liberty City Network" 🌆
 
 ---
 
@@ -135,7 +135,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - `js/utils.js`: currency formatting, **date based FX conversion**, asset depreciation math
 - `js/app.js`: router, modals and CRUD orchestration
 - `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals), `pages-wallstreet` (market overview)
-- `js/randata.js`: the **market data client**: fetches the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
+- `js/randata.js`: the **market data client**: fetches the public Randata API at `https://randombit.tail541a06.ts.net` (indexes, ETFs, stocks, metals, cryptos, FX) and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
 - `server.js`: **local preview only** (static files; GitHub Pages serves the same files in production)
 
 **Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices, and a `Resources/` folder holding the market data cache — one file per asset class). Zero SQL, zero cloud. 📄

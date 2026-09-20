@@ -14,7 +14,7 @@
 
 const Randata = (() => {
   const RESOURCES_DIR = 'Resources';
-  const API_BASE = 'https://randata.onrender.com';
+  const API_BASE = 'https://randombit.tail541a06.ts.net';
 
   // Per asset class: file name inside Resources/ + the /finance/<path> endpoint
   // + the key of that class inside the /finance/assets catalog payload.

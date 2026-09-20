@@ -1,3 +1,32 @@
+/* ===== Accent color helpers =====
+ *
+ * The app's theme color is user-selectable and stored in the --accent CSS
+ * variable. These helpers read the live value so charts and inline styles
+ * follow the chosen accent instead of hardcoded green.
+ */
+
+const DEFAULT_ACCENT = '#33ff33';
+
+function readAccent() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : DEFAULT_ACCENT;
+}
+
+function hexToRgb(hex) {
+  const h = (hex || '').replace('#', '').trim();
+  const n = parseInt(h.match(/^[0-9a-fA-F]{6}$/) ? h : '33ff33', 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+// Derived accent variants: darken by `factor` for --accent-dim, or keep the
+// color and add an alpha channel for --accent-glow / chart fills.
+function shadeAccent(hex, factor, alpha) {
+  const { r, g, b } = hexToRgb(hex);
+  if (alpha != null) return 'rgba(' + Math.round(r * factor) + ',' + Math.round(g * factor) + ',' + Math.round(b * factor) + ',' + alpha + ')';
+  const hx = (c) => Math.round(c * factor).toString(16).padStart(2, '0');
+  return '#' + hx(r) + hx(g) + hx(b);
+}
+
 /* ===== Utility Functions ===== */
 
 const CURRENCIES = [

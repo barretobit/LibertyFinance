@@ -194,7 +194,7 @@ Object.assign(Pages, {
     const chartCanvas = document.getElementById('chart-expense-weight');
     if (chartCanvas && chartItems.length > 0) {
       if (chartWrap) chartWrap.style.height = Math.max(220, chartItems.length * 34) + 'px';
-      const palette = ['#33ff33', '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
+      const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
       App._charts[chartKey] = new Chart(chartCanvas.getContext('2d'), {
         type: 'bar',
         data: {
