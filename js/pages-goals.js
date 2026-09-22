@@ -10,15 +10,16 @@ Object.assign(Pages, {
       let current = 0;
       let totalAvail = 0;
       const claims = (goal.allocations || []).map(a => {
-        const avail = (remaining[a.accountId] || 0) * ((a.pct || 0) / 100);
+        const accCurrent = remaining[a.accountId] || 0;
+        const avail = accCurrent * ((a.pct || 0) / 100);
         totalAvail += avail;
         const need = (goal.target || 0) - current;
         const take = Math.max(0, Math.min(avail, need));
         if (take > 0) {
           current += take;
-          remaining[a.accountId] = (remaining[a.accountId] || 0) - take;
+          remaining[a.accountId] = accCurrent - take;
         }
-        return { accountId: a.accountId, pct: a.pct || 0, avail, take };
+        return { accountId: a.accountId, pct: a.pct || 0, accCurrent, avail, take };
       });
       return { goal, current, totalAvail, claims };
     });
@@ -35,6 +36,11 @@ Object.assign(Pages, {
     const statusText = diff < 0 ? 'SHORT BY ' + formatCurrency(-diff, cur)
       : diff > 0 ? 'EXCEED BY ' + formatCurrency(diff, cur)
       : 'TARGET REACHED';
+    const targetLineHtml =
+      '<div class="goal-target-line">' +
+      '<div class="goal-tv-row ' + (reached ? 'is-reached' : '') + '"><span>Target:</span><span>' + formatCurrency(target, cur) + '</span></div>' +
+      '<div class="goal-tv-row ' + (reached ? 'is-reached' : 'is-short') + '"><span>Actual:</span><span>' + formatCurrency(total, cur) + '</span></div>' +
+      '</div>';
     const statusHtml =
       '<div class="goal-status-row">' +
       '<div class="goal-status ' + (diff < 0 ? 'danger' : 'ok') + '">' + statusText + '</div>' +
@@ -43,9 +49,10 @@ Object.assign(Pages, {
     const allocHtml = goalRes.claims.map(c => {
       const name = accNames[c.accountId] || ('ACCOUNT #' + c.accountId);
       return '<div class="goal-alloc-line">' +
-        '<span class="goal-alloc-name">' + escapeHtml(name) + ' (' + c.pct + '%)</span>' +
-        '<span>' + formatCurrency(c.avail, cur) + '</span>' +
-        '<span>' + formatCurrency(c.take, cur) + '</span>' +
+        '<span class="goal-alloc-name">' + escapeHtml(name) + '</span>' +
+        '<span>' + formatCurrency(c.accCurrent, cur) + '</span>' +
+        '<span>' + c.pct + '% ' + formatCurrency(c.take, cur) + '</span>' +
+        '<span>' + formatCurrency(c.accCurrent - c.take, cur) + '</span>' +
         '</div>';
     }).join('') || '<div class="goal-alloc-line"><span class="text-muted">NO ACCOUNTS ASSIGNED</span></div>';
 
@@ -54,12 +61,12 @@ Object.assign(Pages, {
       '<span class="goal-name"><span class="goal-priority">#' + (goal.order != null ? goal.order : '-') + '</span> ' + escapeHtml(goal.name) + '</span>' +
       '<span class="goal-reached" style="' + (reached ? '' : 'display:none') + '">REACHED</span>' +
       '</div>' +
-      '<div class="goal-target-line" style="color:' + (reached ? 'var(--accent)' : 'var(--text-primary)') + '">' + formatCurrency(target, cur) + '</div>' +
+      targetLineHtml +
       statusHtml +
       '<div class="goal-progress"><div class="goal-progress-fill" style="width:' + pct + '%"></div></div>' +
       (compact ? '' :
       '<div class="goal-allocations">' +
-      '<div class="goal-alloc-header"><span>ACCOUNT</span><span>AVAILABLE</span><span>TAKE</span></div>' +
+      '<div class="goal-alloc-header"><span>ACCOUNT</span><span>AVAILABLE</span><span>TAKE</span><span>LEFT</span></div>' +
       allocHtml + '</div>') +
       '<div class="goal-actions">' +
       '<a class="tx-link me-2" onclick="App.moveGoal(' + goal.id + ', -1)">UP</a>' +
@@ -134,7 +141,7 @@ Object.assign(Pages, {
 
     results.forEach(goalRes => {
       const col = document.createElement('div');
-      col.className = 'col-md-4 goal-col';
+      col.className = 'col-md-6 goal-col';
       col.innerHTML = this._goalCardHtml(goalRes, accNames, undefined, mainCurrency);
       list.appendChild(col);
     });

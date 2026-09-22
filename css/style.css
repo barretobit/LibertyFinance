@@ -1232,11 +1232,26 @@ body {
 }
 .goal-target-line {
   font-family: var(--font-title);
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--text-primary);
   margin-top: 12px;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.goal-tv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 700;
   letter-spacing: 1px;
+  white-space: nowrap;
+}
+.goal-tv-row.is-short {
+  color: var(--danger);
+}
+.goal-tv-row.is-reached {
+  color: var(--accent);
 }
 .goal-status-row {
   display: flex;
@@ -1284,8 +1299,8 @@ body {
 .goal-alloc-header,
 .goal-alloc-line {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: 1.6fr 1fr 1.2fr 1fr;
+  gap: 8px;
   align-items: center;
   font-size: 13px;
   letter-spacing: 1px;
