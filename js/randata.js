@@ -7,14 +7,19 @@
  *   indexes.json · stocks.json · etfs.json · metals.json · cryptos.json · fx.json
  *
  * Every file holds just that class: its asset catalog (metadata) + historical
- * bars, tagged with the day it was synced. On same-day page refreshes the files
- * are read directly — no network call. A failed class keeps its cached file, so
- * a partial outage never wipes the existing market data.
+ * bars, tagged with the day and full instant it was synced (synced_at). On
+ * same-day page refreshes the files are normally read directly — no network
+ * call. But before trusting the cache we compare our synced_at against the
+ * Randata cache build timestamp (/finance/cache/status): if Randata rebuilt
+ * its cache after our last sync (e.g. a new asset was added), the affected
+ * classes are re-fetched even on the same day. A failed class keeps its cached
+ * file, so a partial outage never wipes the existing market data.
  */
 
 const Randata = (() => {
   const RESOURCES_DIR = 'Resources';
   const API_BASE = 'https://randata.onrender.com';
+  const CACHE_STATUS_API = 'finance/cache/status';
 
   // Per asset class: file name inside Resources/ + the /finance/<path> endpoint
   // + the key of that class inside the /finance/assets catalog payload.
@@ -44,7 +49,7 @@ const Randata = (() => {
   }
 
   function emptyClass() {
-    return { synced_date: null, assets: [], data: {} };
+    return { synced_date: null, synced_at: null, assets: [], data: {} };
   }
 
   async function readClassFromDisk(cls) {
@@ -59,6 +64,7 @@ const Randata = (() => {
       if (parsed && typeof parsed === 'object' && parsed.data) {
         return {
           synced_date: parsed.synced_date || null,
+          synced_at: parsed.synced_at || null,
           assets: parsed.assets || [],
           data: parsed.data || {}
         };
@@ -103,6 +109,21 @@ const Randata = (() => {
     return { assets: assets, data: data };
   }
 
+  // Full UTC instant (epoch ms) at which the Randata cache was last rebuilt,
+  // or null when the status endpoint is unreachable. This is the source of
+  // truth for "new data landed on the server" regardless of the calendar day.
+  async function fetchCacheBuiltAt() {
+    try {
+      const json = await apiJson(API_BASE + '/' + CACHE_STATUS_API);
+      const raw = json && json.loaded_at;
+      if (!raw) return null;
+      const t = new Date(raw).getTime();
+      return isNaN(t) ? null : t;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function countRows(data) {
     return Object.keys(data || {}).reduce((n, k) => n + (data[k] || []).length, 0);
   }
@@ -126,11 +147,23 @@ const Randata = (() => {
       const a = await getAdapter();
       const classKeys = Object.keys(CLASSES);
 
-      // Freshness is judged per file: a class is only re-fetched when its own
-      // Resource file was last synced another day (or is missing entirely).
+      // A class is stale when (a) its Resource file was synced on an earlier
+      // day, or (b) the Randata cache was rebuilt after our last sync — the
+      // server's build instant can outlive our synced_at even on the same day
+      // (e.g. a new asset was added to Randata since we last synced). FX rates
+      // are live, not part of the historical cache, so they keep the day rule
+      // only. The status check always runs; when it is unreachable the cache
+      // degrades to the previous day-based behaviour.
       const states = {};
       for (const cls of classKeys) states[cls] = await readClassFromDisk(cls);
-      const stale = classKeys.filter((cls) => states[cls].synced_date !== today);
+      const remoteBuiltAt = await fetchCacheBuiltAt();
+      const stale = classKeys.filter((cls) => {
+        const s = states[cls];
+        if (s.synced_date === today && cls === 'fx') return false;
+        if (s.synced_date !== today) return true;
+        const syncAt = s.synced_at ? new Date(s.synced_at).getTime() : NaN;
+        return remoteBuiltAt !== null && !isNaN(syncAt) && remoteBuiltAt > syncAt;
+      });
 
       if (!stale.length) {
         cache = states;
@@ -146,7 +179,12 @@ const Randata = (() => {
         try {
           const cfg = CLASSES[cls];
           const clsData = await fetchClassData(cls, cfg, await getAssets());
-          const payload = { synced_date: today, assets: clsData.assets, data: clsData.data };
+          const payload = {
+            synced_at: new Date().toISOString(),
+            synced_date: today,
+            assets: clsData.assets,
+            data: clsData.data
+          };
           await a.writeIn(RESOURCES_DIR, cfg.file, JSON.stringify(payload));
           states[cls] = payload;
         } catch (e) { /* keep the cached file; a failed class is not fatal */ }
