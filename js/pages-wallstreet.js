@@ -16,6 +16,7 @@ const _WS_RANGES = {
   "2y": { bars: 504, days: 1040 },
   "3y": { bars: 756, days: 1560 },
   "5y": { bars: 1260, days: 2600 },
+  "10y": { bars: 2520, days: 5200 },
 };
 const _WS_INDEX_COLORS = () => ({
   "^GSPC": readAccent(),

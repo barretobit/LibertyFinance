@@ -135,7 +135,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - `js/utils.js`: currency formatting, **date based FX conversion**, asset depreciation math
 - `js/app.js`: router, modals and CRUD orchestration
 - `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals), `pages-wallstreet` (market overview)
-- `js/randata.js`: the **market data client**: fetches the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
+- `js/randata.js`: the **market data client**: fetches 10-year market history from the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) — one full load plus small daily incremental pulls — and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
 - `server.js`: **local preview only** (static files; GitHub Pages serves the same files in production)
 
 **Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices, and a `Resources/` folder holding the market data cache — one file per asset class). Zero SQL, zero cloud. 📄
@@ -152,7 +152,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - The button becomes **CHANGE DATA FOLDER** once connected. Click it anytime to switch to a different folder (e.g. if you picked the wrong one).
 - Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
 - A `Backups/` subfolder is created next to your data; every time you open a profile, a timestamped snapshot is saved (newest 30 kept).
-- A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`). Each page reads only the resources it needs.
+- A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`) plus a small `randata-meta.json` with sync bookkeeping. Each page reads only the resources it needs.
 - FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.
 - **Your files are just files**: copy them, back them up, open them in another device, anything.
 
