@@ -60,6 +60,7 @@ const _WS_CURRENCIES = ["USD", "EUR", "CHF", "GBP", "JPY", "AUD", "CAD", "CNY", 
 const _WS_CCY_SYMBOL = {
   USD: "$", EUR: "€", CHF: "CHF", GBP: "£", JPY: "¥",
   AUD: "A$", CAD: "C$", CNY: "¥", HKD: "HK$", NZD: "NZ$", SEK: "kr",
+  KRW: "₩", INR: "₹",
 };
 const _WS_INDEX_CUR = {
   "^GSPC": "USD", "^IXIC": "USD", "^DJI": "USD",
@@ -67,7 +68,7 @@ const _WS_INDEX_CUR = {
   "^STOXX50E": "EUR", "^N225": "JPY", "^HSI": "HKD",
   "^BVSP": "BRL", "^SSMI": "CHF",
 };
-const _WS_FLAG_FILES = { 'US': 'us', 'UK': 'gb', 'DE': 'de', 'FR': 'fr', 'JP': 'jp', 'HK': 'hk', 'EU': 'eu', 'CH': 'ch' };
+const _WS_FLAG_FILES = { 'US': 'us', 'UK': 'gb', 'GB': 'gb', 'DE': 'de', 'FR': 'fr', 'JP': 'jp', 'HK': 'hk', 'EU': 'eu', 'CH': 'ch', 'KR': 'kr', 'IT': 'it', 'IN': 'in' };
 const _WS_OZ_TO_G = 31.1034768;
 const _WS_METAL_WEIGHTS = {
   oz: { mult: 1, label: "PER OZ" },
@@ -100,11 +101,29 @@ function _wsWeightShort(w) {
   return w;
 }
 
+// Stock listing region, derived from the exchange suffix. Region means the
+// listing venue (and hence the traded currency), so US-listed ADRs such as
+// ASML and TSM stay US even though the company is foreign. No suffix = US.
+const _WS_STOCK_SUFFIX_REGION = {
+  '.SW': 'CH', '.DE': 'DE', '.T': 'JP', '.KS': 'KR', '.HK': 'HK',
+  '.PA': 'FR', '.L': 'GB', '.MI': 'IT', '.NS': 'IN',
+};
+// Trading currency per listing region (used to convert prices to the display
+// currency). KRW and INR have no Randata FX pair yet, so those fall back to
+// showing the native price.
+const _WS_REGION_CUR = {
+  US: 'USD', CH: 'CHF', DE: 'EUR', JP: 'JPY', KR: 'KRW',
+  HK: 'HKD', FR: 'EUR', GB: 'GBP', IT: 'EUR', IN: 'INR',
+};
 function wsStockRegion(symbol) {
-  if (symbol.endsWith('.SW')) return 'CH';
-  if (symbol.endsWith('.DE')) return 'DE';
-  if (symbol.endsWith('.T'))  return 'JP';
+  const s = String(symbol || '').toUpperCase();
+  for (const suf in _WS_STOCK_SUFFIX_REGION) {
+    if (s.endsWith(suf)) return _WS_STOCK_SUFFIX_REGION[suf];
+  }
   return 'US';
+}
+function wsStockCurrency(symbol) {
+  return _WS_REGION_CUR[wsStockRegion(symbol)] || 'USD';
 }
 
 function wsStockComparer(sortKey) {
@@ -428,24 +447,29 @@ Object.assign(Pages, {
         if (cls === "index") {
           const scale = wsCurrencyScale(usdPer, _WS_INDEX_CUR[sym] || "USD", _wsCurrency);
           item.displayValue = scale == null ? item.last.close : item.last.close * scale;
+          item.cur = scale == null ? (_WS_INDEX_CUR[sym] || "USD") : _wsCurrency;
         } else if (cls === "metal") {
           const scale = wsCurrencyScale(usdPer, "USD", _wsCurrency);
           item.displayValue = (scale == null ? 1 : scale) * weightMult * item.last.close;
           item.unitLabel = _WS_METAL_WEIGHTS[_wsMetalWeight].label;
+          item.cur = scale == null ? "USD" : _wsCurrency;
         } else if (cls === "stock") {
-          const region = wsStockRegion(sym);
-          const fromCur = region === "CH" ? "CHF" : region === "DE" ? "EUR" : region === "JP" ? "JPY" : "USD";
+          const fromCur = wsStockCurrency(sym);
           const scale = wsCurrencyScale(usdPer, fromCur, _wsCurrency);
           item.displayValue = scale == null ? item.last.close : item.last.close * scale;
+          item.cur = scale == null ? fromCur : _wsCurrency;
         } else if (cls === "etf") {
           const scale = wsCurrencyScale(usdPer, "USD", _wsCurrency);
           item.displayValue = scale == null ? item.last.close : item.last.close * scale;
+          item.cur = scale == null ? "USD" : _wsCurrency;
         } else if (cls === "crypto") {
           const scale = wsCurrencyScale(usdPer, "USD", _wsCurrency);
           item.displayValue = scale == null ? item.last.close : item.last.close * scale;
+          item.cur = scale == null ? "USD" : _wsCurrency;
         } else {
           const scale = wsCurrencyScale(usdPer, "USD", _wsCurrency);
           item.displayValue = scale == null ? item.last.close : item.last.close * scale;
+          item.cur = scale == null ? "USD" : _wsCurrency;
         }
         if (groups[cls]) groups[cls].push(item);
       });
@@ -639,7 +663,7 @@ Object.assign(Pages, {
           ? '<span class="ws-tick-ccy">' + escapeHtml(_wsCurrency) + "</span>&nbsp;" +
             wsFmtValue(it.displayValue != null ? it.displayValue : it.last.close, 2) +
             '<span class="ws-tick-unit"> per ' + _wsWeightShort(_wsMetalWeight) + "</span>"
-          : '<span class="ws-tick-ccy">' + escapeHtml(_WS_CCY_SYMBOL[_wsCurrency] || _wsCurrency) + "</span>&nbsp;" +
+          : '<span class="ws-tick-ccy">' + escapeHtml(_WS_CCY_SYMBOL[it.cur || _wsCurrency] || it.cur || _wsCurrency) + "</span>&nbsp;" +
             wsFmtValue(it.displayValue != null ? it.displayValue : it.last.close, undefined)) +
         "</div>" +
         '<div class="ws-tick-line"><span class="ws-tick-change ' +
@@ -727,7 +751,7 @@ Object.assign(Pages, {
       const region = wsStockRegion(it.symbol);
       const flag = _WS_FLAG_FILES[region] || "";
       const up = it.chg ? it.chg.pct >= 0 : true;
-      const ccyTxt = escapeHtml(_WS_CCY_SYMBOL[_wsCurrency] || _wsCurrency);
+      const ccyTxt = escapeHtml(_WS_CCY_SYMBOL[it.cur || _wsCurrency] || it.cur || _wsCurrency);
       const chgTxt = it.chg ? (up ? "&#9650;" : "&#9660;") + " " + wsFmtPct(it.chg.pct) : "—";
       row.innerHTML =
         '<div class="ws-stock-item-main">' +
@@ -772,9 +796,9 @@ Object.assign(Pages, {
       delete App._charts[key];
     }
 
-    const region = wsStockRegion(sel.symbol);
-    const fromCur = region === "CH" ? "CHF" : region === "DE" ? "EUR" : region === "JP" ? "JPY" : "USD";
+    const fromCur = wsStockCurrency(sel.symbol);
     const scale = wsCurrencyScale(_wsStockCtx.usdPer, fromCur, _wsCurrency);
+    const ccyCode = scale == null ? fromCur : _wsCurrency;
 
     const candles = [];
     const vols = [];
@@ -812,7 +836,7 @@ Object.assign(Pages, {
     const ctx = canvas.getContext("2d");
     const bull = "#33ff33";
     const bear = "#ff3333";
-    const ccy = _WS_CCY_SYMBOL[_wsCurrency] || _wsCurrency;
+    const ccy = _WS_CCY_SYMBOL[ccyCode] || ccyCode;
     const sFmt = (v) => wsFmtValue(v, undefined);
 
     App._charts[key] = new Chart(ctx, {
@@ -933,8 +957,7 @@ Object.assign(Pages, {
       if (cls === "metal") from = "USD";
       else if (cls === "index") from = _WS_INDEX_CUR[sym] || "USD";
       else if (cls === "stock") {
-        const region = wsStockRegion(sym);
-        from = region === "CH" ? "CHF" : region === "DE" ? "EUR" : region === "JP" ? "JPY" : "USD";
+        from = wsStockCurrency(sym);
       }
       const s = wsCurrencyScale(usdPer, from, _wsCurrency);
       scales[sym] = s == null ? 1 : s;
