@@ -822,16 +822,19 @@ const App = {
 
     const asset = await DB.getById("assets", id);
     if (!asset) return;
-
-    const assetTransactions = await DB.getByIndex("transactions", "assetId", id);
-    for (const transaction of assetTransactions) {
-      await DB.del("transactions", transaction.id);
-    }
-    await DB.del("assets", id);
-    await this._refreshAssetAccountValue(asset.accountId);
+    await this._deleteAssetWithHistory(asset);
 
     this.toast("ASSET DELETED");
     this.route();
+  },
+
+  // Removes an asset with its ADD/SELL transactions, then revalues its account
+  async _deleteAssetWithHistory(asset) {
+    for (const transaction of await DB.getByIndex("transactions", "assetId", asset.id)) {
+      await DB.del("transactions", transaction.id);
+    }
+    await DB.del("assets", asset.id);
+    await this._refreshAssetAccountValue(asset.accountId);
   },
 
   // Tangible Asset and Real Estate accounts store today's value of their assets
@@ -1595,13 +1598,20 @@ const App = {
 
   // ==================== DELETE ====================
 
-  // Removes an account with all its transactions and assets
+  // Removes an account with all its transactions and assets, and stops goals funding from it
+  // (a later account may get the same id and must not inherit those allocations)
   async _deleteAccountWithHistory(accountId) {
     for (const transaction of await DB.getByIndex("transactions", "accountId", accountId)) {
       await DB.del("transactions", transaction.id);
     }
     for (const asset of await DB.getByIndex("assets", "accountId", accountId)) {
       await DB.del("assets", asset.id);
+    }
+    for (const goal of await DB.getAll("goals")) {
+      const allocations = (goal.allocations || []).filter((allocation) => Number(allocation.accountId) !== Number(accountId));
+      if (allocations.length === (goal.allocations || []).length) continue;
+      goal.allocations = allocations;
+      await DB.put("goals", goal);
     }
     await DB.del("accounts", accountId);
   },
@@ -1721,11 +1731,37 @@ const App = {
   },
 
   async deleteTransaction(id) {
-    const confirmed = await this.confirm("DELETE TRANSACTION?", "This will remove this transaction from the history.");
-    if (!confirmed) return;
-
     const transaction = await DB.getById("transactions", id);
     if (!transaction) return;
+    const asset = transaction.assetId != null ? await DB.getById("assets", transaction.assetId) : null;
+    const confirmMessage = asset && transaction.type === "asset-add"
+      ? "This will delete the asset " + (asset.name || "") + " with all its history."
+      : asset && transaction.type === "asset-sell"
+        ? "This will mark the asset " + (asset.name || "") + " as not sold."
+        : "This will remove this transaction from the history.";
+    const confirmed = await this.confirm("DELETE TRANSACTION?", confirmMessage);
+    if (!confirmed) return;
+
+    // An asset's ADD row is the asset itself: deleting it deletes the asset.
+    // Its SELL row is the sale: deleting it un-sells the asset.
+    if (asset && transaction.type === "asset-add") {
+      await this._deleteAssetWithHistory(asset);
+      this.toast("ASSET DELETED");
+      this.route();
+      return;
+    }
+    if (asset && transaction.type === "asset-sell") {
+      asset.sold = false;
+      asset.saleValue = null;
+      asset.saleDate = null;
+      await DB.put("assets", asset);
+      await DB.del("transactions", id);
+      await this._refreshAssetAccountValue(asset.accountId);
+      this.toast("SALE DELETED");
+      this.route();
+      return;
+    }
+
     const account = await DB.getById("accounts", transaction.accountId);
     // Tangible asset events do not change the computed account value, and
     // precious metals are fully replayed below.
@@ -1847,8 +1883,10 @@ const App = {
       if (index === 0) {
         // Seed with the opening level. A first deposit/buy has nothing before it,
         // so the balance equals the amount itself (avoids inheriting a wrong
-        // snapshot from an out-of-order entry). A first valuation carries its own value.
+        // snapshot from an out-of-order entry). A first valuation carries its own value:
+        // its amount, since an edited valuation keeps its old balanceAfter until this replay.
         if (transaction.type === "deposit" || transaction.type === "buy") balance = absoluteAmount;
+        else if (transaction.type === "valuation" && transaction.amount != null) balance = transaction.amount;
         else balance = transaction.balanceAfter != null ? transaction.balanceAfter : transaction.amount != null ? transaction.amount : 0;
       } else if (transaction.type === "deposit" || transaction.type === "buy") {
         balance += absoluteAmount;

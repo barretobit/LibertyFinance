@@ -823,7 +823,7 @@ Object.assign(Pages, {
     // Months left out by the user, kept for the session
     const excludedMonths = (App._srExcludedMonths = App._srExcludedMonths || new Set());
 
-    const render = () => {
+    const render = (animate = true) => {
       if (App._charts.savingsRate) { try { App._charts.savingsRate.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.savingsRate; }
 
       const activeButton = document.querySelector('#sr-range-selectors .perf-btn.active');
@@ -842,71 +842,90 @@ Object.assign(Pages, {
         monthsInRange = monthData.filter(month => month.key >= cutoffMonth);
       }
       const shownMonths = monthsInRange.filter(month => !excludedMonths.has(month.key));
+      const isExcluded = index => Boolean(monthsInRange[index]) && excludedMonths.has(monthsInRange[index].key);
 
-      const toggles = document.getElementById('sr-month-toggles');
-      if (toggles) {
-        toggles.innerHTML = '';
-        monthsInRange.forEach(month => {
-          const toggle = document.createElement('span');
-          const isExcluded = excludedMonths.has(month.key);
-          toggle.className = 'perf-btn' + (isExcluded ? '' : ' active');
-          toggle.textContent = month.label;
-          toggle.title = isExcluded ? 'Excluded - click to include' : 'Included - click to exclude';
-          toggle.onclick = () => {
-            if (excludedMonths.has(month.key)) excludedMonths.delete(month.key);
-            else excludedMonths.add(month.key);
-            render();
-          };
-          toggles.appendChild(toggle);
-        });
-      }
-
-      const showChart = shownMonths.length > 0;
-      emptyMessage.textContent = monthsInRange.length > 0 && !showChart ? 'NO MONTHS SELECTED.' : 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
+      // The chart stays up while every month is excluded: its x axis is where months are switched back on
+      const showChart = monthsInRange.length > 0;
       emptyMessage.style.display = showChart ? 'none' : 'block';
       canvas.style.display = showChart ? '' : 'none';
       if (statsCard) statsCard.style.display = showChart ? '' : 'none';
       if (!showChart) return;
 
-      const netIncomeValues = shownMonths.map(month => month.netIncome);
-      const totalSavedValues = shownMonths.map(month => month.totalSaved);
+      const shownNetIncomeValues = shownMonths.map(month => month.netIncome);
+      const shownTotalSavedValues = shownMonths.map(month => month.totalSaved);
       const average = values => values.reduce((sum, value) => sum + value, 0) / values.length;
       const signedHtml = value => '<span style="color:' + profitLossColor(value) + '">' + signedCurrency(value, mainCurrency) + '</span>';
-      const setStat = (id, value) => { const element = document.getElementById(id); if (element) element.innerHTML = signedHtml(value); };
-      setStat('sr-min', Math.min(...netIncomeValues));
-      setStat('sr-avg', average(netIncomeValues));
-      setStat('sr-max', Math.max(...netIncomeValues));
-      setStat('sr-min-saved', Math.min(...totalSavedValues));
-      setStat('sr-avg-saved', average(totalSavedValues));
-      setStat('sr-max-saved', Math.max(...totalSavedValues));
+      const setStat = (id, values, summarize) => {
+        const element = document.getElementById(id);
+        if (element) element.innerHTML = values.length ? signedHtml(summarize(values)) : '—';
+      };
+      setStat('sr-min', shownNetIncomeValues, values => Math.min(...values));
+      setStat('sr-avg', shownNetIncomeValues, average);
+      setStat('sr-max', shownNetIncomeValues, values => Math.max(...values));
+      setStat('sr-min-saved', shownTotalSavedValues, values => Math.min(...values));
+      setStat('sr-avg-saved', shownTotalSavedValues, average);
+      setStat('sr-max-saved', shownTotalSavedValues, values => Math.max(...values));
+
+      // Every month in range keeps its place on the axis; an excluded month has no point (null)
+      const netIncomeValues = monthsInRange.map(month => excludedMonths.has(month.key) ? null : month.netIncome);
+      const totalSavedValues = monthsInRange.map(month => excludedMonths.has(month.key) ? null : month.totalSaved);
+      const monthIndexAtAxis = (chart, event) => {
+        const axis = chart.scales.x;
+        if (event.y < axis.top || event.y > axis.bottom || event.x < axis.left || event.x > axis.right) return null;
+        const index = Math.round(axis.getValueForPixel(event.x));
+        return index >= 0 && index < monthsInRange.length ? index : null;
+      };
 
       App._charts.savingsRate = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
-          labels: shownMonths.map(month => month.label),
+          labels: monthsInRange.map(month => month.label),
           datasets: [
             {
               label: 'NET INCOME', data: netIncomeValues, borderColor: readAccent(), backgroundColor: shadeAccent(readAccent(), 1, 0.08),
-              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: netIncomeValues.map(profitLossColor), borderWidth: 2, yAxisID: 'y',
+              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: netIncomeValues.map(value => value === null ? 'transparent' : profitLossColor(value)), borderWidth: 2, yAxisID: 'y', spanGaps: true,
             },
             {
               label: 'TOTAL SAVED', data: totalSavedValues, borderColor: '#33ccff', backgroundColor: 'rgba(51,204,255,0.08)',
-              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#33ccff', borderWidth: 2, yAxisID: 'y',
+              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#33ccff', borderWidth: 2, yAxisID: 'y', spanGaps: true,
             },
           ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          animation: animate ? undefined : false,
           plugins: {
             legend: { display: true, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: CHART_FONT } } },
             tooltip: { callbacks: { label: item => (item.datasetIndex === 0 ? 'NET INCOME: ' : 'TOTAL SAVED: ') + formatCurrency(item.parsed.y, mainCurrency) } },
           },
           scales: {
-            x: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT } }, grid: { color: '#222' } },
+            x: {
+              ticks: {
+                // Every month label is a switch, so show them all unless they would not fit (2Y+)
+                autoSkip: monthsInRange.length > 24,
+                color: tick => isExcluded(tick.index) ? '#444' : '#888',
+                font: { size: 12, family: CHART_FONT },
+              },
+              grid: { color: tick => isExcluded(tick.index) ? 'rgba(255,85,85,0.35)' : '#222' },
+            },
             y: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT }, callback: value => formatCurrency(value, mainCurrency) }, grid: { color: '#222' } },
           },
         },
+        // Clicking a month on the x axis includes or excludes it from the graph and statistics.
+        // A plugin hook, because Chart.js only calls onClick/onHover inside the plot area.
+        plugins: [{
+          id: 'monthAxisToggle',
+          afterEvent: (chart, args) => {
+            const index = monthIndexAtAxis(chart, args.event);
+            if (args.event.type === 'mousemove') chart.canvas.style.cursor = index === null ? '' : 'pointer';
+            if (args.event.type !== 'click' || index === null) return;
+            const key = monthsInRange[index].key;
+            if (excludedMonths.has(key)) excludedMonths.delete(key);
+            else excludedMonths.add(key);
+            setTimeout(() => render(false)); // not inside the chart's own event handler, which render destroys
+          },
+        }],
       });
     };
 

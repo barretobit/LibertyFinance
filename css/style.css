@@ -150,16 +150,6 @@ body {
   margin-bottom: 30px;
   letter-spacing: 2px;
 }
-.blink {
-  animation: blink 1s step-end infinite;
-  color: var(--accent);
-  font-size: 18px;
-}
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
 .btn-enter {
   background: transparent;
   border: 2px solid var(--accent);
@@ -907,19 +897,6 @@ body {
   letter-spacing: 1px;
   margin-bottom: 8px;
 }
-.earning-month-pct {
-  font-family: var(--font-title);
-  font-size: 32px;
-  font-weight: 700;
-  letter-spacing: 1px;
-}
-.earning-month-val {
-  font-family: var(--font-title);
-  font-size: 14px;
-  color: var(--text-primary);
-  margin-top: 4px;
-  letter-spacing: 1px;
-}
 .earning-month-line {
   display: flex;
   justify-content: space-between;
@@ -1003,18 +980,6 @@ body {
   background: var(--accent);
   color: #161616;
   border-color: var(--accent);
-}
-
-.sr-month-toggles {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.sr-month-toggles .perf-btn {
-  font-size: 10px;
-  padding: 2px 8px;
 }
 
 .sr-month-hint {
