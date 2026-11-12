@@ -1,78 +1,38 @@
 /* ===== Page Renderers ===== */
 
-// Tint a hex color: amt in [-1, 1] → negative darkens, positive lightens
-function _shadeColor(hex, amt) {
-  const n = parseInt(hex.slice(1), 16);
-  let r = (n >> 16) & 255;
-  let g = (n >> 8) & 255;
-  let b = n & 255;
-  if (amt >= 0) {
-    r = Math.round(r + (255 - r) * amt);
-    g = Math.round(g + (255 - g) * amt);
-    b = Math.round(b + (255 - b) * amt);
+// Tint a hex color: amount in [-1, 1], negative darkens, positive lightens
+function tintColor(hex, amount) {
+  const value = parseInt(hex.slice(1), 16);
+  let red = (value >> 16) & 255;
+  let green = (value >> 8) & 255;
+  let blue = value & 255;
+  if (amount >= 0) {
+    red = Math.round(red + (255 - red) * amount);
+    green = Math.round(green + (255 - green) * amount);
+    blue = Math.round(blue + (255 - blue) * amount);
   } else {
-    const f = 1 + amt;
-    r = Math.round(r * f);
-    g = Math.round(g * f);
-    b = Math.round(b * f);
+    const factor = 1 + amount;
+    red = Math.round(red * factor);
+    green = Math.round(green * factor);
+    blue = Math.round(blue * factor);
   }
-  return 'rgb(' + r + ',' + g + ',' + b + ')';
+  return 'rgb(' + red + ',' + green + ',' + blue + ')';
 }
 
-function _effValue(transactions, fallback) {
-  const txs = transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  return txs.length > 0 ? (txs[txs.length - 1].balanceAfter || 0) : (fallback || 0);
+// Badge text of a transaction in history tables
+function transactionTypeLabel(transaction) {
+  if (transaction.type === 'asset-add') return 'ASSET ADDED';
+  if (transaction.type === 'asset-sell') return 'ASSET SOLD';
+  if (isOpeningValuation(transaction)) return 'OPENING VALUATION';
+  return escapeHtml(String(transaction.type || '').toUpperCase());
 }
 
-function _effCostBasis(transactions) {
-  // Precious metals: average-cost basis across buys/sells
-  const metalTxs = transactions.filter(t => t.type === 'buy' || t.type === 'sell');
-  if (metalTxs.length > 0) {
-    let spent = 0;
-    let qty = 0;
-    const sorted = [...metalTxs].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    sorted.forEach(t => {
-      if (t.type === 'buy') {
-        spent += Math.abs(t.amount || 0);
-        qty += Math.abs(t.quantity || 0);
-      } else {
-        const sold = Math.abs(t.quantity || 0);
-        if (qty > 0) {
-          spent = Math.max(0, spent - (spent / qty) * sold);
-          qty = Math.max(0, qty - sold);
-        }
-      }
-    });
-    return spent;
-  }
-
-  let basis = 0;
-  let hasFlow = false;
-  transactions.forEach(t => {
-    if (t.type === 'deposit') { basis += Math.abs(t.amount); hasFlow = true; }
-    if (t.type === 'withdrawal') { basis -= Math.abs(t.amount); hasFlow = true; }
-    if (_isOpeningTx(t)) { basis += Math.abs(t.amount); hasFlow = true; }
-  });
-  if (!hasFlow) {
-    const vals = [...transactions].filter(t => t.type === 'valuation')
-      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    if (vals.length > 0) basis = vals[0].amount || 0;
-  }
-  return basis;
-}
-
-// True for transactions that represent pre-existing wealth entering tracking
-// (recorded as a valuation carrying its own value, not as a deposit).
-function _isOpeningTx(tx) {
-  return !!(tx && tx.type === 'valuation' && (tx.opening === true || tx.notes === 'OPENING VALUATION'));
-}
-
-// Deposits created alongside an opening valuation at account creation; their
-// amount is already part of the paired OPENING VALUATION, so they must not be
-// counted again as capital in performance calculations.
-function _isOpeningContribution(tx) {
-  return !!(tx && tx.type === 'deposit' && tx.notes === 'OPENING CONTRIBUTION');
+// Badge style of a transaction: money in, money out, opening or valuation
+function transactionBadgeClass(transaction) {
+  if (isOpeningValuation(transaction)) return 'opening';
+  if (['deposit', 'buy', 'asset-add'].includes(transaction.type)) return 'deposit';
+  if (['withdrawal', 'sell', 'asset-sell'].includes(transaction.type)) return 'withdrawal';
+  return 'valuation';
 }
 
 const Pages = {};

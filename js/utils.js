@@ -45,40 +45,47 @@ function formatCurrency(amount, currencyCode = 'CHF') {
   return c.symbol + ' ' + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function _rateFromEntries(entries, fromCurrency, toCurrency, date) {
-  if (!fromCurrency || fromCurrency === toCurrency) return 1;
-  const sorted = entries
-    .filter(e => e.date && e.rates && e.rates[fromCurrency] != null)
-    .sort((a, b) => a.date.localeCompare(b.date));
-  if (sorted.length === 0) return 1;
-  let best = null;
-  for (const e of sorted) {
-    if (e.date <= (date || '')) best = e;
-    else break;
-  }
-  return best ? best.rates[fromCurrency] : sorted[0].rates[fromCurrency];
+/* ===== Exchange Rates =====
+ *
+ * market.json stores every rate against CHF ("1 unit of the currency = rate CHF"),
+ * whatever a profile's main currency is, so profiles can safely share the file.
+ */
+
+const RATE_BASE_CURRENCY = 'CHF';
+
+// CHF value of one unit of `currency` on `date`: the latest stored rate on or
+// before that date, else the earliest stored one. Null when the currency has no rate at all.
+function chfPerUnit(rateEntries, currency, date) {
+  if (currency === RATE_BASE_CURRENCY) return 1;
+  let latestOnOrBefore = null;
+  let earliest = null;
+  (rateEntries || []).forEach(entry => {
+    if (!entry || !entry.date || !entry.rates || entry.rates[currency] == null) return;
+    if (!earliest || entry.date < earliest.date) earliest = entry;
+    if (entry.date <= (date || '') && (!latestOnOrBefore || entry.date > latestOnOrBefore.date)) latestOnOrBefore = entry;
+  });
+  const best = latestOnOrBefore || earliest;
+  return best ? best.rates[currency] : null;
 }
 
-// Convert an amount in `fromCurrency` to `toCurrency` on `date` using stored rates
+// Factor that converts an amount in `fromCurrency` into `toCurrency` on `date`.
+// A currency without any stored rate counts 1:1; currenciesWithoutRate() lets pages warn about it.
 function currencyRateTo(rateEntries, fromCurrency, toCurrency, date) {
   if (!fromCurrency || !toCurrency || fromCurrency === toCurrency) return 1;
-  const a = _rateFromEntries(rateEntries, fromCurrency, toCurrency, date);
-  const b = _rateFromEntries(rateEntries, toCurrency, fromCurrency, date);
-  return a / b;
+  const fromInChf = chfPerUnit(rateEntries, fromCurrency, date);
+  const toInChf = chfPerUnit(rateEntries, toCurrency, date);
+  if (fromInChf == null || toInChf == null) return 1;
+  return fromInChf / toInChf;
 }
 
-async function lookupRate(fromCurrency, toCurrency, date) {
-  return _rateFromEntries(await DB.getAll('exchangeRates'), fromCurrency, toCurrency, date);
+// The given currencies that have no stored rate at all, sorted
+function currenciesWithoutRate(rateEntries, currencies) {
+  return [...new Set(currencies)].filter(currency => currency && chfPerUnit(rateEntries, currency, todayStr()) == null).sort();
 }
 
-async function convertAmount(amount, fromCurrency, toCurrency, date) {
-  if (amount == null || amount === 0 || !fromCurrency || fromCurrency === toCurrency) return Number(amount) || 0;
-  const rate = await lookupRate(fromCurrency, toCurrency, date);
-  return Number(amount) * rate;
-}
-
-async function formatConverted(amount, fromCurrency, toCurrency, date) {
-  return formatCurrency(await convertAmount(amount, fromCurrency, toCurrency, date), toCurrency);
+// True for a calendar date in the app's storage format, YYYY-MM-DD
+function isIsoDate(text) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(text || '');
 }
 
 function formatDate(dateStr) {
@@ -105,18 +112,28 @@ function pluralize(n, word) {
   return n + ' ' + (n === 1 ? word : word + 's');
 }
 
-function isPositivePL(val) {
-  return val >= 0;
+function plClass(value) {
+  return value >= 0 ? 'pos' : 'neg';
 }
 
-function plClass(val) {
-  return val >= 0 ? 'pos' : 'neg';
+// "+CHF 12.00" / "-CHF 12.00": the sign shown on gains too
+function signedCurrency(amount, currency) {
+  return (amount >= 0 ? '+' : '') + formatCurrency(amount, currency);
 }
 
+// "+1.25%" / "-1.25%"
+function signedPercent(value, decimals) {
+  return (value >= 0 ? '+' : '') + value.toFixed(decimals) + '%';
+}
+
+// Safe for element content and for quoted attribute values (quotes escaped too).
 function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return String(text == null ? '' : text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatNumber(val) {
@@ -125,49 +142,79 @@ function formatNumber(val) {
   return n.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
 }
 
-/* ===== Tangible Assets ===== */
+/* ===== Tangible Assets & Real Estate ===== */
 
-function assetYearsElapsed(asset, date) {
-  if (!asset || !asset.purchaseDate) return 0;
-  const start = new Date(asset.purchaseDate + 'T00:00:00');
-  const end = date ? new Date(date + 'T00:00:00') : new Date();
-  const ms = end - start;
-  if (ms <= 0) return 0;
-  return ms / (365.25 * 86400000);
+function isRealEstateAsset(asset) {
+  return asset.accountType === 'Real Estate' || asset.assetType === 'Real Estate';
 }
 
-// Straight-line depreciation: current = purchase × max(0, 1 − (pct/100) × years)
+// Owned share of the asset as a fraction. A missing value means 100%; 0% stays 0%.
+function assetOwnershipShare(asset) {
+  const percent = parseFloat(asset.ownershipPct);
+  return (isNaN(percent) ? 100 : percent) / 100;
+}
+
+// Mortgage still owed on the asset; only Real Estate carries one
+function assetMortgage(asset) {
+  return isRealEstateAsset(asset) ? parseFloat(asset.debt) || 0 : 0;
+}
+
+// True once the asset is sold on `date` (no date: today)
+function isAssetSoldOn(asset, date) {
+  return !!asset.sold && (!asset.saleDate || !date || date >= asset.saleDate);
+}
+
+function yearsBetween(startDate, endDate) {
+  if (!startDate) return 0;
+  const start = new Date(startDate + 'T00:00:00');
+  const end = endDate ? new Date(endDate + 'T00:00:00') : new Date();
+  const milliseconds = end - start;
+  if (milliseconds <= 0) return 0;
+  return milliseconds / (365.25 * 86400000);
+}
+
+// Latest Real Estate valuation on or before `date` (YYYY-MM-DD), or null
+function latestAssetValuation(asset, date) {
+  return (asset.valuations || [])
+    .filter(valuation => valuation && valuation.date && valuation.date <= date)
+    .reduce((latest, valuation) => (!latest || valuation.date > latest.date ? valuation : latest), null);
+}
+
+// Full value of the asset on `date`: 100% ownership, mortgage not deducted.
+// Straight-line depreciation from a starting point: value × max(0, 1 − (percent/100) × years).
+// Real Estate starts from its latest valuation on or before the date when there
+// is one; everything else (and Real Estate before its first valuation) starts
+// from the purchase value at the purchase date.
+function assetFullValue(asset, date) {
+  const onDate = date || todayStr();
+  const valuation = isRealEstateAsset(asset) ? latestAssetValuation(asset, onDate) : null;
+  const startValue = valuation ? parseFloat(valuation.value) || 0 : parseFloat(asset.purchaseValue) || 0;
+  const startDate = valuation ? valuation.date : asset.purchaseDate;
+  const depreciationPercent = parseFloat(asset.depreciationPct) || 0;
+  return startValue * Math.max(0, 1 - (depreciationPercent / 100) * yearsBetween(startDate, onDate));
+}
+
+// Owned value on `date`: the owned share of the full value, net of the mortgage.
+// Zero before the purchase date and from the sale date on.
 function assetCurrentValue(asset, date) {
-  if (!asset || asset.sold) return 0;
-  if (asset.purchaseDate && date && (date + '') < (asset.purchaseDate + '')) return 0;
-  const purchaseValue = parseFloat(asset.purchaseValue) || 0;
-  const ownership = (parseFloat(asset.ownershipPct) || 100) / 100;
-  // Real Estate is valued manually; fall back to purchase value until a valuation exists
-  if (asset.accountType === 'Real Estate' || asset.assetType === 'Real Estate') {
-    let base = purchaseValue;
-    if (Array.isArray(asset.valuations) && asset.valuations.length) {
-      const sorted = asset.valuations.filter(v => v.date && v.date <= (date || '')).sort((a,b)=>a.date.localeCompare(b.date));
-      const last = sorted.length ? sorted[sorted.length-1] : asset.valuations.slice().sort((a,b)=>a.date.localeCompare(b.date))[0];
-      if (last && last.value != null) base = parseFloat(last.value) || 0;
-    }
-    const pct = parseFloat(asset.depreciationPct) || 0;
-    const years = assetYearsElapsed(asset, date);
-    base = base * Math.max(0, 1 - (pct / 100) * years);
-    const debt = parseFloat(asset.debt) || 0;
-    return (base - debt) * ownership;
-  }
-  const pct = parseFloat(asset.depreciationPct) || 0;
-  const years = assetYearsElapsed(asset, date);
-  return purchaseValue * Math.max(0, 1 - (pct / 100) * years) * ownership;
+  if (!asset || isAssetSoldOn(asset, date)) return 0;
+  if (asset.purchaseDate && date && date < asset.purchaseDate) return 0;
+  return (assetFullValue(asset, date) - assetMortgage(asset)) * assetOwnershipShare(asset);
 }
 
 function assetCostValue(asset) {
   return asset ? (parseFloat(asset.purchaseValue) || 0) : 0;
 }
 
+// Owned cost basis: the owned share of the purchase value, net of the mortgage
+function assetOwnedCost(asset) {
+  return (assetCostValue(asset) - assetMortgage(asset)) * assetOwnershipShare(asset);
+}
+
+// Realized profit or loss on the owned share, once sold
 function assetRealizedPL(asset) {
   if (!asset || !asset.sold) return null;
-  return (parseFloat(asset.saleValue) || 0) - (parseFloat(asset.purchaseValue) || 0);
+  return ((parseFloat(asset.saleValue) || 0) - assetCostValue(asset)) * assetOwnershipShare(asset);
 }
 
 function assetAccountMetrics(assets, date, rateFor) {
@@ -176,23 +223,17 @@ function assetAccountMetrics(assets, date, rateFor) {
   let count = 0;
   let soldCount = 0;
   let realized = 0;
-  (assets || []).forEach(a => {
-    const r = rateFor ? rateFor(a.currency || 'CHF', date) : 1;
-    if (a.sold) {
+  (assets || []).forEach(asset => {
+    const rate = rateFor ? rateFor(asset.currency || 'CHF', date) : 1;
+    if (isAssetSoldOn(asset, date)) {
       soldCount++;
-      realized += (assetRealizedPL(a) || 0) * r;
+      realized += (assetRealizedPL(asset) || 0) * rate;
       return;
     }
+    if (asset.purchaseDate && date && date < asset.purchaseDate) return;
     count++;
-    value += assetCurrentValue(a, date) * r;
-    const isRe = a.accountType === 'Real Estate' || a.assetType === 'Real Estate';
-    if (isRe) {
-      const ownership = (parseFloat(a.ownershipPct) || 100) / 100;
-      const debt = parseFloat(a.debt) || 0;
-      cost += ((parseFloat(a.purchaseValue) || 0) - debt) * ownership * r;
-    } else {
-      cost += assetCostValue(a) * r;
-    }
+    value += assetCurrentValue(asset, date) * rate;
+    cost += assetOwnedCost(asset) * rate;
   });
   return { value, cost, count, soldCount, realized, pl: value - cost };
 }

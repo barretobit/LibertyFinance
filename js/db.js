@@ -17,7 +17,7 @@ const DB = (() => {
   let adapter = null;
   let loaded = false;
   let loadPromise = null;
-  let marketWrite = Promise.resolve();
+  let writeQueue = Promise.resolve();
   let backedUp = false;
 
   async function getAdapter() {
@@ -25,49 +25,69 @@ const DB = (() => {
     return adapter;
   }
 
-  async function loadMarket() {
-    const a = await getAdapter();
-    let content = null;
-    try { content = await a.read('market.json'); } catch (e) { content = null; }
-    if (content) {
-      try { market = JSON.parse(content); } catch (e) { market = null; }
+  // An existing data file that cannot be parsed stops the load: carrying on
+  // with empty data would let the next save overwrite the damaged file.
+  function damagedFileError(fileName) {
+    const error = new Error('COULD NOT OPEN ' + fileName + ': THE FILE IS DAMAGED (NOT VALID JSON). IT WAS LEFT UNTOUCHED.');
+    error.name = 'DamagedFileError';
+    return error;
+  }
+
+  function parseDataFile(fileName, content) {
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (error) {
+      throw damagedFileError(fileName);
     }
-    if (!market) market = { exchangeRates: [], metalPrices: [] };
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw damagedFileError(fileName);
+    return parsed;
+  }
+
+  async function loadMarket() {
+    const storageAdapter = await getAdapter();
+    const content = await storageAdapter.read('market.json');
+    market = content ? parseDataFile('market.json', content) : { exchangeRates: [], metalPrices: [] };
     market.exchangeRates = market.exchangeRates || [];
     market.metalPrices = market.metalPrices || [];
   }
 
-  // Serialize market writes so a later mutation is always written after earlier ones.
-  // Payload is captured at call time, so the final write reflects all prior mutations.
-  function saveMarket() {
-    const payload = JSON.stringify(market);
-    marketWrite = marketWrite.then(async () => {
-      const a = await getAdapter();
-      await a.write('market.json', payload);
+  // Every file write goes through one queue, so an older snapshot can never
+  // land after a newer one. The content is captured when the write is queued.
+  // A failed write must not block the writes queued behind it.
+  function queueWrite(fileName, content) {
+    const write = writeQueue.catch(() => {}).then(async () => {
+      const storageAdapter = await getAdapter();
+      await storageAdapter.write(fileName, content);
     });
-    return marketWrite;
+    writeQueue = write;
+    return write;
+  }
+
+  function saveMarket() {
+    return queueWrite('market.json', JSON.stringify(market));
   }
 
   async function doLoad() {
-    const a = await getAdapter();
+    const storageAdapter = await getAdapter();
 
-    let content = null;
-    if (DATA_FILE) {
-      content = await a.read(DATA_FILE);
-    }
-    if (content == null) {
-      // File mode, first visit of this profile: the file was opened via the picker.
-      const pending = Storage.consumePendingOpen();
-      if (pending && pending.name === DATA_FILE) {
-        content = pending.content;
-        // Seed the mirror so the profile survives a reload before the first edit.
-        try { await a.write(DATA_FILE, content); } catch (e) { /* non-fatal */ }
+    const browserCopy = DATA_FILE ? await storageAdapter.read(DATA_FILE) : null;
+    // File mode: a file the user just picked with OPEN PROFILE FILE wins over the
+    // copy this browser kept from an earlier visit.
+    const pendingFile = Storage.consumePendingOpen();
+    const pickedContent = storageAdapter.kind === 'classic' && pendingFile && pendingFile.name === DATA_FILE ? pendingFile.content : null;
+    const content = pickedContent != null ? pickedContent : browserCopy;
+    data = content ? parseDataFile(DATA_FILE, content) : {};
+    if (pickedContent != null && pickedContent !== browserCopy) {
+      // The browser copy may hold edits never saved with SAVE FILE: hand it to
+      // the user as a download before it is replaced.
+      if (browserCopy != null) {
+        Storage.download(DATA_FILE.replace(/\.json$/i, '') + '-browser-copy-' + Storage.timestamp() + '.json', browserCopy);
       }
+      // Store the picked file so the profile survives a reload before the first edit.
+      try { await storageAdapter.write(DATA_FILE, pickedContent); } catch (error) { /* non-fatal */ }
     }
-    if (content) {
-      try { data = JSON.parse(content); } catch (e) { data = null; }
-    }
-    data = Object.assign(EMPTY(), data || {});
+    data = Object.assign(EMPTY(), data);
     data.custodians = data.custodians || [];
     data.portfolios = data.portfolios || [];
     data.accounts = data.accounts || [];
@@ -83,11 +103,11 @@ const DB = (() => {
     // Estate handling) can rely on it even for assets created before the field
     // existed.
     const accountById = {};
-    (data.accounts || []).forEach(a => { accountById[a.id] = a; });
+    (data.accounts || []).forEach(account => { accountById[account.id] = account; });
     (data.assets || []).forEach(asset => {
       if (!asset.accountType && !asset.assetType && asset.accountId != null) {
-        const acc = accountById[asset.accountId];
-        if (acc && acc.accountType) asset.accountType = acc.accountType;
+        const account = accountById[asset.accountId];
+        if (account && account.accountType) asset.accountType = account.accountType;
       }
     });
 
@@ -95,11 +115,11 @@ const DB = (() => {
 
     // One-time migration: move legacy rates stored in the profile file into the shared market file
     if (Array.isArray(data.exchangeRates) && data.exchangeRates.length) {
-      const byDate = {};
-      [...market.exchangeRates, ...data.exchangeRates].forEach(r => {
-        if (r && r.date) byDate[r.date] = r.rates;
+      const ratesByDate = {};
+      [...market.exchangeRates, ...data.exchangeRates].forEach(rateEntry => {
+        if (rateEntry && rateEntry.date) ratesByDate[rateEntry.date] = rateEntry.rates;
       });
-      market.exchangeRates = Object.keys(byDate).sort().map(date => ({ date, rates: byDate[date] }));
+      market.exchangeRates = Object.keys(ratesByDate).sort().map(date => ({ date, rates: ratesByDate[date] }));
       await saveMarket();
     }
     delete data.exchangeRates;
@@ -107,7 +127,7 @@ const DB = (() => {
     // Light auto-backup once per session.
     if (DATA_FILE && !backedUp) {
       backedUp = true;
-      try { await a.backup(DATA_FILE, JSON.stringify(data, null, 2)); } catch (e) { /* non-fatal */ }
+      try { await storageAdapter.backup(DATA_FILE, JSON.stringify(data, null, 2)); } catch (error) { /* non-fatal */ }
     }
 
     loaded = true;
@@ -125,9 +145,34 @@ const DB = (() => {
     return loadPromise;
   }
 
-  async function persist() {
-    const a = await getAdapter();
-    if (DATA_FILE) await a.write(DATA_FILE, JSON.stringify(data));
+  // Inside batch() saves only mark the profile as changed; the batch writes it once at the end
+  let batchDepth = 0;
+  let batchHasChanges = false;
+
+  function persist() {
+    if (!DATA_FILE) return Promise.resolve();
+    if (batchDepth > 0) {
+      batchHasChanges = true;
+      return Promise.resolve();
+    }
+    return queueWrite(DATA_FILE, JSON.stringify(data));
+  }
+
+  // Runs `work` and writes the profile file once afterwards, however many records
+  // it changed (e.g. deleting an account with hundreds of transactions).
+  // Batches can nest; the outermost one writes. Changes are written even when
+  // `work` fails halfway, as they would have been without a batch.
+  async function batch(work) {
+    batchDepth++;
+    try {
+      return await work();
+    } finally {
+      batchDepth--;
+      if (batchDepth === 0 && batchHasChanges) {
+        batchHasChanges = false;
+        await persist();
+      }
+    }
   }
 
   async function open() {
@@ -217,11 +262,6 @@ const DB = (() => {
     await saveMarket();
   }
 
-  async function clearAll() {
-    data = EMPTY();
-    await persist();
-  }
-
   async function exportAll() {
     if (!loaded) await load();
     return { ...data, exportedAt: new Date().toISOString() };
@@ -247,18 +287,13 @@ const DB = (() => {
   // so the user keeps a real file on disk.
   async function saveFile() {
     await persist();
-    const a = await getAdapter();
-    if (a.kind === 'classic') {
+    const storageAdapter = await getAdapter();
+    if (storageAdapter.kind === 'classic') {
       Storage.download(DATA_FILE, JSON.stringify(data, null, 2));
       return 'classic';
     }
     return 'dir';
   }
 
-  async function getMode() {
-    const a = await getAdapter();
-    return a.kind;
-  }
-
-  return { open, getAll, getById, getByIndex, add, put, del, clearAll, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, saveFile, getMode, get currentFile() { return DATA_FILE || ''; } };
+  return { open, batch, getAll, getById, getByIndex, add, put, del, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, saveFile, get currentFile() { return DATA_FILE || ''; } };
 })();

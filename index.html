@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Liberty Finance</title>
     <link rel="icon" type="image/png" href="logo.png" />
-    <link rel="stylesheet" href="css/style.css?v=44" />
+    <link rel="stylesheet" href="css/style.css?v=45" />
   </head>
   <body>
     <div id="page-landing">
@@ -132,7 +132,8 @@
       </div>
     </div>
 
-    <script src="js/storage.js?v=3"></script>
+    <script src="js/storage.js?v=6"></script>
+    <script src="js/utils.js?v=31"></script>
     <script>
       const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
       const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { mainCurrency: 'CHF', borderRadius: 10, accentColor: '#33ff33' } };
@@ -239,11 +240,6 @@
         if (e.target === e.currentTarget) closeVersions();
       });
 
-      function escapeHtml(text) {
-        const div = document.createElement("div");
-        div.textContent = text;
-        return div.innerHTML;
-      }
 
       function parseVersions(text) {
         const entries = [];
@@ -355,12 +351,12 @@
           }
           empty.style.display = "none";
 
-          files.forEach((f) => {
+          files.forEach((file) => {
             const row = document.createElement("div");
             row.className = "file-row";
-            row.dataset.file = f.name;
-            if (f.name === selected) row.classList.add("selected");
-            row.innerHTML = '<div class="file-info">' + '<span class="file-name">' + f.name.replace(/\.json$/i, "").toUpperCase() + "</span>" + '<span class="file-meta">' + formatSize(f.size) + " &middot; " + formatModified(f.modified) + "</span>" + "</div>" + '<button class="file-enter">ENTER</button>';
+            row.dataset.file = file.name;
+            if (file.name === selected) row.classList.add("selected");
+            row.innerHTML = '<div class="file-info">' + '<span class="file-name">' + escapeHtml(file.name.replace(/\.json$/i, "").toUpperCase()) + "</span>" + '<span class="file-meta">' + formatSize(file.size) + " &middot; " + formatModified(file.modified) + "</span>" + "</div>" + '<button class="file-enter">ENTER</button>';
             list.appendChild(row);
           });
 
@@ -458,6 +454,9 @@
         } else {
           statusEl().textContent = "FOLDER MODE — PICK YOUR DATA FOLDER";
         }
+        // Shown last so the connection status above does not hide it.
+        const openError = Storage.consumeOpenError();
+        if (openError) statusEl().textContent = openError;
       }
 
       init();

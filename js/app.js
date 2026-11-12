@@ -5,29 +5,32 @@ const App = {
   currentAccId: null,
   _modals: {},
   _charts: {},
+  _saveInProgress: false,
 
   async init() {
     const file = new URLSearchParams(window.location.search).get("file");
     if (!file) {
-      const last = localStorage.getItem("liberty-finance-last-file");
-      window.location.replace(last ? "app.html?file=" + encodeURIComponent(last) : "index.html");
+      const lastFile = localStorage.getItem(Storage.LAST_FILE_KEY);
+      window.location.replace(lastFile ? "app.html?file=" + encodeURIComponent(lastFile) : "index.html");
       return;
     }
 
-    const navProfile = document.getElementById("nav-profile");
-    if (navProfile) navProfile.textContent = file.replace(/\.json$/i, "");
+    const profileNameElement = document.getElementById("nav-profile");
+    if (profileNameElement) profileNameElement.textContent = file.replace(/\.json$/i, "");
 
     try {
       await DB.open();
-    } catch (e) {
+    } catch (error) {
       // Storage not connected (e.g. folder permission revoked) — back to the picker.
+      // A damaged file is reported there; the picker page handles reconnecting itself.
+      if (error && error.name === "DamagedFileError") Storage.setOpenError(error.message);
       window.location.replace("index.html");
       return;
     }
 
     try {
       await this._recomputeAllBalances();
-    } catch (e) {
+    } catch (error) {
       /* non-fatal */
     }
 
@@ -40,12 +43,12 @@ const App = {
     })();
 
     (async () => {
-      const toastEl = document.getElementById("toast-msg");
-      const bodyEl = document.getElementById("toast-body");
-      const status = (msg) => {
-        if (!toastEl || !bodyEl) return;
-        bodyEl.textContent = msg;
-        if (!toastEl.classList.contains("show")) bootstrap.Toast.getOrCreateInstance(toastEl).show();
+      const toastElement = document.getElementById("toast-msg");
+      const toastBodyElement = document.getElementById("toast-body");
+      const status = (message) => {
+        if (!toastElement || !toastBodyElement) return;
+        toastBodyElement.textContent = message;
+        if (!toastElement.classList.contains("show")) bootstrap.Toast.getOrCreateInstance(toastElement).show();
       };
       status("SYNCING MARKET DATA...");
       const result = await Randata.sync();
@@ -68,6 +71,7 @@ const App = {
       metal: new bootstrap.Modal(document.getElementById("modal-metal")),
       asset: new bootstrap.Modal(document.getElementById("modal-asset")),
       sellAsset: new bootstrap.Modal(document.getElementById("modal-sell-asset")),
+      assetValuation: new bootstrap.Modal(document.getElementById("modal-asset-valuation")),
       income: new bootstrap.Modal(document.getElementById("modal-income")),
       expense: new bootstrap.Modal(document.getElementById("modal-expense")),
       debt: new bootstrap.Modal(document.getElementById("modal-debt")),
@@ -83,19 +87,21 @@ const App = {
 
   route() {
     const hash = window.location.hash.slice(1) || "dashboard";
-    const [page, qs] = hash.includes("?") ? hash.split("?") : [hash, ""];
-    const params = new URLSearchParams(qs);
+    const [page, queryString] = hash.includes("?") ? hash.split("?") : [hash, ""];
+    const params = new URLSearchParams(queryString);
 
-    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+    document.querySelectorAll(".page").forEach((pageElement) => pageElement.classList.remove("active"));
 
     const target = document.getElementById("page-" + page);
     if (target) {
       target.classList.add("active");
 
-      Object.values(this._charts).forEach((c) => {
+      Object.values(this._charts).forEach((chart) => {
         try {
-          c.destroy();
-        } catch (e) {}
+          chart.destroy();
+        } catch (error) {
+          /* already destroyed */
+        }
       });
       this._charts = {};
 
@@ -277,112 +283,111 @@ const App = {
     const title = document.getElementById("modal-portfolio-title");
     const idField = document.getElementById("portfolio-id");
     const nameField = document.getElementById("portfolio-name");
-    const descField = document.getElementById("portfolio-desc");
-    const deleteBtn = document.getElementById("portfolio-delete-btn");
-    if (deleteBtn) deleteBtn.style.display = editId ? "" : "none";
+    const descriptionField = document.getElementById("portfolio-desc");
+    const deleteButton = document.getElementById("portfolio-delete-btn");
+    if (deleteButton) deleteButton.style.display = editId ? "" : "none";
     if (editId) {
       title.textContent = "EDIT PORTFOLIO";
-      DB.getById("portfolios", editId).then((p) => {
-        if (!p) return;
-        idField.value = p.id;
-        nameField.value = p.name || "";
-        descField.value = p.description || "";
+      DB.getById("portfolios", editId).then((portfolio) => {
+        if (!portfolio) return;
+        idField.value = portfolio.id;
+        nameField.value = portfolio.name || "";
+        descriptionField.value = portfolio.description || "";
         this._modals.portfolio.show();
       });
     } else {
       title.textContent = "NEW PORTFOLIO";
       idField.value = "";
       nameField.value = "";
-      descField.value = "";
+      descriptionField.value = "";
       this._modals.portfolio.show();
     }
   },
 
-  async _showAccountModal(pfId, editId) {
+  async _showAccountModal(portfolioId, editId) {
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || "CHF";
     const title = document.getElementById("modal-account-title");
     const idField = document.getElementById("account-id");
-    const pfIdField = document.getElementById("account-pfid");
+    const portfolioIdField = document.getElementById("account-pfid");
     const nameField = document.getElementById("account-name");
     const custodianField = document.getElementById("account-custodian");
     const currencyField = document.getElementById("account-currency");
     const notesField = document.getElementById("account-notes");
-    const trackPerfField = document.getElementById("account-track-perf");
-    const includeNwField = document.getElementById("account-include-nw");
-    const includeLiqField = document.getElementById("account-include-liq");
+    const trackPerformanceField = document.getElementById("account-track-perf");
+    const includeInNetWorthField = document.getElementById("account-include-nw");
+    const includeInLiquidField = document.getElementById("account-include-liq");
     const typeField = document.getElementById("account-type");
     const metalField = document.getElementById("account-metal");
-    const qtyField = document.getElementById("account-qty");
-    const pmFields = document.getElementById("pm-fields");
+    const quantityField = document.getElementById("account-qty");
+    const preciousMetalFields = document.getElementById("pm-fields");
     const startingFields = document.getElementById("starting-value-fields");
     const startingValueField = document.getElementById("account-starting-value");
-    const startingContribField = document.getElementById("account-starting-contrib");
+    const startingContributionField = document.getElementById("account-starting-contrib");
     const startingDateField = document.getElementById("account-starting-date");
     const startingSymbol = document.getElementById("account-starting-symbol");
-    const contribSymbol = document.getElementById("account-contrib-symbol");
-    const deleteBtn = document.getElementById("account-delete-btn");
-    if (deleteBtn) deleteBtn.style.display = editId ? "" : "none";
+    const contributionSymbol = document.getElementById("account-contrib-symbol");
+    const deleteButton = document.getElementById("account-delete-btn");
+    if (deleteButton) deleteButton.style.display = editId ? "" : "none";
 
     function toggleAccountTypeFields() {
-      const t = typeField.value;
-      pmFields.style.display = t === "Precious Metal" ? "block" : "none";
-      if (startingFields) startingFields.style.display = editId || t === "Tangible Asset" || t === "Real Estate" ? "none" : "block";
+      const accountType = typeField.value;
+      preciousMetalFields.style.display = accountType === ACCOUNT_TYPE.preciousMetal ? "block" : "none";
+      // A starting value only makes sense for new accounts that are not valued from assets
+      const hasStartingValue = !editId && accountType !== ACCOUNT_TYPE.tangibleAsset && accountType !== ACCOUNT_TYPE.realEstate;
+      if (startingFields) startingFields.style.display = hasStartingValue ? "block" : "none";
     }
     typeField.onchange = toggleAccountTypeFields;
 
     function updateStartingSymbol() {
       if (startingSymbol) startingSymbol.textContent = currencyField.value || mainCurrency;
-      if (contribSymbol) contribSymbol.textContent = currencyField.value || mainCurrency;
+      if (contributionSymbol) contributionSymbol.textContent = currencyField.value || mainCurrency;
     }
     currencyField.onchange = updateStartingSymbol;
 
-    // populate custodians
     DB.getAll("custodians").then((custodians) => {
-      custodianField.innerHTML = '<option value="">— SELECT —</option>' + custodians.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      custodianField.innerHTML = '<option value="">— SELECT —</option>' + custodians.map((custodian) => `<option value="${Number(custodian.id)}">${escapeHtml(custodian.name)}</option>`).join("");
     });
-
-    // populate currencies
-    currencyField.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}">${c.code} - ${c.symbol}</option>`).join("");
+    currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
 
     if (editId) {
       title.textContent = "EDIT ACCOUNT";
-      DB.getById("accounts", editId).then((a) => {
-        if (!a) return;
-        idField.value = a.id;
-        pfIdField.value = a.portfolioId;
-        nameField.value = a.name || "";
-        custodianField.value = a.custodianId || "";
-        currencyField.value = a.currency || "CHF";
-        notesField.value = a.notes || "";
-        trackPerfField.checked = a.trackPerformance !== false;
-        includeNwField.checked = a.includeInNetWorth !== false;
-        includeLiqField.checked = a.includeInLiquidNetWorth !== false;
-        typeField.value = a.accountType || "Cash Account";
-        metalField.value = a.metalType || "Gold";
-        qtyField.value = a.quantity || 0;
+      DB.getById("accounts", editId).then((account) => {
+        if (!account) return;
+        idField.value = account.id;
+        portfolioIdField.value = account.portfolioId;
+        nameField.value = account.name || "";
+        custodianField.value = account.custodianId || "";
+        currencyField.value = account.currency || "CHF";
+        notesField.value = account.notes || "";
+        trackPerformanceField.checked = account.trackPerformance !== false;
+        includeInNetWorthField.checked = account.includeInNetWorth !== false;
+        includeInLiquidField.checked = account.includeInLiquidNetWorth !== false;
+        typeField.value = account.accountType || ACCOUNT_TYPE.cash;
+        metalField.value = account.metalType || "Gold";
+        quantityField.value = account.quantity || 0;
         toggleAccountTypeFields();
         startingValueField.value = "";
-        startingContribField.value = "";
+        startingContributionField.value = "";
         this._modals.account.show();
       });
     } else {
       title.textContent = "NEW ACCOUNT";
       idField.value = "";
-      pfIdField.value = pfId || "";
+      portfolioIdField.value = portfolioId || "";
       nameField.value = "";
       custodianField.value = "";
       currencyField.value = mainCurrency;
       notesField.value = "";
-      trackPerfField.checked = true;
-      includeNwField.checked = true;
-      includeLiqField.checked = true;
-      typeField.value = "Cash Account";
+      trackPerformanceField.checked = true;
+      includeInNetWorthField.checked = true;
+      includeInLiquidField.checked = true;
+      typeField.value = ACCOUNT_TYPE.cash;
       metalField.value = "Gold";
-      qtyField.value = 0;
+      quantityField.value = 0;
       toggleAccountTypeFields();
       startingValueField.value = "";
-      startingContribField.value = "";
+      startingContributionField.value = "";
       startingDateField.value = todayStr();
       updateStartingSymbol();
       this._modals.account.show();
@@ -392,173 +397,156 @@ const App = {
   _showTxModal(type, accountId) {
     const title = document.getElementById("modal-tx-title");
     const typeField = document.getElementById("tx-type");
-    const accIdField = document.getElementById("tx-account-id");
+    const accountIdField = document.getElementById("tx-account-id");
     const amountField = document.getElementById("tx-amount");
     const notesField = document.getElementById("tx-notes");
     const dateField = document.getElementById("tx-date");
-    const label = document.getElementById("tx-amount-label");
-    const symbol = document.getElementById("tx-currency-symbol");
+    const currencySymbol = document.getElementById("tx-currency-symbol");
 
     typeField.value = type;
-    accIdField.value = accountId;
+    accountIdField.value = accountId;
     amountField.value = "";
     notesField.value = "";
     dateField.value = todayStr();
-
     title.textContent = type === "deposit" ? "DEPOSIT" : "WITHDRAWAL";
 
-    // get account currency
-    DB.getById("accounts", accountId).then((a) => {
-      symbol.textContent = a ? a.currency || "CHF" : "CHF";
+    DB.getById("accounts", accountId).then((account) => {
+      currencySymbol.textContent = account ? account.currency || "CHF" : "CHF";
     });
 
     this._modals.transaction.show();
   },
 
   _showValuationModal(accountId, isOpening) {
-    const accIdField = document.getElementById("val-account-id");
+    const accountIdField = document.getElementById("val-account-id");
     const amountField = document.getElementById("val-amount");
-    const priceGramField = document.getElementById("val-price-gram");
-    const priceGramGroup = document.getElementById("val-price-gram-group");
-    const pgSymbol = document.getElementById("val-pg-currency");
+    const pricePerGramField = document.getElementById("val-price-gram");
+    const pricePerGramGroup = document.getElementById("val-price-gram-group");
+    const pricePerGramSymbol = document.getElementById("val-pg-currency");
     const notesField = document.getElementById("val-notes");
     const dateField = document.getElementById("val-date");
-    const symbol = document.getElementById("val-currency-symbol");
-    const titleEl = document.getElementById("modal-val-title");
+    const currencySymbol = document.getElementById("val-currency-symbol");
+    const titleElement = document.getElementById("modal-val-title");
 
-    accIdField.value = accountId;
+    accountIdField.value = accountId;
     amountField.value = "";
-    priceGramField.value = "";
+    pricePerGramField.value = "";
     notesField.value = "";
     dateField.value = todayStr();
-    if (titleEl) titleEl.textContent = isOpening ? "OPENING VALUE" : "UPDATE VALUE";
+    if (titleElement) titleElement.textContent = isOpening ? "OPENING VALUE" : "UPDATE VALUE";
     this._valOpening = !!isOpening;
 
-    DB.getById("accounts", accountId).then(async (a) => {
-      const cur = a ? a.currency || "CHF" : "CHF";
-      symbol.textContent = cur;
-      pgSymbol.textContent = cur;
+    DB.getById("accounts", accountId).then(async (account) => {
+      const currency = account ? account.currency || "CHF" : "CHF";
+      currencySymbol.textContent = currency;
+      pricePerGramSymbol.textContent = currency;
       if (isOpening) {
         // Opening valuations are recorded for standard accounts; leave the
         // amount empty and pre-fill the marker note.
-        priceGramGroup.style.display = "none";
+        pricePerGramGroup.style.display = "none";
         notesField.value = "OPENING VALUATION";
-      } else if (a && a.accountType === "Precious Metal") {
+      } else if (account && account.accountType === "Precious Metal") {
         // Show price/gram and pre-fill from today's spot price
-        priceGramGroup.style.display = "block";
-        const qty = a.quantity || 0;
-        if (a.pricePerGram) priceGramField.value = a.pricePerGram;
-        const saved = await DB.getMetalPricesForDate(todayStr());
+        pricePerGramGroup.style.display = "block";
+        const quantity = account.quantity || 0;
+        if (account.pricePerGram) pricePerGramField.value = account.pricePerGram;
+        const todaysMetalPrices = await DB.getMetalPricesForDate(todayStr());
         const rateEntries = await DB.getAll("exchangeRates");
-        const spot = metalSpotPerGram(saved, a.metalType, cur, rateEntries, todayStr());
-        if (spot != null) priceGramField.value = spot;
-        if (qty > 0 && parseFloat(priceGramField.value) > 0) {
-          amountField.value = (qty * parseFloat(priceGramField.value)).toFixed(2);
-        } else if (a.currentValue) {
-          amountField.value = a.currentValue;
+        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, currency, rateEntries, todayStr());
+        if (spotPrice != null) pricePerGramField.value = spotPrice;
+        if (quantity > 0 && parseFloat(pricePerGramField.value) > 0) {
+          amountField.value = (quantity * parseFloat(pricePerGramField.value)).toFixed(2);
+        } else if (account.currentValue) {
+          amountField.value = account.currentValue;
         }
       } else {
-        priceGramGroup.style.display = "none";
-        if (a && a.currentValue) amountField.value = a.currentValue;
+        pricePerGramGroup.style.display = "none";
+        if (account && account.currentValue) amountField.value = account.currentValue;
       }
     });
 
     // Auto-compute total = quantity * price/gram
-    const pgHandler = () => {
-      const pg = parseFloat(priceGramField.value);
-      DB.getById("accounts", accountId).then((a) => {
-        const qty = a && a.quantity ? a.quantity : 0;
-        if (pg > 0 && qty > 0) {
-          amountField.value = (pg * qty).toFixed(2);
+    pricePerGramField.oninput = () => {
+      const pricePerGram = parseFloat(pricePerGramField.value);
+      DB.getById("accounts", accountId).then((account) => {
+        const quantity = account && account.quantity ? account.quantity : 0;
+        if (pricePerGram > 0 && quantity > 0) {
+          amountField.value = (pricePerGram * quantity).toFixed(2);
         }
       });
     };
-    priceGramField.oninput = pgHandler;
-
-    this._pickedValDate = "";
-
-    const picker = dateField;
-    const handler = () => {
-      this._pickedValDate = picker.value;
-    };
-    picker.removeEventListener("change", handler);
-    picker.addEventListener("change", handler);
 
     this._modals.valuation.show();
   },
 
   _showMetalModal(direction, accountId) {
     const title = document.getElementById("modal-metal-title");
-    const accIdField = document.getElementById("metal-account-id");
-    const dirField = document.getElementById("metal-direction");
-    const qtyField = document.getElementById("metal-qty");
+    const accountIdField = document.getElementById("metal-account-id");
+    const directionField = document.getElementById("metal-direction");
+    const quantityField = document.getElementById("metal-qty");
     const priceField = document.getElementById("metal-price");
     const dateField = document.getElementById("metal-date");
     const notesField = document.getElementById("metal-notes");
-    const totalEl = document.getElementById("metal-total");
-    const currentQtyEl = document.getElementById("metal-current-qty");
-    const curSymEl = document.getElementById("metal-currency-symbol");
-    const priceSymEl = document.getElementById("metal-price-symbol");
+    const totalElement = document.getElementById("metal-total");
+    const currentQuantityElement = document.getElementById("metal-current-qty");
+    const currencySymbol = document.getElementById("metal-currency-symbol");
+    const priceSymbol = document.getElementById("metal-price-symbol");
 
-    accIdField.value = accountId;
-    dirField.value = direction === "sell" ? "sell" : "buy";
-    qtyField.value = "";
+    accountIdField.value = accountId;
+    directionField.value = direction === "sell" ? "sell" : "buy";
+    quantityField.value = "";
     priceField.value = "";
     notesField.value = "";
     dateField.value = todayStr();
-    totalEl.textContent = "—";
+    totalElement.textContent = "—";
     title.textContent = direction === "sell" ? "SELL METAL" : "BUY METAL";
 
     this._metalCurrency = "CHF";
 
-    DB.getById("accounts", accountId).then(async (a) => {
-      if (!a) return;
-      this._metalCurrency = a.currency || "CHF";
-      curSymEl.textContent = this._metalCurrency;
-      priceSymEl.textContent = this._metalCurrency + "/g";
-      currentQtyEl.textContent = (a.quantity || 0) + "g " + (a.metalType || "");
-      if (a.pricePerGram) priceField.value = a.pricePerGram;
-      if (direction === "sell") qtyField.value = a.quantity || 0;
-      if (!priceField.value && a.metalType) {
-        const saved = await DB.getMetalPricesForDate(todayStr());
+    DB.getById("accounts", accountId).then(async (account) => {
+      if (!account) return;
+      this._metalCurrency = account.currency || "CHF";
+      currencySymbol.textContent = this._metalCurrency;
+      priceSymbol.textContent = this._metalCurrency + "/g";
+      currentQuantityElement.textContent = (account.quantity || 0) + "g " + (account.metalType || "");
+      if (account.pricePerGram) priceField.value = account.pricePerGram;
+      if (direction === "sell") quantityField.value = account.quantity || 0;
+      if (!priceField.value && account.metalType) {
+        const todaysMetalPrices = await DB.getMetalPricesForDate(todayStr());
         const rateEntries = await DB.getAll("exchangeRates");
-        const spot = metalSpotPerGram(saved, a.metalType, this._metalCurrency, rateEntries, todayStr());
-        if (spot != null) priceField.value = spot;
+        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, this._metalCurrency, rateEntries, todayStr());
+        if (spotPrice != null) priceField.value = spotPrice;
       }
       this._updateMetalTotal();
     });
 
-    const update = () => this._updateMetalTotal();
-    qtyField.oninput = update;
-    priceField.oninput = update;
+    const updateTotal = () => this._updateMetalTotal();
+    quantityField.oninput = updateTotal;
+    priceField.oninput = updateTotal;
 
     this._modals.metal.show();
   },
 
   _updateMetalTotal() {
-    const qty = parseFloat(document.getElementById("metal-qty").value);
-    const price = parseFloat(document.getElementById("metal-price").value);
-    const totalEl = document.getElementById("metal-total");
-    if (qty > 0 && price > 0) {
-      totalEl.textContent = formatCurrency(qty * price, this._metalCurrency);
-    } else {
-      totalEl.textContent = "—";
-    }
+    const quantity = parseFloat(document.getElementById("metal-qty").value);
+    const pricePerGram = parseFloat(document.getElementById("metal-price").value);
+    const totalElement = document.getElementById("metal-total");
+    totalElement.textContent = quantity > 0 && pricePerGram > 0 ? formatCurrency(quantity * pricePerGram, this._metalCurrency) : "—";
   },
 
   async saveMetal() {
     const accountId = parseInt(document.getElementById("metal-account-id").value);
     const direction = document.getElementById("metal-direction").value;
-    const qty = parseFloat(document.getElementById("metal-qty").value);
-    const price = parseFloat(document.getElementById("metal-price").value);
+    const quantity = parseFloat(document.getElementById("metal-qty").value);
+    const pricePerGram = parseFloat(document.getElementById("metal-price").value);
     const date = document.getElementById("metal-date").value || todayStr();
     const notes = document.getElementById("metal-notes").value.trim();
 
-    if (!qty || qty <= 0) {
+    if (!quantity || quantity <= 0) {
       this.toast("ENTER A VALID QUANTITY");
       return;
     }
-    if (!price || price <= 0) {
+    if (!pricePerGram || pricePerGram <= 0) {
       this.toast("ENTER A VALID PRICE");
       return;
     }
@@ -569,33 +557,25 @@ const App = {
       return;
     }
 
-    const currentQty = account.quantity || 0;
-    if (direction === "sell" && qty > currentQty) {
+    if (direction === "sell" && quantity > (account.quantity || 0)) {
       this.toast("NOT ENOUGH METAL TO SELL");
       return;
     }
 
-    const newQty = direction === "buy" ? currentQty + qty : currentQty - qty;
-    const total = qty * price;
-    const newValue = newQty * price;
-
+    const total = quantity * pricePerGram;
+    // quantityAfter and balanceAfter are filled in by the replay below, which
+    // also places a backdated trade correctly among the later ones.
     await DB.add("transactions", {
       accountId,
       type: direction,
-      quantity: qty,
-      pricePerGram: price,
+      quantity,
+      pricePerGram,
       amount: direction === "buy" ? total : -total,
       date,
       notes,
-      balanceAfter: newValue,
-      quantityAfter: newQty,
       createdAt: nowISO(),
     });
-
-    account.quantity = newQty;
-    account.pricePerGram = price;
-    account.currentValue = newValue;
-    await DB.put("accounts", account);
+    await this._recomputeAccountBalances(accountId);
 
     this._modals.metal.hide();
     this.toast(direction === "buy" ? "METAL PURCHASED" : "METAL SOLD");
@@ -610,8 +590,10 @@ const App = {
     if (title) title.textContent = assetId ? "EDIT ASSET" : "ADD ASSET";
     document.getElementById("asset-id").value = assetId || "";
     document.getElementById("asset-account-id").value = accountId;
-    const curField = document.getElementById("asset-currency");
-    curField.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}">${c.code} - ${c.symbol}</option>`).join("");
+    // Only Real Estate carries a mortgage
+    document.getElementById("asset-debt").closest(".mb-3").style.display = account && account.accountType === "Real Estate" ? "" : "none";
+    const currencyField = document.getElementById("asset-currency");
+    currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
     if (assetId) {
       const asset = await DB.getById("assets", assetId);
       if (asset) {
@@ -620,16 +602,17 @@ const App = {
         document.getElementById("asset-depreciation").value = asset.depreciationPct != null ? asset.depreciationPct : "";
         document.getElementById("asset-ownership").value = asset.ownershipPct != null ? asset.ownershipPct : 100;
         document.getElementById("asset-debt").value = asset.debt != null ? asset.debt : "";
-         document.getElementById("asset-date").value = asset.purchaseDate || todayStr();
-        curField.value = asset.currency || (account && account.currency) || mainCurrency;
+        document.getElementById("asset-date").value = asset.purchaseDate || todayStr();
+        currencyField.value = asset.currency || (account && account.currency) || mainCurrency;
       }
     } else {
       document.getElementById("asset-name").value = "";
       document.getElementById("asset-value").value = "";
       document.getElementById("asset-depreciation").value = "";
+      document.getElementById("asset-ownership").value = 100;
       document.getElementById("asset-debt").value = "";
-       document.getElementById("asset-date").value = todayStr();
-      curField.value = (account && account.currency) || mainCurrency;
+      document.getElementById("asset-date").value = todayStr();
+      currencyField.value = (account && account.currency) || mainCurrency;
     }
     this._modals.asset.show();
   },
@@ -639,9 +622,10 @@ const App = {
     const accountId = parseInt(document.getElementById("asset-account-id").value);
     const name = document.getElementById("asset-name").value.trim();
     const purchaseValue = parseFloat(document.getElementById("asset-value").value);
-const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    const depreciationPct = parseFloat(document.getElementById("asset-depreciation").value) || 0;
-  const ownershipPct = parseFloat(document.getElementById("asset-ownership").value);
-  const ownershipFinal = isNaN(ownershipPct) ? 100 : ownershipPct;
+    const debt = parseFloat(document.getElementById("asset-debt").value) || 0;
+    const depreciationPercent = parseFloat(document.getElementById("asset-depreciation").value) || 0;
+    const ownershipInput = parseFloat(document.getElementById("asset-ownership").value);
+    const ownershipPercent = isNaN(ownershipInput) ? 100 : ownershipInput;
     const purchaseDate = document.getElementById("asset-date").value || todayStr();
     const currency = document.getElementById("asset-currency").value || "CHF";
 
@@ -653,10 +637,16 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       this.toast("ENTER A VALID VALUE");
       return;
     }
-    if (isNaN(depreciationPct) || depreciationPct < -100 || depreciationPct > 100) {
+    if (isNaN(depreciationPercent) || depreciationPercent < -100 || depreciationPercent > 100) {
       this.toast("DEPRECIATION MUST BE BETWEEN -100 AND 100");
       return;
     }
+
+    // Both the edit and the add paths need the account: its type is stamped on
+    // the asset and its value is refreshed after the save.
+    const account = await DB.getById("accounts", accountId);
+    const rateEntries = await DB.getAll("exchangeRates");
+    const rateToAccountCurrency = (assetCurrency, date) => currencyRateTo(rateEntries, assetCurrency || "CHF", (account && account.currency) || "CHF", date);
 
     if (assetId) {
       const asset = await DB.getById("assets", assetId);
@@ -666,36 +656,33 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       }
       asset.name = name;
       asset.purchaseValue = purchaseValue;
-      asset.depreciationPct = depreciationPct;
-      asset.ownershipPct = ownershipFinal;
+      asset.depreciationPct = depreciationPercent;
+      asset.ownershipPct = ownershipPercent;
       asset.purchaseDate = purchaseDate;
       asset.currency = currency;
       asset.debt = debt;
       if (account && account.accountType) asset.accountType = account.accountType;
       await DB.put("assets", asset);
 
-      const account = await DB.getById("accounts", accountId);
+      const assetTransactions = await DB.getByIndex("transactions", "assetId", assetId);
       if (account) {
         const accountAssets = await DB.getByIndex("assets", "accountId", accountId);
-        const rateEntries = await DB.getAll("exchangeRates");
-        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || "CHF", account.currency || "CHF", date);
-        const metrics = assetAccountMetrics(accountAssets, purchaseDate, rateToAcc);
-        const addTx = (await DB.getByIndex("transactions", "assetId", assetId)).find((t) => t.type === "asset-add");
-        if (addTx) {
-          addTx.amount = purchaseValue;
-          addTx.date = purchaseDate;
-          addTx.notes = "ASSET ADDED: " + name;
-          addTx.balanceAfter = metrics.value;
-          await DB.put("transactions", addTx);
+        const metrics = assetAccountMetrics(accountAssets, purchaseDate, rateToAccountCurrency);
+        const addTransaction = assetTransactions.find((transaction) => transaction.type === "asset-add");
+        if (addTransaction) {
+          addTransaction.amount = purchaseValue;
+          addTransaction.date = purchaseDate;
+          addTransaction.notes = "ASSET ADDED: " + name;
+          addTransaction.balanceAfter = metrics.value;
+          await DB.put("transactions", addTransaction);
         }
-        account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
-        await DB.put("accounts", account);
+        await this._refreshAssetAccountValue(accountId);
       }
       if (asset.sold) {
-        const sellTx = (await DB.getByIndex("transactions", "assetId", assetId)).find((t) => t.type === "asset-sell");
-        if (sellTx && sellTx.notes !== "ASSET SOLD: " + name) {
-          sellTx.notes = "ASSET SOLD: " + name;
-          await DB.put("transactions", sellTx);
+        const sellTransaction = assetTransactions.find((transaction) => transaction.type === "asset-sell");
+        if (sellTransaction && sellTransaction.notes !== "ASSET SOLD: " + name) {
+          sellTransaction.notes = "ASSET SOLD: " + name;
+          await DB.put("transactions", sellTransaction);
         }
       }
 
@@ -705,27 +692,35 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       return;
     }
 
-    const asset = { accountId, name, purchaseValue, debt, depreciationPct, ownershipPct: ownershipFinal, purchaseDate, currency, accountType: account && account.accountType ? account.accountType : null, sold: false, saleValue: null, saleDate: null };
-    const newId = await DB.add("assets", asset);
+    const asset = {
+      accountId,
+      name,
+      purchaseValue,
+      debt,
+      depreciationPct: depreciationPercent,
+      ownershipPct: ownershipPercent,
+      purchaseDate,
+      currency,
+      accountType: account && account.accountType ? account.accountType : null,
+      sold: false,
+      saleValue: null,
+      saleDate: null,
+    };
+    const newAssetId = await DB.add("assets", asset);
 
-    const account = await DB.getById("accounts", accountId);
     if (account) {
       const accountAssets = await DB.getByIndex("assets", "accountId", accountId);
-      const rateEntries = await DB.getAll("exchangeRates");
-      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || "CHF", account.currency || "CHF", date);
-      const metrics = assetAccountMetrics(accountAssets, purchaseDate, rateToAcc);
       await DB.add("transactions", {
         accountId,
-        assetId: newId,
+        assetId: newAssetId,
         type: "asset-add",
         amount: purchaseValue,
         date: purchaseDate,
         notes: "ASSET ADDED: " + name,
-        balanceAfter: metrics.value,
+        balanceAfter: assetAccountMetrics(accountAssets, purchaseDate, rateToAccountCurrency).value,
         createdAt: nowISO(),
       });
-      account.currentValue = metrics.value;
-      await DB.put("accounts", account);
+      await this._refreshAssetAccountValue(accountId);
     }
 
     this._modals.asset.hide();
@@ -773,8 +768,7 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     if (account) {
       const accountAssets = await DB.getByIndex("assets", "accountId", asset.accountId);
       const rateEntries = await DB.getAll("exchangeRates");
-      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || "CHF", account.currency || "CHF", date);
-      const metrics = assetAccountMetrics(accountAssets, saleDate, rateToAcc);
+      const rateToAccountCurrency = (assetCurrency, date) => currencyRateTo(rateEntries, assetCurrency || "CHF", account.currency || "CHF", date);
       await DB.add("transactions", {
         accountId: asset.accountId,
         assetId,
@@ -782,11 +776,10 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
         amount: saleValue,
         date: saleDate,
         notes: "ASSET SOLD: " + (asset.name || ""),
-        balanceAfter: metrics.value,
+        balanceAfter: assetAccountMetrics(accountAssets, saleDate, rateToAccountCurrency).value,
         createdAt: nowISO(),
       });
-      account.currentValue = metrics.value;
-      await DB.put("accounts", account);
+      await this._refreshAssetAccountValue(asset.accountId);
     }
 
     this._modals.sellAsset.hide();
@@ -801,22 +794,112 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const asset = await DB.getById("assets", id);
     if (!asset) return;
 
-    const txs = await DB.getByIndex("transactions", "assetId", id);
-    for (const tx of txs) {
-      await DB.del("transactions", tx.id);
+    const assetTransactions = await DB.getByIndex("transactions", "assetId", id);
+    for (const transaction of assetTransactions) {
+      await DB.del("transactions", transaction.id);
     }
     await DB.del("assets", id);
-
-    const account = await DB.getById("accounts", asset.accountId);
-    if (account && account.accountType === "Tangible Asset" || account.accountType === "Real Estate") {
-      const accountAssets = await DB.getByIndex("assets", "accountId", asset.accountId);
-      const rateEntries = await DB.getAll("exchangeRates");
-      const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || "CHF", account.currency || "CHF", date);
-      account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
-      await DB.put("accounts", account);
-    }
+    await this._refreshAssetAccountValue(asset.accountId);
 
     this.toast("ASSET DELETED");
+    this.route();
+  },
+
+  // Tangible Asset and Real Estate accounts store today's value of their assets
+  async _refreshAssetAccountValue(accountId) {
+    const account = await DB.getById("accounts", accountId);
+    if (!account) return;
+    const accountAssets = await DB.getByIndex("assets", "accountId", accountId);
+    const rateEntries = await DB.getAll("exchangeRates");
+    const rateToAccountCurrency = (assetCurrency, date) => currencyRateTo(rateEntries, assetCurrency || "CHF", account.currency || "CHF", date);
+    account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAccountCurrency).value;
+    await DB.put("accounts", account);
+  },
+
+  // ==================== REAL ESTATE VALUATIONS ====================
+  // A valuation is the property's full market value (100% ownership, before
+  // the mortgage) on a date; see assetFullValue() in utils.js for how it is used.
+
+  async showAssetValuations(assetId) {
+    const asset = await DB.getById("assets", assetId);
+    if (!asset) return;
+    document.getElementById("asset-valuation-asset-id").value = asset.id;
+    document.getElementById("asset-valuation-name").textContent = asset.name || "—";
+    document.getElementById("asset-valuation-currency").textContent = asset.currency || "CHF";
+    document.getElementById("asset-valuation-value").value = "";
+    document.getElementById("asset-valuation-date").value = todayStr();
+    this._renderAssetValuationList(asset);
+    this._modals.assetValuation.show();
+  },
+
+  _renderAssetValuationList(asset) {
+    const list = document.getElementById("asset-valuation-list");
+    const valuations = (asset.valuations || []).filter((valuation) => isIsoDate(valuation.date)).sort((first, second) => second.date.localeCompare(first.date));
+    list.innerHTML = valuations.length
+      ? valuations
+          .map(
+            (valuation) =>
+              "<tr><td>" +
+              formatDate(valuation.date) +
+              "</td><td>" +
+              formatCurrency(parseFloat(valuation.value) || 0, asset.currency) +
+              '</td><td class="text-end"><a class="tx-link" onclick="App.deleteAssetValuation(this, ' +
+              Number(asset.id) +
+              ", '" +
+              valuation.date +
+              "')\">DELETE</a></td></tr>"
+          )
+          .join("")
+      : '<tr><td colspan="3" class="text-muted">NO VALUATIONS YET: THE PURCHASE VALUE IS USED.</td></tr>';
+  },
+
+  async saveAssetValuation() {
+    const assetId = parseInt(document.getElementById("asset-valuation-asset-id").value);
+    const date = document.getElementById("asset-valuation-date").value;
+    const value = parseFloat(document.getElementById("asset-valuation-value").value);
+
+    if (!isIsoDate(date)) {
+      this.toast("ENTER A VALID DATE");
+      return;
+    }
+    if (isNaN(value) || value < 0) {
+      this.toast("ENTER A VALID VALUE");
+      return;
+    }
+    const asset = await DB.getById("assets", assetId);
+    if (!asset) {
+      this.toast("ASSET NOT FOUND");
+      return;
+    }
+    if (asset.purchaseDate && date < asset.purchaseDate) {
+      this.toast("THE VALUATION DATE IS BEFORE THE PURCHASE DATE");
+      return;
+    }
+
+    // One valuation per date: a new one on the same date replaces the old one
+    asset.valuations = (asset.valuations || []).filter((valuation) => valuation.date !== date).concat({ date, value });
+    await DB.put("assets", asset);
+    await this._refreshAssetAccountValue(asset.accountId);
+
+    this._modals.assetValuation.hide();
+    this.toast("PROPERTY VALUE UPDATED");
+    this.route();
+  },
+
+  // Deleting takes two clicks on the same link, so a stray click cannot remove a
+  // valuation (a confirm dialog cannot open on top of this one).
+  async deleteAssetValuation(link, assetId, date) {
+    if (link.dataset.armed !== "true") {
+      link.dataset.armed = "true";
+      link.textContent = "CLICK AGAIN TO DELETE";
+      return;
+    }
+    const asset = await DB.getById("assets", assetId);
+    if (!asset) return;
+    asset.valuations = (asset.valuations || []).filter((valuation) => valuation.date !== date);
+    await DB.put("assets", asset);
+    await this._refreshAssetAccountValue(asset.accountId);
+    this._renderAssetValuationList(asset);
     this.route();
   },
 
@@ -832,19 +915,19 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || "CHF";
-    currencyField.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}">${c.code} - ${c.symbol}</option>`).join("");
+    currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
 
     if (editId) {
       title.textContent = "EDIT INCOME";
-      DB.getById("incomes", editId).then((inc) => {
-        if (!inc) return;
-        idField.value = inc.id;
-        monthField.value = inc.month || "";
-        sourceField.value = inc.source || "";
-        amountField.value = inc.amount || "";
-        currencyField.value = inc.currency || mainCurrency;
-        dateField.value = inc.date || "";
-        notesField.value = inc.notes || "";
+      DB.getById("incomes", editId).then((income) => {
+        if (!income) return;
+        idField.value = income.id;
+        monthField.value = income.month || "";
+        sourceField.value = income.source || "";
+        amountField.value = income.amount || "";
+        currencyField.value = income.currency || mainCurrency;
+        dateField.value = income.date || "";
+        notesField.value = income.notes || "";
         this._modals.income.show();
       });
     } else {
@@ -874,15 +957,16 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || "CHF";
-    currencyField.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}">${c.code} - ${c.symbol}</option>`).join("");
+    currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
 
-    const curYear = new Date().getFullYear();
+    // This year and the 10 before it
+    const currentYear = new Date().getFullYear();
     yearField.innerHTML = "";
-    for (let y = curYear; y >= curYear - 10; y--) {
-      const opt = document.createElement("option");
-      opt.value = String(y);
-      opt.textContent = String(y);
-      yearField.appendChild(opt);
+    for (let year = currentYear; year >= currentYear - 10; year--) {
+      const option = document.createElement("option");
+      option.value = String(year);
+      option.textContent = String(year);
+      yearField.appendChild(option);
     }
 
     const toggleMonth = () => {
@@ -892,16 +976,16 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
     if (editId) {
       title.textContent = "EDIT EXPENSE";
-      DB.getById("expenses", editId).then((exp) => {
-        if (!exp) return;
-        idField.value = exp.id;
-        textField.value = exp.text || "";
-        amountField.value = exp.amount || "";
-        currencyField.value = exp.currency || mainCurrency;
-        typeField.value = exp.type || "monthly";
-        yearField.value = exp.year || String(curYear);
-        monthField.value = exp.paymentMonth || "";
-        notesField.value = exp.notes || "";
+      DB.getById("expenses", editId).then((expense) => {
+        if (!expense) return;
+        idField.value = expense.id;
+        textField.value = expense.text || "";
+        amountField.value = expense.amount || "";
+        currencyField.value = expense.currency || mainCurrency;
+        typeField.value = expense.type || "monthly";
+        yearField.value = expense.year || String(currentYear);
+        monthField.value = expense.paymentMonth || "";
+        notesField.value = expense.notes || "";
         toggleMonth();
         this._modals.expense.show();
       });
@@ -912,7 +996,7 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       amountField.value = "";
       currencyField.value = mainCurrency;
       typeField.value = "monthly";
-      yearField.value = String(curYear);
+      yearField.value = String(currentYear);
       monthField.value = "";
       notesField.value = "";
       toggleMonth();
@@ -962,7 +1046,7 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const nameField = document.getElementById("goal-name");
     const targetField = document.getElementById("goal-target");
     const orderField = document.getElementById("goal-order");
-    const allocContainer = document.getElementById("goal-allocations");
+    const allocationsContainer = document.getElementById("goal-allocations");
 
     const populate = (goal) => {
       title.textContent = goal ? "EDIT GOAL" : "NEW GOAL";
@@ -970,12 +1054,12 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       nameField.value = goal ? goal.name || "" : "";
       targetField.value = goal ? goal.target || "" : "";
       orderField.value = goal ? (goal.order != null ? goal.order : "") : "";
-      allocContainer.innerHTML = "";
+      allocationsContainer.innerHTML = "";
       const allocations = goal && goal.allocations ? goal.allocations : [];
       if (allocations.length === 0) {
         this.addGoalAllocationRow();
       } else {
-        allocations.forEach((a) => this.addGoalAllocationRow(a.accountId, a.pct));
+        allocations.forEach((allocation) => this.addGoalAllocationRow(allocation.accountId, allocation.pct));
       }
       this._modals.goal.show();
     };
@@ -986,25 +1070,25 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       });
     } else {
       DB.getAll("goals").then((goals) => {
-        const maxOrder = goals.reduce((max, g) => Math.max(max, g.order != null ? g.order : 0), 0);
+        const highestOrder = goals.reduce((highest, goal) => Math.max(highest, goal.order != null ? goal.order : 0), 0);
         populate(null);
-        orderField.value = maxOrder + 1;
+        orderField.value = highestOrder + 1;
       });
     }
   },
 
-  async addGoalAllocationRow(accountId, pct) {
+  async addGoalAllocationRow(accountId, percent) {
     const accounts = await DB.getAll("accounts");
     const container = document.getElementById("goal-allocations");
     const row = document.createElement("div");
     row.className = "d-flex gap-2 mb-2 align-items-center";
-    const opts = accounts.map((a) => `<option value="${a.id}" ${Number(a.id) === Number(accountId) ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("");
+    const accountOptions = accounts.map((account) => `<option value="${Number(account.id)}" ${Number(account.id) === Number(accountId) ? "selected" : ""}>${escapeHtml(account.name)}</option>`).join("");
     row.innerHTML =
       '<select class="form-select form-gta goal-alloc-account" style="flex:1">' +
-      opts +
+      accountOptions +
       "</select>" +
       '<input type="number" min="0" max="100" step="1" class="form-control form-gta goal-alloc-pct" style="width:90px" placeholder="%" value="' +
-      (pct != null ? pct : 100) +
+      escapeHtml(percent != null ? percent : 100) +
       '" />' +
       '<span class="tx-link" style="cursor:pointer" title="USE EARLIER" onclick="App.moveGoalAllocationRow(this, -1)">UP</span>' +
       '<span class="tx-link" style="cursor:pointer" title="USE LATER" onclick="App.moveGoalAllocationRow(this, 1)">DOWN</span>' +
@@ -1012,15 +1096,15 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     container.appendChild(row);
   },
 
-  moveGoalAllocationRow(btn, dir) {
-    const row = btn.parentElement;
+  // Moves an allocation row up (-1) or down (+1): rows higher up are used first
+  moveGoalAllocationRow(link, direction) {
+    const row = link.parentElement;
     const container = row.parentElement;
     const rows = [...container.children];
-    const idx = rows.indexOf(row);
-    const target = idx + dir;
-    if (target < 0 || target >= rows.length) return;
-    if (dir < 0) container.insertBefore(row, rows[target]);
-    else container.insertBefore(rows[target], row);
+    const targetIndex = rows.indexOf(row) + direction;
+    if (targetIndex < 0 || targetIndex >= rows.length) return;
+    if (direction < 0) container.insertBefore(row, rows[targetIndex]);
+    else container.insertBefore(rows[targetIndex], row);
   },
 
   // ==================== SAVE METHODS ====================
@@ -1072,18 +1156,18 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
   async saveAccount() {
     const id = document.getElementById("account-id").value;
-    const pfId = document.getElementById("account-pfid").value;
+    const portfolioId = document.getElementById("account-pfid").value;
     const name = document.getElementById("account-name").value.trim();
     if (!name) {
       this.toast("NAME IS REQUIRED");
       return;
     }
-    if (!pfId) {
+    if (!portfolioId) {
       this.toast("PORTFOLIO ID MISSING");
       return;
     }
     const data = {
-      portfolioId: parseInt(pfId),
+      portfolioId: parseInt(portfolioId),
       name,
       custodianId: parseInt(document.getElementById("account-custodian").value) || null,
       currency: document.getElementById("account-currency").value || "CHF",
@@ -1099,38 +1183,44 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
     const isNew = !id;
     const accountType = document.getElementById("account-type").value;
-    const startingValue = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate" ? parseFloat(document.getElementById("account-starting-value").value) || 0 : 0;
-    const startingContrib = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate" ? parseFloat(document.getElementById("account-starting-contrib").value) || 0 : 0;
+    const hasStartingValue = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate";
+    const startingValue = hasStartingValue ? parseFloat(document.getElementById("account-starting-value").value) || 0 : 0;
+    const startingContribution = hasStartingValue ? parseFloat(document.getElementById("account-starting-contrib").value) || 0 : 0;
     const startingDate = isNew ? document.getElementById("account-starting-date").value || todayStr() : todayStr();
 
-    let existingValue = 0;
     if (id) {
       data.id = parseInt(id);
-      const old = await DB.getById("accounts", parseInt(id));
-      existingValue = old ? old.currentValue || 0 : 0;
-      data.currentValue = existingValue;
-      data.pricePerGram = old ? old.pricePerGram || 0 : 0;
+      const previousAccount = await DB.getById("accounts", data.id);
+      data.currentValue = previousAccount ? previousAccount.currentValue || 0 : 0;
+      data.pricePerGram = previousAccount ? previousAccount.pricePerGram || 0 : 0;
+      // The quantity field is the current holding: a change shifts the quantity
+      // held before the first recorded trade by the same amount.
+      if (previousAccount && previousAccount.openingQuantity != null) {
+        data.openingQuantity = Math.max(0, previousAccount.openingQuantity + (data.quantity - (previousAccount.quantity || 0)));
+      }
       await DB.put("accounts", data);
+      await this._recomputeAccountBalances(data.id);
     } else {
       data.currentValue = 0;
       data.pricePerGram = 0;
+      if (data.accountType === "Precious Metal") data.openingQuantity = data.quantity;
       const accountId = await DB.add("accounts", data);
       if (startingValue > 0) {
         // Opening balance split: contributed portion is a deposit, the rest is opening performance.
-        const isSplit = startingContrib > 0 && startingContrib < startingValue;
+        const isSplit = startingContribution > 0 && startingContribution < startingValue;
         const createdAt = nowISO();
         if (isSplit) {
           await DB.add("transactions", {
             accountId,
             type: "deposit",
-            amount: startingContrib,
+            amount: startingContribution,
             date: startingDate,
             notes: "OPENING CONTRIBUTION",
-            balanceAfter: startingContrib,
+            balanceAfter: startingContribution,
             createdAt,
           });
         }
-        const txData = {
+        const openingValuation = {
           accountId,
           type: "valuation",
           amount: startingValue,
@@ -1141,11 +1231,11 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
           createdAt: isSplit ? nowISO() : createdAt,
         };
         if (data.accountType === "Precious Metal" && (data.quantity || 0) > 0) {
-          const derived = startingValue / data.quantity;
-          data.pricePerGram = derived;
-          txData.pricePerGram = derived;
+          const derivedPricePerGram = startingValue / data.quantity;
+          data.pricePerGram = derivedPricePerGram;
+          openingValuation.pricePerGram = derivedPricePerGram;
         }
-        await DB.add("transactions", txData);
+        await DB.add("transactions", openingValuation);
         data.currentValue = startingValue;
         await DB.put("accounts", data);
         await this._recomputeAccountBalances(accountId);
@@ -1200,7 +1290,7 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const accountId = parseInt(document.getElementById("val-account-id").value);
     const amount = parseFloat(document.getElementById("val-amount").value);
     const notes = document.getElementById("val-notes").value.trim();
-    const date = this._pickedValDate || document.getElementById("val-date").value || todayStr();
+    const date = document.getElementById("val-date").value || todayStr();
     const isOpening = !!this._valOpening;
 
     if (isNaN(amount) || amount < 0) {
@@ -1214,8 +1304,8 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       return;
     }
 
-    const priceGram = parseFloat(document.getElementById("val-price-gram").value);
-    const txData = {
+    const pricePerGram = parseFloat(document.getElementById("val-price-gram").value);
+    const transactionData = {
       accountId,
       type: "valuation",
       amount,
@@ -1224,21 +1314,21 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       balanceAfter: amount,
       createdAt: nowISO(),
     };
-    if (isOpening) txData.opening = true;
+    if (isOpening) transactionData.opening = true;
 
     if (account.accountType === "Precious Metal") {
-      const qty = account.quantity || 0;
-      if (qty > 0) {
-        const derived = priceGram > 0 ? priceGram : amount / qty;
-        if (derived > 0) {
-          account.pricePerGram = derived;
-          txData.pricePerGram = derived;
+      const quantity = account.quantity || 0;
+      if (quantity > 0) {
+        const derivedPricePerGram = pricePerGram > 0 ? pricePerGram : amount / quantity;
+        if (derivedPricePerGram > 0) {
+          account.pricePerGram = derivedPricePerGram;
+          transactionData.pricePerGram = derivedPricePerGram;
         }
       }
-    } else if (priceGram > 0) {
-      txData.pricePerGram = priceGram;
+    } else if (pricePerGram > 0) {
+      transactionData.pricePerGram = pricePerGram;
     }
-    await DB.add("transactions", txData);
+    await DB.add("transactions", transactionData);
     this._valOpening = false;
 
     account.currentValue = amount;
@@ -1409,27 +1499,38 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     this.route();
   },
 
-  async moveGoal(id, dir) {
-    const goals = await DB.getAll("goals");
-    const ordered = goals.sort((a, b) => (a.order != null ? a.order : Infinity) - (b.order != null ? b.order : Infinity) || a.id - b.id);
-    const idx = ordered.findIndex((g) => Number(g.id) === Number(id));
-    if (idx < 0) return;
-    const targetIdx = idx + dir;
-    if (targetIdx < 0 || targetIdx >= ordered.length) return;
+  // Swaps the goal's priority with its neighbour above (-1) or below (+1)
+  async moveGoal(id, direction) {
+    const ordered = Pages._sortGoalsByPriority(await DB.getAll("goals"));
+    const index = ordered.findIndex((goal) => Number(goal.id) === Number(id));
+    if (index < 0) return;
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= ordered.length) return;
 
-    const a = ordered[idx];
-    const b = ordered[targetIdx];
-    const tmpA = a.order != null ? a.order : idx + 1;
-    const tmpB = b.order != null ? b.order : targetIdx + 1;
-    a.order = tmpB;
-    b.order = tmpA;
-    await DB.put("goals", a);
-    await DB.put("goals", b);
+    const goal = ordered[index];
+    const neighbour = ordered[targetIndex];
+    const goalOrder = goal.order != null ? goal.order : index + 1;
+    const neighbourOrder = neighbour.order != null ? neighbour.order : targetIndex + 1;
+    goal.order = neighbourOrder;
+    neighbour.order = goalOrder;
+    await DB.put("goals", goal);
+    await DB.put("goals", neighbour);
     this.toast("GOAL REORDERED");
     this.route();
   },
 
   // ==================== DELETE ====================
+
+  // Removes an account with all its transactions and assets
+  async _deleteAccountWithHistory(accountId) {
+    for (const transaction of await DB.getByIndex("transactions", "accountId", accountId)) {
+      await DB.del("transactions", transaction.id);
+    }
+    for (const asset of await DB.getByIndex("assets", "accountId", accountId)) {
+      await DB.del("assets", asset.id);
+    }
+    await DB.del("accounts", accountId);
+  },
 
   async deleteAccount(id) {
     id = parseInt(id);
@@ -1437,16 +1538,7 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const confirmed = await this.confirm("DELETE ACCOUNT?", "This will also delete all transactions for this account. Are you sure?");
     if (!confirmed) return;
     this._modals.account.hide();
-
-    const txs = await DB.getByIndex("transactions", "accountId", id);
-    for (const tx of txs) {
-      await DB.del("transactions", tx.id);
-    }
-    const assets = await DB.getByIndex("assets", "accountId", id);
-    for (const asset of assets) {
-      await DB.del("assets", asset.id);
-    }
-    await DB.del("accounts", id);
+    await this._deleteAccountWithHistory(id);
     this.toast("ACCOUNT DELETED");
     this.navigate(this.currentPfId ? "portfolio-detail?id=" + this.currentPfId : "portfolios");
   },
@@ -1454,22 +1546,13 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
   async deletePortfolio(id) {
     id = parseInt(id);
     if (!id) return;
-    const accounts = (await DB.getAll("accounts")).filter((a) => Number(a.portfolioId) === Number(id));
-    const msg = accounts.length > 0 ? "This will also delete " + pluralize(accounts.length, "ACCOUNT") + " with all their transactions. Are you sure?" : "Remove this portfolio?";
-    const confirmed = await this.confirm("DELETE PORTFOLIO?", msg);
+    const accounts = (await DB.getAll("accounts")).filter((account) => Number(account.portfolioId) === Number(id));
+    const message = accounts.length > 0 ? "This will also delete " + pluralize(accounts.length, "ACCOUNT") + " with all their transactions. Are you sure?" : "Remove this portfolio?";
+    const confirmed = await this.confirm("DELETE PORTFOLIO?", message);
     if (!confirmed) return;
     this._modals.portfolio.hide();
-
-    for (const acc of accounts) {
-      const txs = await DB.getByIndex("transactions", "accountId", acc.id);
-      for (const tx of txs) {
-        await DB.del("transactions", tx.id);
-      }
-      const assets = await DB.getByIndex("assets", "accountId", acc.id);
-      for (const asset of assets) {
-        await DB.del("assets", asset.id);
-      }
-      await DB.del("accounts", acc.id);
+    for (const account of accounts) {
+      await this._deleteAccountWithHistory(account.id);
     }
     await DB.del("portfolios", id);
     this.toast("PORTFOLIO DELETED");
@@ -1479,41 +1562,41 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
   // ==================== EDIT TRANSACTION ====================
 
   async showEditTransaction(id) {
-    const tx = await DB.getById("transactions", id);
-    if (!tx) return;
-    if (tx.type === "asset-add" || tx.type === "asset-sell") {
+    const transaction = await DB.getById("transactions", id);
+    if (!transaction) return;
+    if (transaction.type === "asset-add" || transaction.type === "asset-sell") {
       this.toast("EDIT THE ASSET INSTEAD");
       return;
     }
 
-    const isMetal = tx.type === "buy" || tx.type === "sell";
-    document.getElementById("txedit-id").value = tx.id;
-    document.getElementById("txedit-type").textContent = _isOpeningTx(tx) ? "OPENING VALUATION" : tx.type.toUpperCase();
-    document.getElementById("txedit-amount-group").style.display = isMetal ? "none" : "";
-    document.getElementById("txedit-metal-group").style.display = isMetal ? "" : "none";
+    const isMetalTrade = transaction.type === "buy" || transaction.type === "sell";
+    document.getElementById("txedit-id").value = transaction.id;
+    document.getElementById("txedit-type").textContent = isOpeningValuation(transaction) ? "OPENING VALUATION" : transaction.type.toUpperCase();
+    document.getElementById("txedit-amount-group").style.display = isMetalTrade ? "none" : "";
+    document.getElementById("txedit-metal-group").style.display = isMetalTrade ? "" : "none";
 
-    const account = await DB.getById("accounts", tx.accountId);
-    const cur = account ? account.currency || "CHF" : "CHF";
-    document.getElementById("txedit-currency-symbol").textContent = cur;
-    document.getElementById("txedit-price-symbol").textContent = cur + "/g";
+    const account = await DB.getById("accounts", transaction.accountId);
+    const currency = account ? account.currency || "CHF" : "CHF";
+    document.getElementById("txedit-currency-symbol").textContent = currency;
+    document.getElementById("txedit-price-symbol").textContent = currency + "/g";
 
-    if (isMetal) {
-      document.getElementById("txedit-qty").value = tx.quantity || 0;
-      document.getElementById("txedit-price").value = tx.pricePerGram || "";
+    if (isMetalTrade) {
+      document.getElementById("txedit-qty").value = transaction.quantity || 0;
+      document.getElementById("txedit-price").value = transaction.pricePerGram || "";
     } else {
-      document.getElementById("txedit-amount").value = Math.abs(tx.amount || 0);
+      document.getElementById("txedit-amount").value = Math.abs(transaction.amount || 0);
     }
-    document.getElementById("txedit-notes").value = tx.notes || "";
-    document.getElementById("txedit-date").value = tx.date || todayStr();
+    document.getElementById("txedit-notes").value = transaction.notes || "";
+    document.getElementById("txedit-date").value = transaction.date || todayStr();
 
     this._modals.txEdit.show();
   },
 
   async saveTransactionEdit() {
     const id = parseInt(document.getElementById("txedit-id").value);
-    const tx = await DB.getById("transactions", id);
-    if (!tx) return;
-    const account = await DB.getById("accounts", tx.accountId);
+    const transaction = await DB.getById("transactions", id);
+    if (!transaction) return;
+    const account = await DB.getById("accounts", transaction.accountId);
     if (!account) {
       this.toast("ACCOUNT NOT FOUND");
       return;
@@ -1521,58 +1604,41 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
     const date = document.getElementById("txedit-date").value || todayStr();
     const notes = document.getElementById("txedit-notes").value.trim();
-    const isMetal = tx.type === "buy" || tx.type === "sell";
+    const isMetalTrade = transaction.type === "buy" || transaction.type === "sell";
 
-    if (isMetal) {
-      const qty = parseFloat(document.getElementById("txedit-qty").value);
-      const price = parseFloat(document.getElementById("txedit-price").value);
-      if (!qty || qty <= 0) {
+    if (isMetalTrade) {
+      const quantity = parseFloat(document.getElementById("txedit-qty").value);
+      const pricePerGram = parseFloat(document.getElementById("txedit-price").value);
+      if (!quantity || quantity <= 0) {
         this.toast("ENTER A VALID QUANTITY");
         return;
       }
-      if (!price || price <= 0) {
+      if (!pricePerGram || pricePerGram <= 0) {
         this.toast("ENTER A VALID PRICE");
         return;
       }
-      tx.quantity = qty;
-      tx.pricePerGram = price;
-      tx.amount = tx.type === "buy" ? qty * price : -(qty * price);
+      transaction.quantity = quantity;
+      transaction.pricePerGram = pricePerGram;
+      transaction.amount = transaction.type === "buy" ? quantity * pricePerGram : -(quantity * pricePerGram);
     } else {
       const amount = parseFloat(document.getElementById("txedit-amount").value);
       if (isNaN(amount) || amount <= 0) {
         this.toast("ENTER A VALID AMOUNT");
         return;
       }
-      tx.amount = tx.type === "withdrawal" ? -amount : amount;
-      if (account.accountType === "Precious Metal" && tx.type === "valuation" && (account.quantity || 0) > 0) {
-        tx.pricePerGram = amount / account.quantity;
+      transaction.amount = transaction.type === "withdrawal" ? -amount : amount;
+      if (account.accountType === "Precious Metal" && transaction.type === "valuation" && (account.quantity || 0) > 0) {
+        transaction.pricePerGram = amount / account.quantity;
       }
     }
-    tx.date = date;
+    transaction.date = date;
     // keep the OPENING VALUATION marker intact so performance math stays correct
-    if (!_isOpeningTx(tx)) tx.notes = notes;
+    if (!isOpeningValuation(transaction)) transaction.notes = notes;
 
-    await DB.put("transactions", tx);
+    await DB.put("transactions", transaction);
 
-    if (isMetal && account.accountType === "Precious Metal") {
-      // replay quantities so quantityAfter and the holding stay consistent
-      const metalTxs = (await DB.getByIndex("transactions", "accountId", tx.accountId)).filter((t) => t.type === "buy" || t.type === "sell").sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-      let q = 0;
-      for (const t of metalTxs) {
-        q = t.type === "buy" ? q + (t.quantity || 0) : Math.max(0, q - (t.quantity || 0));
-        if (t.quantityAfter !== q) {
-          t.quantityAfter = q;
-          await DB.put("transactions", t);
-        }
-      }
-      account.quantity = q;
-      const last = metalTxs.length > 0 ? metalTxs[metalTxs.length - 1] : null;
-      if (last && last.pricePerGram) account.pricePerGram = last.pricePerGram;
-      account.currentValue = q * (account.pricePerGram || 0);
-      await DB.put("accounts", account);
-    }
-
-    // full recalc across all portfolios/accounts so every derived value stays consistent
+    // full recalc across all portfolios/accounts so every derived value stays
+    // consistent (precious metals replay their quantities there too)
     await this._recomputeAllBalances();
 
     this._modals.txEdit.hide();
@@ -1584,52 +1650,46 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const confirmed = await this.confirm("DELETE TRANSACTION?", "This will remove this transaction from the history.");
     if (!confirmed) return;
 
-    const tx = await DB.getById("transactions", id);
-    if (!tx) return;
-    const account = await DB.getById("accounts", tx.accountId);
-    if (account) {
-      if (tx.type === "asset-add" || tx.type === "asset-sell") {
-        // Tangible asset events do not change the computed account value
-      } else if (tx.type === "buy" || tx.type === "sell") {
-        const qty = account.quantity || 0;
-        account.quantity = tx.type === "buy" ? Math.max(0, qty - (tx.quantity || 0)) : qty + (tx.quantity || 0);
-        account.currentValue = (account.quantity || 0) * (account.pricePerGram || tx.pricePerGram || 0);
-      } else {
-        // revert the account value
-        account.currentValue = (account.currentValue || 0) - tx.amount;
-      }
-      if (tx.type !== "asset-add" && tx.type !== "asset-sell") {
-        await DB.put("accounts", account);
-      }
+    const transaction = await DB.getById("transactions", id);
+    if (!transaction) return;
+    const account = await DB.getById("accounts", transaction.accountId);
+    // Tangible asset events do not change the computed account value, and
+    // precious metals are fully replayed below.
+    const isAssetEvent = transaction.type === "asset-add" || transaction.type === "asset-sell";
+    if (account && !isAssetEvent && account.accountType !== "Precious Metal") {
+      // Revert the account value; the replay below recomputes it when other transactions remain
+      account.currentValue = (account.currentValue || 0) - transaction.amount;
+      await DB.put("accounts", account);
     }
     await DB.del("transactions", id);
-    await this._recomputeAccountBalances(tx.accountId);
+    await this._recomputeAccountBalances(transaction.accountId);
     this.toast("TRANSACTION DELETED");
     this.route();
   },
 
-  confirm(title, msg) {
+  // Resolves true on YES, false when the dialog is closed any other way
+  confirm(title, message) {
     return new Promise((resolve) => {
       document.getElementById("confirm-title").textContent = title;
-      document.getElementById("confirm-msg").textContent = msg;
-      const btn = document.getElementById("confirm-yes");
-      const modalEl = document.getElementById("modal-confirm");
-      let resolved = false;
-      const handler = () => {
-        if (resolved) return;
-        resolved = true;
-        btn.removeEventListener("click", handler);
+      document.getElementById("confirm-msg").textContent = message;
+      const yesButton = document.getElementById("confirm-yes");
+      const modalElement = document.getElementById("modal-confirm");
+      let answered = false;
+      const onYes = () => {
+        if (answered) return;
+        answered = true;
+        yesButton.removeEventListener("click", onYes);
         this._modals.confirm.hide();
         resolve(true);
       };
-      btn.addEventListener("click", handler);
-      const cancelHandler = () => {
-        if (resolved) return;
-        resolved = true;
-        document.getElementById("confirm-yes").removeEventListener("click", handler);
+      const onClosed = () => {
+        if (answered) return;
+        answered = true;
+        yesButton.removeEventListener("click", onYes);
         resolve(false);
       };
-      modalEl.addEventListener("hidden.bs.modal", cancelHandler, { once: true });
+      yesButton.addEventListener("click", onYes);
+      modalElement.addEventListener("hidden.bs.modal", onClosed, { once: true });
       this._modals.confirm.show();
     });
   },
@@ -1639,28 +1699,16 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
   async saveFile() {
     try {
       const kind = await DB.saveFile();
-      if (kind === "classic") {
-        this.toast("FILE DOWNLOADED");
-      } else {
-        this.toast("FILE SAVED TO FOLDER");
-      }
-    } catch (e) {
-      this.toast("SAVE FAILED: " + e.message);
+      this.toast(kind === "classic" ? "FILE DOWNLOADED" : "FILE SAVED TO FOLDER");
+    } catch (error) {
+      this.toast("SAVE FAILED: " + error.message);
     }
   },
 
   async exportData() {
     const data = await DB.exportAll();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const base = (DB.currentFile || "liberty-finance").replace(/\.json$/i, "");
-    a.download = base + "-backup-" + todayStr() + ".json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const baseName = (DB.currentFile || "liberty-finance").replace(/\.json$/i, "");
+    Storage.download(baseName + "-backup-" + todayStr() + ".json", JSON.stringify(data, null, 2));
     this.toast("DATA EXPORTED");
   },
 
@@ -1685,15 +1733,15 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
       this._modals.importModal.hide();
       this.toast("DATA IMPORTED SUCCESSFULLY");
       this.route();
-    } catch (e) {
-      this.toast("INVALID JSON: " + e.message);
+    } catch (error) {
+      this.toast("INVALID JSON: " + error.message);
     }
   },
 
   // ==================== PERFORMANCE TOGGLE ====================
 
-  async toggleFlag(ev, accountId, field, checked) {
-    ev.stopPropagation();
+  async toggleFlag(event, accountId, field, checked) {
+    event.stopPropagation();
     const account = await DB.getById("accounts", accountId);
     if (account) {
       account[field] = checked;
@@ -1712,31 +1760,32 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     const account = await DB.getById("accounts", accountId);
     if (!account) return;
     const type = account.accountType;
-    if (type === "Tangible Asset" || type === "Real Estate" || type === "Precious Metal") return; // computed from assets/quantity
+    if (type === ACCOUNT_TYPE.preciousMetal) return this._recomputeMetalAccount(account);
+    if (isAssetAccount(account)) return; // valued from its assets
     const flowTypes = ["deposit", "withdrawal", "valuation", "buy", "sell"];
-    const txs = (await DB.getByIndex("transactions", "accountId", accountId)).filter((t) => flowTypes.includes(t.type)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-    if (txs.length === 0) return;
+    const transactions = (await DB.getByIndex("transactions", "accountId", accountId)).filter((transaction) => flowTypes.includes(transaction.type)).sort((first, second) => (first.date || "").localeCompare(second.date || ""));
+    if (transactions.length === 0) return;
 
     let balance = 0;
-    for (let i = 0; i < txs.length; i++) {
-      const tx = txs[i];
-      const abs = Math.abs(tx.amount || 0);
-      if (i === 0) {
+    for (let index = 0; index < transactions.length; index++) {
+      const transaction = transactions[index];
+      const absoluteAmount = Math.abs(transaction.amount || 0);
+      if (index === 0) {
         // Seed with the opening level. A first deposit/buy has nothing before it,
         // so the balance equals the amount itself (avoids inheriting a wrong
         // snapshot from an out-of-order entry). A first valuation carries its own value.
-        if (tx.type === "deposit" || tx.type === "buy") balance = abs;
-        else balance = tx.balanceAfter != null ? tx.balanceAfter : tx.amount != null ? tx.amount : 0;
-      } else if (tx.type === "deposit" || tx.type === "buy") {
-        balance += abs;
-      } else if (tx.type === "withdrawal" || tx.type === "sell") {
-        balance -= abs;
-      } else if (tx.type === "valuation") {
-        balance = tx.amount != null ? tx.amount : balance;
+        if (transaction.type === "deposit" || transaction.type === "buy") balance = absoluteAmount;
+        else balance = transaction.balanceAfter != null ? transaction.balanceAfter : transaction.amount != null ? transaction.amount : 0;
+      } else if (transaction.type === "deposit" || transaction.type === "buy") {
+        balance += absoluteAmount;
+      } else if (transaction.type === "withdrawal" || transaction.type === "sell") {
+        balance -= absoluteAmount;
+      } else if (transaction.type === "valuation") {
+        balance = transaction.amount != null ? transaction.amount : balance;
       }
-      if (tx.balanceAfter !== balance) {
-        tx.balanceAfter = balance;
-        await DB.put("transactions", tx);
+      if (transaction.balanceAfter !== balance) {
+        transaction.balanceAfter = balance;
+        await DB.put("transactions", transaction);
       }
     }
 
@@ -1746,11 +1795,58 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
     }
   },
 
+  // Precious metals: replays buys, sells and valuations in date order, so each
+  // transaction's quantity and balance and the account's holding stay right
+  // after a backdated trade, an edit or a delete. The replay starts from
+  // `openingQuantity`: the metal held before the first recorded trade (e.g. the
+  // quantity typed in when the account was created).
+  async _recomputeMetalAccount(account) {
+    const metalTransactions = (await DB.getByIndex("transactions", "accountId", account.id))
+      .filter((transaction) => transaction.type === "buy" || transaction.type === "sell" || transaction.type === "valuation")
+      .sort((first, second) => (first.date || "").localeCompare(second.date || ""));
+
+    const accountBefore = JSON.stringify(account);
+    if (account.openingQuantity == null) {
+      // Accounts from before this field existed: derive it once from the
+      // current holding, which every earlier trade already moved.
+      const netTraded = metalTransactions.reduce((sum, transaction) => {
+        if (transaction.type === "buy") return sum + (transaction.quantity || 0);
+        if (transaction.type === "sell") return sum - (transaction.quantity || 0);
+        return sum;
+      }, 0);
+      account.openingQuantity = Math.max(0, (account.quantity || 0) - netTraded);
+    }
+
+    let quantity = account.openingQuantity;
+    let latestPricePerGram = null;
+    for (const transaction of metalTransactions) {
+      if (transaction.type === "buy") quantity += transaction.quantity || 0;
+      if (transaction.type === "sell") quantity = Math.max(0, quantity - (transaction.quantity || 0));
+      if (transaction.pricePerGram > 0) latestPricePerGram = transaction.pricePerGram;
+
+      const transactionBefore = JSON.stringify(transaction);
+      if (transaction.type === "valuation") {
+        transaction.balanceAfter = transaction.amount;
+      } else {
+        transaction.quantityAfter = quantity;
+        transaction.balanceAfter = quantity * (transaction.pricePerGram || 0);
+      }
+      if (JSON.stringify(transaction) !== transactionBefore) await DB.put("transactions", transaction);
+    }
+
+    account.quantity = quantity;
+    if (latestPricePerGram != null) account.pricePerGram = latestPricePerGram;
+    account.currentValue = quantity * (account.pricePerGram || 0);
+    if (JSON.stringify(account) !== accountBefore) await DB.put("accounts", account);
+  },
+
   async _recomputeAllBalances() {
     const accounts = await DB.getAll("accounts");
-    for (const a of accounts) {
-      await this._recomputeAccountBalances(a.id);
-    }
+    await DB.batch(async () => {
+      for (const account of accounts) {
+        await this._recomputeAccountBalances(account.id);
+      }
+    });
   },
 
   async recalcAccount() {
@@ -1766,14 +1862,66 @@ const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    co
 
   // ==================== TOAST ====================
 
-  toast(msg) {
-    const el = document.getElementById("toast-body");
-    if (el) {
-      el.textContent = msg;
-      const t = bootstrap.Toast.getOrCreateInstance(document.getElementById("toast-msg"));
-      t.show();
+  toast(message) {
+    const bodyElement = document.getElementById("toast-body");
+    if (bodyElement) {
+      bodyElement.textContent = message;
+      bootstrap.Toast.getOrCreateInstance(document.getElementById("toast-msg")).show();
     }
   },
 };
+
+// One file write per user action: every handler below runs inside DB.batch(),
+// so deleting an account with hundreds of transactions writes the profile once.
+const SAVE_HANDLERS = [
+  "saveCustodian",
+  "savePortfolio",
+  "saveAccount",
+  "saveTransaction",
+  "saveTransactionEdit",
+  "saveValuation",
+  "saveMetal",
+  "saveAsset",
+  "saveSellAsset",
+  "saveAssetValuation",
+  "saveIncome",
+  "saveExpense",
+  "saveDebt",
+  "saveGoal",
+  "saveSettings",
+  "doImport",
+];
+const OTHER_CHANGING_HANDLERS = [
+  "deleteAccount",
+  "deletePortfolio",
+  "deleteAsset",
+  "deleteAssetValuation",
+  "deleteTransaction",
+  "deleteIncome",
+  "deleteExpense",
+  "deleteDebt",
+  "deleteGoal",
+  "moveGoal",
+  "recalcAccount",
+];
+
+// A double-click on SAVE must not store the same record twice: while one save
+// handler is running, further clicks on any of them are ignored.
+SAVE_HANDLERS.forEach((handlerName) => {
+  const handler = App[handlerName];
+  App[handlerName] = async function (...handlerArguments) {
+    if (App._saveInProgress) return;
+    App._saveInProgress = true;
+    try {
+      return await DB.batch(() => handler.apply(App, handlerArguments));
+    } finally {
+      App._saveInProgress = false;
+    }
+  };
+});
+OTHER_CHANGING_HANDLERS.forEach((handlerName) => {
+  const handler = App[handlerName];
+  App[handlerName] = (...handlerArguments) => DB.batch(() => handler.apply(App, handlerArguments));
+});
 
 document.addEventListener("DOMContentLoaded", () => App.init());

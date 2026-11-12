@@ -1,1558 +1,947 @@
+/* ===== Dashboard =====
+ *
+ * dashboard() loads the data once, builds a valuation context (js/valuation.js)
+ * and hands both to one renderer per card, top to bottom.
+ */
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const CHART_FONT = "'Share Tech Mono', monospace";
+
+// 'YYYY-MM' keys of the last `count` months, oldest first, ending with the current month
+function lastMonthKeys(count) {
+  const now = new Date();
+  const months = [];
+  for (let monthsBack = count - 1; monthsBack >= 0; monthsBack--) {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - monthsBack, 1);
+    months.push(monthDate.getFullYear() + '-' + String(monthDate.getMonth() + 1).padStart(2, '0'));
+  }
+  return months;
+}
+
+// Last day of a 'YYYY-MM' month, or today for the current month
+function monthEndDate(month, today) {
+  if (month === today.substring(0, 7)) return today;
+  const lastDay = new Date(Number(month.substring(0, 4)), Number(month.substring(5, 7)), 0).getDate();
+  return month + '-' + String(lastDay).padStart(2, '0');
+}
+
+// First day of a 'YYYY-MM' month, in local time (so the label never slips into the previous month)
+function monthStartDate(month) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return new Date(year, monthNumber - 1, 1);
+}
+
+// 'Mar 26' style label of a 'YYYY-MM' month
+function shortMonthLabel(month) {
+  return monthStartDate(month).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+}
+
+// Income received in a 'YYYY-MM' month, in the main currency
+function monthIncome(incomes, month, rateToMain) {
+  return incomes
+    .filter(income => income.month === month)
+    .reduce((sum, income) => sum + (income.amount || 0) * rateToMain(income.currency || 'CHF', income.date || (month + '-01')), 0);
+}
+
+// Expenses of a 'YYYY-MM' month in the main currency: monthly ones in full, yearly
+// ones in their payment month, or a twelfth every month when they have none
+function monthExpenses(expenses, month, rateToMain) {
+  const year = month.substring(0, 4);
+  const monthNumber = Number(month.substring(5, 7));
+  const inMain = (expense) => (expense.amount || 0) * rateToMain(expense.currency || 'CHF', expense.date || (year + '-01-01'));
+  const yearExpenses = expenses.filter(expense => expense.year === year);
+  const monthlyTotal = yearExpenses
+    .filter(expense => expense.type === 'monthly')
+    .reduce((sum, expense) => sum + inMain(expense), 0);
+  const yearlyShare = yearExpenses
+    .filter(expense => expense.type === 'yearly')
+    .reduce((sum, expense) => {
+      if (expense.paymentMonth) return Number(expense.paymentMonth) === monthNumber ? sum + inMain(expense) : sum;
+      return sum + inMain(expense) / 12;
+    }, 0);
+  return monthlyTotal + yearlyShare;
+}
+
+// Income of a year in the main currency, through `throughMonth` (1-12) when given
+function incomeThroughMonth(incomes, year, throughMonth, rateToMain) {
+  return incomes
+    .filter(income => (income.month || '').startsWith(year) && (!throughMonth || Number((income.month || '').substring(5, 7)) <= throughMonth))
+    .reduce((sum, income) => sum + (income.amount || 0) * rateToMain(income.currency || 'CHF', income.date || ((income.month || (year + '-01')) + '-01')), 0);
+}
+
+// Expenses of a year in the main currency over its first `monthCount` months
+function expensesThroughMonth(expenses, year, monthCount, rateToMain) {
+  let total = 0;
+  expenses.filter(expense => expense.year === year).forEach(expense => {
+    const amount = (expense.amount || 0) * rateToMain(expense.currency || 'CHF', expense.date || (year + '-01-01'));
+    if (expense.type === 'monthly') total += amount * monthCount;
+    else if (!expense.paymentMonth) total += amount * (monthCount / 12);
+    else if (Number(expense.paymentMonth) <= monthCount) total += amount;
+  });
+  return total;
+}
+
+// One "label: value" line of a monthly or yearly card
+function cardLineHtml(labelHtml, valueHtml) {
+  return '<div class="earning-month-line"><span class="lbl">' + labelHtml + '</span>' + valueHtml + '</div>';
+}
+
+function cardValueHtml(text, color) {
+  return '<span class="val"' + (color ? ' style="color:' + color + '"' : '') + '>' + text + '</span>';
+}
+
+function infoIconHtml(title) {
+  return '<span class="info-icon" title="' + title + '">i</span>';
+}
+
+// A change in money, green when up and red when down; N/A without a value
+function growthHtml(amount, currency) {
+  if (amount === null || amount === undefined) return cardValueHtml('N/A', MISSING_VALUE_COLOR);
+  return cardValueHtml(signedCurrency(amount, currency), profitLossColor(amount));
+}
+
+// Shows `visibleCount` cards at a time with left/right buttons, starting at the newest
+function setUpCarousel(cards, leftButton, rightButton, visibleCount) {
+  const lastOffset = cards.length - visibleCount;
+  let offset = Math.max(0, lastOffset);
+  const render = () => {
+    cards.forEach((card, index) => {
+      card.style.display = index >= offset && index < offset + visibleCount ? '' : 'none';
+    });
+    if (leftButton) leftButton.disabled = offset <= 0;
+    if (rightButton) rightButton.disabled = offset >= lastOffset;
+  };
+  // onclick, not addEventListener: the dashboard re-renders on every range
+  // change, and each render must replace the previous handler, not add one.
+  if (leftButton) leftButton.onclick = () => { if (offset > 0) { offset--; render(); } };
+  if (rightButton) rightButton.onclick = () => { if (offset < lastOffset) { offset++; render(); } };
+  render();
+}
+
+const CAPITAL_DEPLOYMENT_INFO = 'How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) ÷ NET INCOME × 100. Above 100% means you also drew on existing cash.';
+
 Object.assign(Pages, {
   // ==================== DASHBOARD ====================
 
   async dashboard() {
-    Object.values(App._charts).forEach(c => { try { c.destroy(); } catch(e) {} });
+    Object.values(App._charts).forEach(chart => { try { chart.destroy(); } catch (error) { /* already destroyed */ } });
     App._charts = {};
 
-    const accounts = await DB.getAll('accounts');
-    const portfolios = await DB.getAll('portfolios');
-    const transactions = await DB.getAll('transactions');
-    const custodians = await DB.getAll('custodians');
-    const assets = await DB.getAll('assets');
+    const context = await loadValuationContext();
+    const dashboard = {
+      context,
+      mainCurrency: context.mainCurrency,
+      portfolios: await DB.getAll('portfolios'),
+      incomes: await DB.getAll('incomes'),
+      expenses: await DB.getAll('expenses'),
+      // Accounts flagged "Include in Performance"; asset accounts are never investments
+      performanceAccountIds: new Set(context.accounts.filter(account => account.trackPerformance !== false && !isAssetAccount(account)).map(account => account.id)),
+    };
 
-    const custodianMap = {};
-    custodians.forEach(c => custodianMap[c.id] = c.name);
+    this._renderDashboardTotals(dashboard);
+    this._renderDashboardRateWarning(dashboard);
+    this._renderDashboardPerformance(dashboard);
+    this._bindDashboardChartRange();
+    this._renderDashboardMonthlyCards(dashboard);
+    await this._renderDashboardGoals(dashboard);
+    this._renderDashboardForecast(dashboard);
+    this._renderDashboardYearlyCards(dashboard);
+    this._renderDashboardAllocation(dashboard);
+    this._renderDashboardValueCharts(dashboard);
+    this._renderDashboardSavingsTrend(dashboard);
+    this._renderDashboardRecentTransactions(dashboard);
+  },
 
-    const accountAssets = {};
-    assets.forEach(a => {
-      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
-      accountAssets[a.accountId].push(a);
-    });
+  // Net worth and liquid net worth
+  _renderDashboardTotals({ context, mainCurrency }) {
+    const { netWorth, liquidNetWorth } = context.netWorth();
+    document.getElementById('dash-total-value').textContent = formatCurrency(netWorth, mainCurrency);
+    document.getElementById('dash-liquid-value').textContent = formatCurrency(liquidNetWorth, mainCurrency);
+  },
 
-    const settings = await DB.getSettings();
-    const mainCurrency = settings.mainCurrency || 'CHF';
-    const rateEntries = await DB.getAll('exchangeRates');
-    const metalEntry = await DB.getMetalPricesForDate(todayStr());
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-    const accCurrency = {};
-    accounts.forEach(a => accCurrency[a.id] = a.currency || 'CHF');
+  // Amounts in a currency without any stored exchange rate are counted 1:1: say so.
+  // Converting into the main currency also needs the main currency's own CHF rate.
+  _renderDashboardRateWarning({ context, mainCurrency, incomes, expenses }) {
+    const warning = document.getElementById('dash-rate-warning');
+    if (!warning) return;
+    const foreignCurrencies = [
+      ...context.accounts.map(account => account.currency),
+      ...context.assets.map(asset => asset.currency),
+      ...incomes.map(income => income.currency),
+      ...expenses.map(expense => expense.currency),
+    ].filter(currency => currency && currency !== mainCurrency);
+    const currenciesMissingRate = currenciesWithoutRate(context.rateEntries, foreignCurrencies.length ? [...foreignCurrencies, mainCurrency] : []);
+    warning.style.display = currenciesMissingRate.length ? '' : 'none';
+    warning.textContent = 'NO EXCHANGE RATE FOR ' + currenciesMissingRate.join(', ') + ': THESE AMOUNTS ARE COUNTED 1:1. ADD RATES ON THE EXCHANGE RATES PAGE.';
+  },
 
-    // Total value — use latest transaction balance per account
-    const accTxs = {};
-    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-      .forEach(t => {
-        const prev = accTxs[t.accountId];
-        if (!prev || (t.date || '') >= (prev.date || '')) accTxs[t.accountId] = t;
-      });
+  // Investment performance card, with its YTD / 1Y / 2Y / 3Y / MAX selector
+  _renderDashboardPerformance({ context, mainCurrency, performanceAccountIds }) {
+    const currentTotal = context.replayBalances(performanceAccountIds, () => {});
+    const performanceTransactions = context.balanceTransactionsOf(performanceAccountIds);
+    const today = context.today;
+    const sameDayYearsAgo = (years) => String(Number(today.substring(0, 4)) - years) + today.substring(4);
+    const resultSince = (cutoffDate) => context.performanceSince(performanceAccountIds, cutoffDate, currentTotal);
+    const resultBySelector = {
+      ytd: resultSince(today.substring(0, 4) + '-01-01'),
+      '1y': resultSince(sameDayYearsAgo(1)),
+      '2y': resultSince(sameDayYearsAgo(2)),
+      '3y': resultSince(sameDayYearsAgo(3)),
+      max: resultSince(performanceTransactions.length > 0 ? performanceTransactions[0].date : today),
+    };
 
-    let totalValue = 0;
-    const pfValues = {};
-    portfolios.forEach(p => pfValues[p.id] = { name: p.name, value: 0 });
+    const valueElement = document.getElementById('dash-perf-value');
+    const show = (result) => {
+      valueElement.innerHTML = signedCurrency(result.abs, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(result.pct, 2) + ')</span>';
+      valueElement.style.color = profitLossColor(result.abs);
+    };
+    const activeButton = document.querySelector('#perf-selectors .perf-btn.active');
+    show(resultBySelector[activeButton ? activeButton.dataset.perf : 'ytd']);
 
-    accounts.forEach(a => {
-      let latest = accTxs[a.id];
-      let v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-      let vDate = latest ? latest.date : todayStr();
-      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-        v = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
-        vDate = todayStr();
-      }
-      if (a.accountType === 'Precious Metal') {
-        v = metalAccountValue(a, metalEntry, rateEntries, todayStr());
-        vDate = todayStr();
-      }
-      if (a.includeInNetWorth !== false) {
-        const vm = v * rateFor(accCurrency[a.id], vDate);
-        totalValue += vm;
-        if (pfValues[a.portfolioId]) pfValues[a.portfolioId].value += vm;
-      }
-    });
-
-    document.getElementById('dash-total-value').textContent = formatCurrency(totalValue, mainCurrency);
-
-    // Liquid Net Worth = included accounts minus Pillars portfolio (id=3), filtered by includeInLiquidNetWorth
-    let liqTotal = 0;
-    accounts.forEach(a => {
-      const latest = accTxs[a.id];
-      const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-      if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-        if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-          const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-          liqTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
-        } else if (a.accountType === 'Precious Metal') {
-          liqTotal += metalAccountValue(a, metalEntry, rateEntries, todayStr()) * rateFor(accCurrency[a.id], todayStr());
-        } else {
-          liqTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
-        }
-      }
-    });
-    document.getElementById('dash-liquid-value').textContent = formatCurrency(liqTotal, mainCurrency);
-
-    // Build perf-tracked month groups for performance card & chart
-    const perfAccountIds = new Set(accounts.filter(a => a.trackPerformance !== false && a.accountType !== 'Tangible Asset' && a.accountType !== 'Real Estate').map(a => a.id));
-    const perfMonthGroups = {};
-    const _perfBal = {};
-    perfAccountIds.forEach(id => _perfBal[id] = 0);
-    const perfTxs = transactions
-      .filter(t => (t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell') && perfAccountIds.has(t.accountId))
-      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    perfTxs.forEach(tx => {
-      _perfBal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-      const mk = (tx.date || '').substring(0, 7);
-      if (!mk) return;
-      let tot = 0;
-      Object.values(_perfBal).forEach(b => tot += b);
-      perfMonthGroups[mk] = tot;
-    });
-    // Investment performance calculator
-    function _computePerfSince(idSet, txList, cutoffDate, currentTotal) {
-      const bal = {};
-      idSet.forEach(id => bal[id] = 0);
-      let totalAtCutoff = 0;
-      txList.forEach(tx => {
-        if (tx.date >= cutoffDate) return;
-        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-        let t = 0;
-        Object.values(bal).forEach(b => t += b);
-        totalAtCutoff = t;
-      });
-      let netDeposits = 0;
-      txList.forEach(tx => {
-        if (tx.date < cutoffDate) return;
-        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'buy') netDeposits += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        // Opening valuations count as capital (pre-existing wealth entered tracking)
-        if (_isOpeningTx(tx)) {
-          netDeposits += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
-        }
-      });
-      const abs = currentTotal - totalAtCutoff - netDeposits;
-      const base = totalAtCutoff + netDeposits;
-      const pct = base !== 0 ? (abs / base) * 100 : 0;
-      return { abs, pct };
-    }
-
-    // Performance scope — accounts flagged "Include in Performance" (trackPerformance)
-    const perfCurrentTotal = Object.values(_perfBal).reduce((s, v) => s + v, 0);
-    const _invPerfSince = (cutoffDate) => _computePerfSince(perfAccountIds, perfTxs, cutoffDate, perfCurrentTotal);
-
-    const today = todayStr();
-    const curYear = today.substring(0, 4);
-    const ytdCutoff = curYear + '-01-01';
-    const oneYearAgo = String(Number(curYear) - 1) + today.substring(4);
-    const twoYearsAgo = String(Number(curYear) - 2) + today.substring(4);
-    const threeYearsAgo = String(Number(curYear) - 3) + today.substring(4);
-
-    // Set initial YTD
-    const perfEl = document.getElementById('dash-perf-value');
-    const activePerf = document.querySelector('#perf-selectors .perf-btn.active');
-    const perfMap = { ytd: _invPerfSince(ytdCutoff), '1y': _invPerfSince(oneYearAgo), '2y': _invPerfSince(twoYearsAgo), '3y': _invPerfSince(threeYearsAgo), max: _invPerfSince(perfTxs.length > 0 ? perfTxs[0].date : today) };
-    const initial = perfMap[activePerf ? activePerf.dataset.perf : 'ytd'];
-    perfEl.innerHTML = (initial.abs >= 0 ? '+' : '') + formatCurrency(initial.abs, mainCurrency) + ' <span class="perf-pct">(' + (initial.pct >= 0 ? '+' : '') + initial.pct.toFixed(2) + '%)</span>';
-    perfEl.style.color = initial.abs >= 0 ? '#33ff33' : '#ff3333';
-
-    // Perf selector click handler
-    document.querySelectorAll('#perf-selectors .perf-btn').forEach(btn => {
-      btn.onclick = function() {
-        document.querySelectorAll('#perf-selectors .perf-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#perf-selectors .perf-btn').forEach(button => {
+      button.onclick = function () {
+        document.querySelectorAll('#perf-selectors .perf-btn').forEach(other => other.classList.remove('active'));
         this.classList.add('active');
-        const val = perfMap[this.dataset.perf];
-        perfEl.innerHTML = (val.abs >= 0 ? '+' : '') + formatCurrency(val.abs, mainCurrency) + ' <span class="perf-pct">(' + (val.pct >= 0 ? '+' : '') + val.pct.toFixed(2) + '%)</span>';
-        perfEl.style.color = val.abs >= 0 ? '#33ff33' : '#ff3333';
+        show(resultBySelector[this.dataset.perf]);
       };
     });
+  },
 
-    // Chart range selector click handler
-    document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(btn => {
-      btn.onclick = function() {
-        document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(b => b.classList.remove('active'));
+  // The chart range selector re-renders the whole dashboard
+  _bindDashboardChartRange() {
+    document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(button => {
+      button.onclick = function () {
+        document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(other => other.classList.remove('active'));
         this.classList.add('active');
         Pages.dashboard();
       };
     });
+  },
 
-    // Earning performance last 12 months
-    const allIncomes = await DB.getAll('incomes');
-    const allExpenses = await DB.getAll('expenses');
-    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  // One card per month over the last 13 months (4 visible at a time)
+  _renderDashboardMonthlyCards({ context, mainCurrency, incomes, expenses, performanceAccountIds }) {
+    const grid = document.getElementById('earning-perf-grid');
+    const emptyMessage = document.getElementById('earning-perf-empty');
+    const leftButton = document.getElementById('earning-perf-left');
+    const rightButton = document.getElementById('earning-perf-right');
+    if (!grid) return;
+    grid.innerHTML = '';
 
-    const todayDate = new Date();
-    const months = [];
-    for (let i = 12; i >= 0; i--) {
-      const d = new Date(todayDate.getFullYear(), todayDate.getMonth() - i, 1);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      months.push(y + '-' + m);
-    }
-
-    const earningGrid = document.getElementById('earning-perf-grid');
-    const earningEmpty = document.getElementById('earning-perf-empty');
-    const earningLeft = document.getElementById('earning-perf-left');
-    const earningRight = document.getElementById('earning-perf-right');
-    if (!earningGrid) return;
-    earningGrid.innerHTML = '';
-
-    const monthlyRoi = _monthlyPctSeries(perfAccountIds, perfTxs);
-    const monthCards = [];
-    const MAX_VISIBLE = 4;
+    const monthlyResults = context.monthlyReturns(performanceAccountIds);
+    const cards = [];
     let hasData = false;
+    let previousTotals = null;
 
-    // Net worth / liquid net worth at the end of a given month (replicates yearly logic)
-    const monthEndDate = (mk) => {
-      if (mk === todayStr().substring(0, 7)) return todayStr();
-      const y = Number(mk.substring(0, 4));
-      const m = Number(mk.substring(5, 7));
-      return mk + '-' + String(new Date(y, m, 0).getDate()).padStart(2, '0');
-    };
-    const flowSorted = transactions
-      .filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    const netWorthAtMonth = (mk) => {
-      const end = monthEndDate(mk);
-      const lastByAccount = {};
-      flowSorted.forEach(t => {
-        if ((t.date || '') > end) return;
-        const prev = lastByAccount[t.accountId];
-        if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
-      });
-      const accountValueAt = (a) => {
-        if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-          const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-          return { value: assetAccountMetrics(accountAssets[a.id], end, rateToAcc).value, date: end };
-        }
-        if (a.accountType === 'Precious Metal' && end === todayStr()) {
-          return { value: metalAccountValue(a, metalEntry, rateEntries, end), date: end };
-        }
-        const last = lastByAccount[a.id];
-        if (last) return { value: last.balanceAfter || 0, date: last.date };
-        if (end === todayStr()) return { value: a.currentValue || 0, date: end };
-        return { value: 0, date: end };
-      };
-      let netWorth = 0;
-      let liqNetWorth = 0;
-      accounts.forEach(a => {
-        if (a.includeInNetWorth === false) return;
-        const v = accountValueAt(a);
-        const val = v.value * rateFor(accCurrency[a.id], v.date);
-        netWorth += val;
-        if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) liqNetWorth += val;
-      });
-      return { netWorth, liqNetWorth };
-    };
-    let prevNw = null;
-    let prevLq = null;
+    lastMonthKeys(13).forEach(month => {
+      const income = monthIncome(incomes, month, context.rateToMain);
+      const expenseTotal = monthExpenses(expenses, month, context.rateToMain);
+      const netIncome = income - expenseTotal;
 
-    months.forEach(monthKey => {
-      const year = monthKey.substring(0, 4);
-      const mNum = parseInt(monthKey.substring(5, 7));
-      const monthLabel = monthNames[mNum - 1] + ' ' + year;
+      const monthTransactions = context.transactions.filter(transaction =>
+        (transaction.date || '').startsWith(month) && ['deposit', 'withdrawal', 'buy', 'sell'].includes(transaction.type));
+      const inMain = (transaction, amount) => context.toMain(amount, context.accountCurrency(transaction.accountId), transaction.date);
+      const netDeposits = monthTransactions.reduce((sum, transaction) => sum + inMain(transaction, netDeposit(transaction)), 0);
+      const totalSaved = monthTransactions.reduce((sum, transaction) => sum + inMain(transaction, savedAmount(transaction)), 0);
+      if (income > 0 || netDeposits !== 0) hasData = true;
 
-      const monthIncome = allIncomes
-        .filter(inc => inc.month === monthKey)
-        .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || (monthKey + '-01')), 0);
+      const result = monthlyResults[month];
+      const resultHtml = result
+        ? cardValueHtml(formatCurrency(result.abs, mainCurrency) + ' (' + (result.abs >= 0 ? '+' : '') + result.pct.toFixed(2) + '%)', profitLossColor(result.abs))
+        : cardValueHtml('N/A', MISSING_VALUE_COLOR);
+      const savingsRate = income > 0 ? (netIncome / income) * 100 : null;
+      const savingsRateHtml = savingsRate === null
+        ? cardValueHtml('N/A', MISSING_VALUE_COLOR)
+        : cardValueHtml(signedPercent(savingsRate, 1), profitLossColor(savingsRate));
+      const capitalDeployment = netIncome > 0 ? (netDeposits / netIncome) * 100 : null;
 
-      const yearExpenses = allExpenses.filter(exp => exp.year === year);
-      const monthlyTot = yearExpenses
-        .filter(exp => exp.type === 'monthly')
-        .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
-      const yearlyForMonth = yearExpenses
-        .filter(exp => exp.type === 'yearly')
-        .reduce((sum, exp) => {
-          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
-          if (exp.paymentMonth) return Number(exp.paymentMonth) === mNum ? sum + v : sum;
-          return sum + v / 12;
-        }, 0);
-      const totalExpenses = monthlyTot + yearlyForMonth;
+      const totals = context.netWorth(monthEndDate(month, context.today));
+      const netWorthGrowth = previousTotals ? totals.netWorth - previousTotals.netWorth : null;
+      const liquidGrowth = previousTotals ? totals.liquidNetWorth - previousTotals.liquidNetWorth : null;
+      previousTotals = totals;
 
-      const expected = monthIncome - totalExpenses;
-
-      const monthTxs = transactions.filter(tx =>
-        (tx.date || '').startsWith(monthKey) &&
-        (tx.type === 'deposit' || tx.type === 'withdrawal' || tx.type === 'buy' || tx.type === 'sell')
-      );
-      const netDeposits = monthTxs.reduce((sum, tx) => {
-        if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'withdrawal') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'buy') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'sell') return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        return sum;
-      }, 0);
-      const grossDeposits = monthTxs
-        .filter(tx => tx.type === 'deposit' || tx.type === 'withdrawal')
-        .reduce((sum, tx) => {
-          if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-          return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        }, 0);
-
-      if (monthIncome > 0 || netDeposits !== 0) hasData = true;
-
-      const roiVal = monthlyRoi[monthKey];
-      const roiText = roiVal ? formatCurrency(roiVal.abs, mainCurrency) + ' (' + (roiVal.abs >= 0 ? '+' : '') + roiVal.pct.toFixed(2) + '%)' : 'N/A';
-      const roiColor = roiVal ? (roiVal.abs >= 0 ? '#33ff33' : '#ff3333') : '#555';
-
-      const savingsRate = monthIncome > 0 ? (expected / monthIncome) * 100 : null;
-      const savingsRateText = savingsRate === null ? 'N/A' : (savingsRate >= 0 ? '+' : '') + savingsRate.toFixed(1) + '%';
-      const savingsRateColor = savingsRate === null ? '#555' : (savingsRate >= 0 ? '#33ff33' : '#ff3333');
-      const capDeployment = expected > 0 ? (netDeposits / expected) * 100 : null;
-      const capDeploymentText = capDeployment === null ? 'N/A' : capDeployment.toFixed(1) + '%';
-
-      const nw = netWorthAtMonth(monthKey);
-      const nwGrowth = prevNw !== null ? nw.netWorth - prevNw : null;
-      const lqGrowth = prevLq !== null ? nw.liqNetWorth - prevLq : null;
-      prevNw = nw.netWorth;
-      prevLq = nw.liqNetWorth;
-      const growthHtml = (amt) => {
-        if (amt === null || amt === undefined) return '<span class="val" style="color:#555">N/A</span>';
-        return '<span class="val" style="color:' + (amt >= 0 ? '#33ff33' : '#ff3333') + '">' + (amt >= 0 ? '+' : '') + formatCurrency(amt, mainCurrency) + '</span>';
-      };
-
-      const col = document.createElement('div');
-      col.className = 'col-3 earning-col';
-      col.innerHTML = '<div class="earning-month">' +
-        '<div class="earning-month-label">' + monthLabel + '</div>' +
-        '<div class="earning-month-line"><span class="lbl">INCOME</span><span class="val">' + formatCurrency(monthIncome, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">EXPENSES</span><span class="val">' + formatCurrency(totalExpenses, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">NET INCOME</span><span class="val">' + formatCurrency(expected, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">SAVINGS RATE</span><span class="val" style="color:' + savingsRateColor + '">' + savingsRateText + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">TOTAL SAVED</span><span class="val">' + formatCurrency(grossDeposits, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">CAPITAL DEPLOYMENT<span class="info-icon" title="How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) \u00F7 NET INCOME \u00D7 100. Above 100% means you also drew on existing cash.">i</span></span><span class="val" style="color:#33ff33">' + capDeploymentText + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">INVESTMENT PERFORMANCE</span><span class="val" style="color:' + roiColor + '">' + roiText + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">NET WORTH EoM</span><span class="val">' + formatCurrency(nw.netWorth, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH</span>' + growthHtml(nwGrowth) + '</div>' +
-        '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EoM</span><span class="val">' + formatCurrency(nw.liqNetWorth, mainCurrency) + '</span></div>' +
-        '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH</span>' + growthHtml(lqGrowth) + '</div>' +
+      const card = document.createElement('div');
+      card.className = 'col-3 earning-col';
+      card.innerHTML = '<div class="earning-month">' +
+        '<div class="earning-month-label">' + MONTH_NAMES[Number(month.substring(5, 7)) - 1] + ' ' + month.substring(0, 4) + '</div>' +
+        cardLineHtml('INCOME', cardValueHtml(formatCurrency(income, mainCurrency))) +
+        cardLineHtml('EXPENSES', cardValueHtml(formatCurrency(expenseTotal, mainCurrency))) +
+        cardLineHtml('NET INCOME', cardValueHtml(formatCurrency(netIncome, mainCurrency))) +
+        cardLineHtml('SAVINGS RATE', savingsRateHtml) +
+        cardLineHtml('TOTAL SAVED', cardValueHtml(formatCurrency(totalSaved, mainCurrency))) +
+        cardLineHtml('CAPITAL DEPLOYMENT' + infoIconHtml(CAPITAL_DEPLOYMENT_INFO), cardValueHtml(capitalDeployment === null ? 'N/A' : capitalDeployment.toFixed(1) + '%', POSITIVE_COLOR)) +
+        cardLineHtml('INVESTMENT PERFORMANCE', resultHtml) +
+        cardLineHtml('NET WORTH EoM', cardValueHtml(formatCurrency(totals.netWorth, mainCurrency))) +
+        cardLineHtml('NET WORTH GROWTH', growthHtml(netWorthGrowth, mainCurrency)) +
+        cardLineHtml('LIQUID NET WORTH EoM', cardValueHtml(formatCurrency(totals.liquidNetWorth, mainCurrency))) +
+        cardLineHtml('LIQUID NET WORTH GROWTH', growthHtml(liquidGrowth, mainCurrency)) +
         '</div>';
-      monthCards.push(col);
-      earningGrid.appendChild(col);
+      cards.push(card);
+      grid.appendChild(card);
     });
 
-    let carouselOffset = months.length - MAX_VISIBLE;
-    const renderCarousel = () => {
-      if (!earningLeft || !earningRight) return;
-      monthCards.forEach((card, i) => {
-        card.style.display = (i >= carouselOffset && i < carouselOffset + MAX_VISIBLE) ? '' : 'none';
-      });
-      earningLeft.disabled = carouselOffset <= 0;
-      earningRight.disabled = carouselOffset >= months.length - MAX_VISIBLE;
-    };
-    if (earningLeft && earningRight) {
-      earningLeft.addEventListener('click', () => {
-        if (carouselOffset > 0) {
-          carouselOffset--;
-          renderCarousel();
-        }
-      });
-      earningRight.addEventListener('click', () => {
-        if (carouselOffset < months.length - MAX_VISIBLE) {
-          carouselOffset++;
-          renderCarousel();
-        }
-      });
-    }
-    renderCarousel();
-
+    setUpCarousel(cards, leftButton, rightButton, 4);
+    if (emptyMessage) emptyMessage.style.display = hasData ? 'none' : 'block';
     if (!hasData) {
-      if (earningEmpty) earningEmpty.style.display = 'block';
-      if (earningLeft) earningLeft.disabled = true;
-      if (earningRight) earningRight.disabled = true;
-    } else {
-      if (earningEmpty) earningEmpty.style.display = 'none';
+      if (leftButton) leftButton.disabled = true;
+      if (rightButton) rightButton.disabled = true;
     }
+  },
 
-    // Goals section
+  // The first three goals, in priority order
+  async _renderDashboardGoals({ context, mainCurrency }) {
     const goals = await DB.getAll('goals');
-    const { accValue, accNames } = await this._buildGoalContext();
-    const goalGrid = document.getElementById('dash-goal-grid');
-    const goalEmpty = document.getElementById('dash-goal-empty');
-    goalGrid.innerHTML = '';
+    const grid = document.getElementById('dash-goal-grid');
+    const emptyMessage = document.getElementById('dash-goal-empty');
+    grid.innerHTML = '';
+    emptyMessage.style.display = goals.length === 0 ? 'block' : 'none';
+    if (goals.length === 0) return;
 
-    if (goals.length === 0) {
-      goalEmpty.style.display = 'block';
-    } else {
-      goalEmpty.style.display = 'none';
-      goals.sort((a, b) =>
-        ((a.order != null ? a.order : Infinity) - (b.order != null ? b.order : Infinity)) || (a.id - b.id)
-      );
-      const results = this._computeGoalWaterfall(goals, accValue);
-      results.slice(0, 3).forEach(goalRes => {
-        const col = document.createElement('div');
-        col.className = 'col-md-4 goal-col goal-col-flush';
-        col.innerHTML = this._goalCardHtml(goalRes, accNames, true, mainCurrency);
-        goalGrid.appendChild(col);
-      });
+    const { accountValues, accountNames } = this._goalAccountValues(context);
+    this._computeGoalWaterfall(this._sortGoalsByPriority(goals), accountValues).slice(0, 3).forEach(goalResult => {
+      const column = document.createElement('div');
+      column.className = 'col-md-4 goal-col goal-col-flush';
+      column.innerHTML = this._goalCardHtml(goalResult, accountNames, true, mainCurrency);
+      grid.appendChild(column);
+    });
+  },
+
+  // Liquid net worth 12 months ahead, from the average and spread of the last 12 monthly returns
+  _renderDashboardForecast({ context, mainCurrency }) {
+    const canvas = document.getElementById('chart-forecast');
+    const emptyMessage = document.getElementById('forecast-empty');
+    const statsRow = document.getElementById('forecast-stats');
+    if (!canvas || !emptyMessage) return;
+
+    const liquidAccountIds = new Set(context.accounts.filter(context.isLiquidAccount).map(account => account.id));
+    const currentMonth = context.today.substring(0, 7);
+    const monthTotals = context.monthEndTotals(liquidAccountIds);
+    const liquidCurrentTotal = context.netWorth().liquidNetWorth;
+    monthTotals[currentMonth] = liquidCurrentTotal;
+
+    // Asset purchases and sales count as capital moving in and out
+    const returns = context.monthlyReturns(liquidAccountIds, { includeAssetEvents: true });
+    let returnMonths = Object.keys(returns).filter(month => month < currentMonth).sort();
+    if (returnMonths.length === 0) returnMonths = Object.keys(returns).sort();
+    const rates = returnMonths.slice(-12).map(month => returns[month].pct / 100);
+
+    const hasData = rates.length > 0 && liquidCurrentTotal > 0;
+    emptyMessage.style.display = hasData ? 'none' : 'block';
+    if (statsRow) statsRow.style.display = hasData ? '' : 'none';
+    canvas.style.display = hasData ? '' : 'none';
+    if (canvas.parentElement) canvas.parentElement.style.display = hasData ? '' : 'none';
+    if (!hasData) return;
+
+    const meanMonthlyReturn = rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+    const variance = rates.reduce((sum, rate) => sum + (rate - meanMonthlyReturn) * (rate - meanMonthlyReturn), 0) / rates.length;
+    const standardDeviation = Math.sqrt(variance);
+
+    const historyMonths = Object.keys(monthTotals).filter(month => month <= currentMonth).sort().slice(-12);
+    const labels = [];
+    const historyValues = [];
+    const pessimisticValues = [];
+    const neutralValues = [];
+    const optimisticValues = [];
+    historyMonths.forEach(month => {
+      labels.push(month);
+      historyValues.push(monthTotals[month]);
+      pessimisticValues.push(null);
+      neutralValues.push(null);
+      optimisticValues.push(null);
+    });
+
+    // The three projections start from the current month's value
+    const startIndex = historyMonths.indexOf(currentMonth);
+    const startValue = monthTotals[currentMonth] || liquidCurrentTotal;
+    if (startIndex >= 0) {
+      pessimisticValues[startIndex] = startValue;
+      neutralValues[startIndex] = startValue;
+      optimisticValues[startIndex] = startValue;
     }
 
-    // ==================== FORECAST ====================
-    // Projects liquid net worth 12 months ahead using historical monthly ROI
-    (function() {
-      const canvas = document.getElementById('chart-forecast');
-      const empty = document.getElementById('forecast-empty');
-      const statsRow = document.getElementById('forecast-stats');
-      if (!canvas || !empty) return;
+    // Neutral compounds the average monthly return; pessimistic and optimistic
+    // sit one standard deviation below and above it. A month can never lose
+    // more than everything, hence the floor at zero.
+    const now = new Date();
+    let pessimisticValue = startValue;
+    let neutralValue = startValue;
+    let optimisticValue = startValue;
+    for (let monthOffset = 1; monthOffset <= 12; monthOffset++) {
+      const monthDate = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+      labels.push(monthDate.getFullYear() + '-' + String(monthDate.getMonth() + 1).padStart(2, '0'));
+      historyValues.push(null);
+      pessimisticValue *= Math.max(0, 1 + meanMonthlyReturn - standardDeviation);
+      neutralValue *= Math.max(0, 1 + meanMonthlyReturn);
+      optimisticValue *= 1 + meanMonthlyReturn + standardDeviation;
+      pessimisticValues.push(pessimisticValue);
+      neutralValues.push(neutralValue);
+      optimisticValues.push(optimisticValue);
+    }
+    const projectedValue = neutralValue;
 
-      // Liquid Net Worth scope
-      const liquidAccountIds = new Set(accounts
-        .filter(a => a.includeInLiquidNetWorth !== false && a.portfolioId != 3)
-        .map(a => a.id));
-      const flowTypes = ['deposit', 'withdrawal', 'valuation', 'buy', 'sell', 'asset-add', 'asset-sell'];
-      const liquidTxs = transactions
-        .filter(t => liquidAccountIds.has(t.accountId) && flowTypes.includes(t.type))
-        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const yearAgo = new Date(now.getFullYear(), now.getMonth() - 12, 1);
+    const initialValue = monthTotals[yearAgo.getFullYear() + '-' + String(yearAgo.getMonth() + 1).padStart(2, '0')];
+    const growthAmount = projectedValue - startValue;
+    const growthPercent = startValue > 0 ? (growthAmount / startValue) * 100 : 0;
 
-      let liquidCurrentTotal = 0;
-      accounts.forEach(a => {
-        if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-          if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-            const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-            liquidCurrentTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
+    const setText = (id, text) => { const element = document.getElementById(id); if (element) element.textContent = text; };
+    setText('forecast-initial', initialValue !== undefined ? formatCurrency(initialValue, mainCurrency) : 'N/A');
+    setText('forecast-current', formatCurrency(startValue, mainCurrency));
+    setText('forecast-projected', formatCurrency(projectedValue, mainCurrency));
+    const growthElement = document.getElementById('forecast-growth');
+    if (growthElement) {
+      growthElement.innerHTML = signedCurrency(growthAmount, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(growthPercent, 2) + ')</span>';
+      growthElement.className = 'stat-value forecast-stat ' + plClass(growthAmount);
+    }
+    const returnElement = document.getElementById('forecast-roi');
+    if (returnElement) {
+      returnElement.innerHTML = signedPercent(meanMonthlyReturn * 100, 2) + ' <span class="perf-pct">+/&minus;' + (standardDeviation * 100).toFixed(2) + '%</span>';
+      returnElement.className = 'stat-value forecast-stat ' + plClass(meanMonthlyReturn);
+    }
+
+    const projectionDataset = (label, data, color) => ({
+      label, data, borderColor: color, backgroundColor: color + '0d', borderDash: [6, 4], tension: 0.3,
+      pointRadius: 3, pointBackgroundColor: color, borderWidth: 2, fill: false,
+    });
+    const monthLabel = (month, year) => (month ? monthStartDate(month).toLocaleDateString('en-GB', { month: 'short', year }) : '');
+    App._charts.forecast = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'HISTORY', data: historyValues, borderColor: readAccent(), backgroundColor: shadeAccent(readAccent(), 1, 0.05),
+            fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: readAccent(), borderWidth: 2,
+          },
+          projectionDataset('PESSIMISTIC', pessimisticValues, '#ff3333'),
+          projectionDataset('NEUTRAL', neutralValues, '#33ccff'),
+          projectionDataset('OPTIMISTIC', optimisticValues, '#ffaa00'),
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#d0d0d0', font: { family: CHART_FONT, size: 12 }, padding: 8 } },
+          tooltip: { callbacks: { title: items => monthLabel(items && items.length ? items[0].label : '', 'numeric') } },
+        },
+        scales: {
+          x: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT }, callback: index => monthLabel(labels[index], '2-digit') }, grid: { color: '#222' } },
+          y: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT }, callback: value => formatCurrency(value, mainCurrency) }, grid: { color: '#222' } },
+        },
+      },
+    });
+  },
+
+  // One card per year over the last 5 years that have data (4 visible at a time)
+  _renderDashboardYearlyCards({ context, mainCurrency, incomes, expenses, performanceAccountIds }) {
+    const grid = document.getElementById('decade-anal-grid');
+    const emptyMessage = document.getElementById('decade-anal-empty');
+    const leftButton = document.getElementById('decade-anal-left');
+    const rightButton = document.getElementById('decade-anal-right');
+    if (!grid || !emptyMessage) return;
+
+    const today = context.today;
+    const currentYear = today.substring(0, 4);
+    const currentMonthNumber = Number(today.substring(5, 7));
+    const candidateYears = [4, 3, 2, 1, 0].map(yearsBack => String(Number(currentYear) - yearsBack));
+    const yearEnd = (year) => (year === currentYear ? today : year + '-12-31');
+    const inMain = (transaction, amount) => context.toMain(amount, context.accountCurrency(transaction.accountId), transaction.date);
+
+    const netDepositsByYear = {};
+    const savedByYear = {};
+    context.balanceTransactions.forEach(transaction => {
+      const year = (transaction.date || '').substring(0, 4);
+      if (!year) return;
+      if (netDeposit(transaction) !== 0) netDepositsByYear[year] = (netDepositsByYear[year] || 0) + inMain(transaction, netDeposit(transaction));
+      if (savedAmount(transaction) !== 0) savedByYear[year] = (savedByYear[year] || 0) + inMain(transaction, savedAmount(transaction));
+    });
+
+    // Investment result of the performance accounts over a year, see periodResult()
+    const investmentResultForYear = (year) => {
+      const start = year + '-01-01';
+      const end = yearEnd(year);
+      return periodResult(
+        context.recordedTotal(performanceAccountIds, start),
+        context.recordedTotal(performanceAccountIds, end),
+        context.capitalAddedBetween(performanceAccountIds, start, end),
+      );
+    };
+
+    // Time-weighted return: links the sub-period returns between capital-flow dates
+    const timeWeightedReturn = (year) => {
+      const start = year + '-01-01';
+      const end = yearEnd(year);
+      const flowDates = [...new Set(
+        context.balanceTransactionsOf(performanceAccountIds)
+          .filter(transaction => (transaction.date || '') >= start && (transaction.date || '') <= end && isCapitalFlow(transaction))
+          .map(transaction => transaction.date),
+      )].sort();
+      let growthFactor = 1;
+      let periodStartValue = context.recordedTotal(performanceAccountIds, start);
+      flowDates.forEach(flowDate => {
+        const valueBeforeFlow = context.recordedTotal(performanceAccountIds, flowDate, true);
+        if (periodStartValue !== 0) growthFactor *= valueBeforeFlow / periodStartValue;
+        periodStartValue = context.recordedTotal(performanceAccountIds, flowDate);
+      });
+      const endValue = context.recordedTotal(performanceAccountIds, end);
+      if (periodStartValue !== 0) growthFactor *= endValue / periodStartValue;
+      return (growthFactor - 1) * 100;
+    };
+
+    // Money-weighted return (IRR): the yearly rate at which all flows net to zero; null when none exists
+    const moneyWeightedReturn = (year) => {
+      const start = year + '-01-01';
+      const end = yearEnd(year);
+      const startTime = new Date(start).getTime();
+      const endTime = new Date(end).getTime();
+      const flows = [{ yearFraction: 0, amount: -context.recordedTotal(performanceAccountIds, start) }];
+      context.balanceTransactionsOf(performanceAccountIds).forEach(transaction => {
+        if ((transaction.date || '') < start || (transaction.date || '') > end || !isCapitalFlow(transaction)) return;
+        flows.push({ yearFraction: (new Date(transaction.date).getTime() - startTime) / (endTime - startTime), amount: -inMain(transaction, capitalFlow(transaction)) });
+      });
+      flows.push({ yearFraction: 1, amount: context.recordedTotal(performanceAccountIds, end) });
+
+      const netPresentValue = (rate) => flows.reduce((sum, flow) => sum + flow.amount / Math.pow(1 + rate, flow.yearFraction), 0);
+      let low = -0.999;
+      let high = 10;
+      if (netPresentValue(low) * netPresentValue(high) > 0) return null;
+      for (let step = 0; step < 200; step++) {
+        const middle = (low + high) / 2;
+        if (netPresentValue(middle) * netPresentValue(low) > 0) low = middle;
+        else high = middle;
+      }
+      return ((low + high) / 2) * 100;
+    };
+
+    const yearStats = {};
+    candidateYears.forEach(year => {
+      const isCurrentYear = year === currentYear;
+      const totals = context.netWorth(yearEnd(year));
+      const income = incomeThroughMonth(incomes, year, isCurrentYear ? currentMonthNumber : null, context.rateToMain);
+      // The current year counts income and expenses through the current month alike
+      const expenseTotal = expensesThroughMonth(expenses, year, isCurrentYear ? currentMonthNumber : 12, context.rateToMain);
+      const netIncome = income - expenseTotal;
+      yearStats[year] = {
+        netWorth: totals.netWorth,
+        liquidNetWorth: totals.liquidNetWorth,
+        netDeposits: netDepositsByYear[year] || 0,
+        totalSaved: savedByYear[year] || 0,
+        income,
+        expenses: expenseTotal,
+        netIncome,
+        savingsRate: income > 0 ? (netIncome / income) * 100 : null,
+        investmentResult: investmentResultForYear(year),
+        timeWeightedReturn: timeWeightedReturn(year),
+        moneyWeightedReturn: moneyWeightedReturn(year),
+      };
+    });
+
+    const years = candidateYears.filter(year =>
+      context.balanceTransactions.some(transaction => (transaction.date || '').startsWith(year) && ['deposit', 'withdrawal', 'buy', 'sell', 'valuation'].includes(transaction.type)) ||
+      incomes.some(income => (income.month || '').startsWith(year)) ||
+      expenses.some(expense => expense.year === year));
+    const yearsWithData = new Set(years);
+
+    // Year-over-year changes against the previous year, when it has data. For the
+    // current (partial) year the previous year is cut to the same months.
+    Object.keys(yearStats).forEach(year => {
+      const previousYear = String(Number(year) - 1);
+      const previous = yearsWithData.has(previousYear) ? yearStats[previousYear] : null;
+      const stats = yearStats[year];
+      const isCurrentYear = year === currentYear;
+      const previousIncome = !previous ? null : isCurrentYear ? incomeThroughMonth(incomes, previousYear, currentMonthNumber, context.rateToMain) : previous.income;
+      const previousExpenses = !previous ? null : isCurrentYear ? expensesThroughMonth(expenses, previousYear, currentMonthNumber, context.rateToMain) : previous.expenses;
+      stats.incomeChange = previousIncome === null ? null : stats.income - previousIncome;
+      stats.expenseChange = previousExpenses === null ? null : stats.expenses - previousExpenses;
+      stats.savingsRateChange = previous && stats.savingsRate !== null && previous.savingsRate !== null ? stats.savingsRate - previous.savingsRate : null;
+      stats.capitalDeployment = stats.netIncome > 0 ? (stats.netDeposits / stats.netIncome) * 100 : null;
+    });
+
+    // A change against last year, with its percent; `lowerIsBetter` colors a drop green
+    const changeHtml = (change, previousValue, lowerIsBetter) => {
+      if (change === null || change === undefined) return cardValueHtml('N/A', MISSING_VALUE_COLOR);
+      const isGood = lowerIsBetter ? change < 0 : change >= 0;
+      const sign = change >= 0 ? '+' : '-';
+      let text = sign + formatCurrency(Math.abs(change), mainCurrency);
+      if (previousValue) text += ' (' + sign + ((Math.abs(change) / Math.abs(previousValue)) * 100).toFixed(1) + '%)';
+      return cardValueHtml(text, isGood ? POSITIVE_COLOR : NEGATIVE_COLOR);
+    };
+    const returnHtml = (value) => (value === null || value === undefined ? cardValueHtml('N/A', MISSING_VALUE_COLOR) : cardValueHtml(signedPercent(value, 2), profitLossColor(value)));
+
+    const firstYearStart = years[0] ? context.netWorth(years[0] + '-01-01') : null;
+    const cards = [];
+    grid.innerHTML = '';
+    years.forEach((year, index) => {
+      const stats = yearStats[year];
+      const previousTotals = index > 0 ? yearStats[years[index - 1]] : firstYearStart;
+      const result = stats.investmentResult;
+      const card = document.createElement('div');
+      card.className = 'col-3 earning-col';
+      card.innerHTML = '<div class="earning-month">' +
+        '<div class="earning-month-label">' + year + '</div>' +
+        cardLineHtml('INCOME', cardValueHtml(formatCurrency(stats.income, mainCurrency))) +
+        cardLineHtml('INCOME YoY' + infoIconHtml('Change in income vs previous year'), changeHtml(stats.incomeChange, stats.income - (stats.incomeChange || 0), false)) +
+        cardLineHtml('EXPENSES', cardValueHtml(formatCurrency(stats.expenses, mainCurrency))) +
+        cardLineHtml('EXPENSES YoY' + infoIconHtml('Change in expenses vs previous year'), changeHtml(stats.expenseChange, stats.expenses - (stats.expenseChange || 0), true)) +
+        cardLineHtml('NET INCOME', cardValueHtml(formatCurrency(stats.netIncome, mainCurrency))) +
+        cardLineHtml('SAVINGS RATE' + infoIconHtml('Share of income not spent. Formula: NET INCOME ÷ INCOME × 100'),
+          stats.savingsRate === null ? cardValueHtml('N/A', MISSING_VALUE_COLOR) : cardValueHtml(signedPercent(stats.savingsRate, 1), profitLossColor(stats.savingsRate))) +
+        cardLineHtml('SAVINGS RATE YoY' + infoIconHtml('Change in savings rate vs previous year, in percentage points'),
+          stats.savingsRateChange === null ? cardValueHtml('N/A', POSITIVE_COLOR) : cardValueHtml((stats.savingsRateChange >= 0 ? '+' : '') + stats.savingsRateChange.toFixed(1) + 'pp', profitLossColor(stats.savingsRateChange))) +
+        cardLineHtml('TOTAL SAVED' + infoIconHtml('Deposits minus withdrawals made into all accounts during the year'), cardValueHtml(formatCurrency(stats.totalSaved, mainCurrency))) +
+        cardLineHtml('CAPITAL DEPLOYMENT' + infoIconHtml(CAPITAL_DEPLOYMENT_INFO), cardValueHtml(stats.capitalDeployment === null ? 'N/A' : stats.capitalDeployment.toFixed(1) + '%', POSITIVE_COLOR)) +
+        cardLineHtml('INVESTMENTS PERFORMANCE' + infoIconHtml('Gain in investment accounts relative to capital deployed. Formula: (value EoY - value BoY - net flows) ÷ (value BoY + net flows) × 100'),
+          cardValueHtml(signedCurrency(result.abs, mainCurrency) + ' (' + signedPercent(result.pct, 2) + ')', profitLossColor(result.abs))) +
+        cardLineHtml('TWR' + infoIconHtml('Time-weighted return: isolates market performance by removing the effect of cash flow timing. Best measure to compare against an index.'), returnHtml(stats.timeWeightedReturn)) +
+        cardLineHtml('MWR' + infoIconHtml('Money-weighted return (IRR): accounts for the size and timing of every deposit/withdrawal, weighted by how long money was invested. Best measure of your personal experience.'), returnHtml(stats.moneyWeightedReturn)) +
+        cardLineHtml('NET WORTH EoY', cardValueHtml(formatCurrency(stats.netWorth, mainCurrency))) +
+        cardLineHtml('NET WORTH GROWTH' + infoIconHtml('Change in net worth vs previous year-end'), growthHtml(previousTotals ? stats.netWorth - previousTotals.netWorth : null, mainCurrency)) +
+        cardLineHtml('LIQUID NET WORTH EoY', cardValueHtml(formatCurrency(stats.liquidNetWorth, mainCurrency))) +
+        cardLineHtml('LIQUID NET WORTH GROWTH' + infoIconHtml('Change in liquid net worth vs previous year-end'), growthHtml(previousTotals ? stats.liquidNetWorth - previousTotals.liquidNetWorth : null, mainCurrency)) +
+        '</div>';
+      cards.push(card);
+      grid.appendChild(card);
+    });
+
+    emptyMessage.style.display = years.length === 0 ? 'block' : 'none';
+    if (years.length === 0) {
+      if (leftButton) leftButton.disabled = true;
+      if (rightButton) rightButton.disabled = true;
+      return;
+    }
+    setUpCarousel(cards, leftButton, rightButton, 4);
+  },
+
+  // Doughnut of net worth per portfolio
+  _renderDashboardAllocation({ context, portfolios }) {
+    const canvas = document.getElementById('chart-allocation');
+    if (!canvas) return;
+
+    const portfolioValues = {};
+    portfolios.forEach(portfolio => { portfolioValues[portfolio.id] = { name: portfolio.name, value: 0 }; });
+    context.accounts.forEach(account => {
+      if (account.includeInNetWorth === false || !portfolioValues[account.portfolioId]) return;
+      portfolioValues[account.portfolioId].value += context.accountValueInMain(account);
+    });
+    const totalValue = context.netWorth().netWorth;
+
+    const palette = chartPalette();
+    const rows = Object.values(portfolioValues)
+      .filter(portfolio => portfolio.value > 0)
+      .map((portfolio, index) => ({
+        name: portfolio.name,
+        value: portfolio.value,
+        percent: totalValue > 0 ? Math.round((portfolio.value / totalValue) * 100) : 0,
+        color: palette[index % palette.length],
+      }));
+    const hasData = rows.length > 0;
+
+    App._charts.allocation = new Chart(canvas.getContext('2d'), {
+      type: 'doughnut',
+      data: {
+        labels: hasData ? rows.map(row => row.name + ' (' + row.percent + '%)') : ['NO DATA'],
+        datasets: [{
+          data: hasData ? rows.map(row => row.value) : [1],
+          backgroundColor: hasData ? rows.map(row => row.color) : ['#333333'],
+          borderColor: '#161616',
+          borderWidth: 2,
+        }],
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } },
+    });
+
+    const legend = document.getElementById('alloc-legend');
+    if (legend) {
+      legend.innerHTML = hasData
+        ? rows.map(row =>
+            '<div class="alloc-legend-row">' +
+              '<span class="alloc-legend-swatch" style="background:' + row.color + '"></span>' +
+              '<span class="alloc-legend-pct">' + row.percent + '%</span>' +
+              '<span class="alloc-legend-name">' + escapeHtml(row.name) + '</span>' +
+            '</div>').join('')
+        : '<div class="alloc-legend-row"><span class="alloc-legend-name">NO DATA</span></div>';
+    }
+  },
+
+  // "Performance over time" (value) and "Investment performance" (monthly %) charts, sharing the range selector
+  _renderDashboardValueCharts({ context, mainCurrency, performanceAccountIds }) {
+    const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
+    const range = activeRange ? activeRange.dataset.range : '1y';
+    const performanceCanvas = document.getElementById('chart-performance');
+    if (performanceCanvas) this._renderDashboardRangeChart(context, mainCurrency, performanceCanvas, 'performance', performanceAccountIds, range, readAccent(), {});
+    const investmentCanvas = document.getElementById('chart-investment');
+    if (investmentCanvas) this._renderDashboardRangeChart(context, mainCurrency, investmentCanvas, 'investment', performanceAccountIds, range, '#33ccff', { percent: true, average: true });
+  },
+
+  // One point per month: the end-of-month total value, or with `percent` the
+  // month's investment result in %. `average` adds a dashed average line.
+  _renderDashboardRangeChart(context, mainCurrency, canvas, chartKey, accountIds, range, color, { percent = false, average = false }) {
+    const monthTotals = context.monthEndTotals(accountIds);
+    const currentTotal = context.replayBalances(accountIds, () => {});
+    let points = Object.entries(monthTotals).map(([month, value]) => ({ month, value }));
+
+    const currentMonth = context.today.substring(0, 7);
+    if (!monthTotals[currentMonth] && currentTotal > 0) points.push({ month: currentMonth, value: currentTotal });
+
+    if (points.length > 0) {
+      const latestMonth = points.reduce((latest, point) => (latest.month > point.month ? latest : point)).month;
+      let cutoffMonth = '';
+      if (range === 'ytd') {
+        cutoffMonth = context.today.substring(0, 4) + '-01';
+      } else if (range !== 'max') {
+        const years = parseInt(range.replace('y', '')) || 1;
+        const cutoff = new Date(latestMonth + '-01');
+        cutoff.setFullYear(cutoff.getFullYear() - years);
+        cutoffMonth = cutoff.toISOString().substring(0, 7);
+      }
+      if (cutoffMonth) points = points.filter(point => point.month >= cutoffMonth);
+    }
+    points.sort((first, second) => first.month.localeCompare(second.month));
+    if (points.length === 0) points.push({ month: currentMonth, value: currentTotal || 0 });
+
+    const labels = points.map(point => shortMonthLabel(point.month));
+    let values;
+    if (percent) {
+      const monthlyResults = context.monthlyReturns(accountIds);
+      values = points.map(point => (monthlyResults[point.month] != null ? monthlyResults[point.month].pct : 0));
+    } else {
+      values = points.map(point => point.value);
+    }
+
+    const datasets = [{
+      label: percent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
+      data: values,
+      borderColor: color,
+      backgroundColor: percent ? 'transparent' : color + '0d',
+      fill: !percent,
+      tension: percent ? 0.15 : 0.3,
+      pointRadius: percent ? 0 : 4,
+      pointBackgroundColor: percent ? undefined : color,
+      pointHitRadius: percent ? 8 : undefined,
+      borderWidth: 2,
+    }];
+    if (average) {
+      const averageValue = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+      datasets.push({ label: 'AVG', data: values.map(() => averageValue), borderColor: '#ffaa00', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, pointHitRadius: 12, fill: false, tension: 0 });
+    }
+
+    const formatValue = percent ? value => value.toFixed(2) + '%' : value => formatCurrency(value, mainCurrency);
+    App._charts[chartKey] = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      plugins: percent ? [this._positiveNegativeFillPlugin(values)] : [],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: average, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: CHART_FONT } } },
+          tooltip: {
+            callbacks: {
+              title: items => (items.length ? labels[items[0].dataIndex] : ''),
+              label: item => (item.datasetIndex === 1 && average ? 'AVG: ' : item.dataset.label + ': ') + formatValue(item.parsed.y),
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT } }, grid: { color: '#222' } },
+          y: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT }, callback: formatValue }, grid: { color: '#222' } },
+        },
+      },
+    });
+  },
+
+  // Chart.js plugin: fills the area between the line and zero, green above and red below
+  _positiveNegativeFillPlugin(values) {
+    const positiveFill = 'rgba(51,255,51,0.18)';
+    const negativeFill = 'rgba(255,51,51,0.18)';
+    const fillPolygon = (context, corners, fillStyle) => {
+      context.beginPath();
+      context.moveTo(corners[0][0], corners[0][1]);
+      corners.slice(1).forEach(([x, y]) => context.lineTo(x, y));
+      context.closePath();
+      context.fillStyle = fillStyle;
+      context.fill();
+    };
+    return {
+      id: 'zeroFillSplit',
+      beforeDatasetsDraw(chart) {
+        const meta = chart.getDatasetMeta(0);
+        if (!meta || meta.hidden) return;
+        const points = meta.data;
+        if (!points || points.length < 2) return;
+        const context = chart.ctx;
+        const zeroY = chart.scales.y.getPixelForValue(0);
+        context.save();
+
+        for (let index = 0; index < points.length - 1; index++) {
+          const x0 = points[index].x, y0 = points[index].y;
+          const x1 = points[index + 1].x, y1 = points[index + 1].y;
+          const startPositive = values[index] >= 0;
+          const endPositive = values[index + 1] >= 0;
+          if (startPositive === endPositive) {
+            fillPolygon(context, [[x0, zeroY], [x0, y0], [x1, y1], [x1, zeroY]], startPositive ? positiveFill : negativeFill);
           } else {
-            const latest = accTxs[a.id];
-            const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-            liquidCurrentTotal += v * rateFor(accCurrency[a.id], latest ? latest.date : todayStr());
+            // The segment crosses zero: fill each side up to the crossing point
+            const crossingX = x0 + ((0 - values[index]) / (values[index + 1] - values[index])) * (x1 - x0);
+            fillPolygon(context, [[x0, zeroY], [x0, y0], [crossingX, zeroY]], startPositive ? positiveFill : negativeFill);
+            fillPolygon(context, [[crossingX, zeroY], [x1, y1], [x1, zeroY]], endPositive ? positiveFill : negativeFill);
           }
         }
-      });
 
-      const bal = {};
-      liquidAccountIds.forEach(id => bal[id] = 0);
-      const monthTotals = {};
-      liquidTxs.forEach(tx => {
-        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-        const mk = (tx.date || '').substring(0, 7);
-        if (mk) {
-          let t = 0;
-          Object.values(bal).forEach(b => t += b);
-          monthTotals[mk] = t;
-        }
-      });
-
-      const curMonth = todayStr().substring(0, 7);
-      monthTotals[curMonth] = liquidCurrentTotal;
-
-      // Monthly ROI over liquid accounts (asset add/sell treated as flows)
-      function _liquidMonthlyRoi() {
-        const b = {};
-        liquidAccountIds.forEach(id => b[id] = 0);
-        const totalB = () => Object.values(b).reduce((s, v) => s + v, 0);
-        const results = {};
-        let mkActive = null;
-        let startBal = 0;
-        let monthFlows = 0;
-        liquidTxs.forEach(tx => {
-          const mk = (tx.date || '').substring(0, 7);
-          if (!mk) return;
-          if (mk !== mkActive) {
-            if (mkActive !== null) {
-              const abs = totalB() - startBal - monthFlows;
-              const base = startBal + monthFlows;
-              results[mkActive] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
-            }
-            mkActive = mk;
-            startBal = totalB();
-            monthFlows = 0;
-          }
-          b[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-          if ((tx.type === 'deposit' && !_isOpeningContribution(tx)) || tx.type === 'buy' || tx.type === 'asset-add') {
-            monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-          } else if (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') {
-            monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-          } else if (_isOpeningTx(tx)) {
-            monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
-          }
+        points.forEach((point, index) => {
+          context.beginPath();
+          context.arc(point.x, point.y, 4, 0, Math.PI * 2);
+          context.fillStyle = profitLossColor(values[index]);
+          context.fill();
+          context.strokeStyle = '#1a1a2e';
+          context.lineWidth = 1.5;
+          context.stroke();
         });
-        if (mkActive !== null) {
-          const abs = totalB() - startBal - monthFlows;
-          const base = startBal + monthFlows;
-          results[mkActive] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
+
+        context.restore();
+      },
+    };
+  },
+
+  // Net income and money saved per month over a selectable range, with months you can leave out
+  _renderDashboardSavingsTrend({ context, mainCurrency, incomes, expenses }) {
+    const canvas = document.getElementById('chart-savings-rate');
+    const emptyMessage = document.getElementById('savings-rate-empty');
+    const statsCard = document.getElementById('sr-stats-card');
+    if (!canvas || !emptyMessage) return;
+
+    // Months with income over the last 5 years (61 months), oldest first
+    const monthData = [];
+    lastMonthKeys(61).forEach(month => {
+      const income = monthIncome(incomes, month, context.rateToMain);
+      if (!(income > 0)) return;
+      const totalSaved = context.transactions
+        .filter(transaction => (transaction.date || '').startsWith(month) && (transaction.type === 'deposit' || transaction.type === 'withdrawal'))
+        .reduce((sum, transaction) => sum + context.toMain(savedAmount(transaction), context.accountCurrency(transaction.accountId), transaction.date), 0);
+      monthData.push({ key: month, label: shortMonthLabel(month), netIncome: income - monthExpenses(expenses, month, context.rateToMain), totalSaved });
+    });
+    // Months left out by the user, kept for the session
+    const excludedMonths = (App._srExcludedMonths = App._srExcludedMonths || new Set());
+
+    const render = () => {
+      if (App._charts.savingsRate) { try { App._charts.savingsRate.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.savingsRate; }
+
+      const activeButton = document.querySelector('#sr-range-selectors .perf-btn.active');
+      const range = activeButton ? activeButton.dataset.range : '1y';
+      let monthsInRange = monthData;
+      if (monthData.length > 0 && range !== 'max') {
+        const latestDate = new Date(monthData[monthData.length - 1].key + '-01');
+        let cutoff;
+        if (range === 'ytd') {
+          cutoff = new Date(latestDate.getFullYear(), 0, 1);
+        } else {
+          cutoff = new Date(latestDate);
+          cutoff.setMonth(cutoff.getMonth() - ((parseInt(range.replace('y', '')) || 1) * 12 - 1));
         }
-        return results;
+        const cutoffMonth = cutoff.getFullYear() + '-' + String(cutoff.getMonth() + 1).padStart(2, '0');
+        monthsInRange = monthData.filter(month => month.key >= cutoffMonth);
+      }
+      const shownMonths = monthsInRange.filter(month => !excludedMonths.has(month.key));
+
+      const toggles = document.getElementById('sr-month-toggles');
+      if (toggles) {
+        toggles.innerHTML = '';
+        monthsInRange.forEach(month => {
+          const toggle = document.createElement('span');
+          const isExcluded = excludedMonths.has(month.key);
+          toggle.className = 'perf-btn' + (isExcluded ? '' : ' active');
+          toggle.textContent = month.label;
+          toggle.title = isExcluded ? 'Excluded - click to include' : 'Included - click to exclude';
+          toggle.onclick = () => {
+            if (excludedMonths.has(month.key)) excludedMonths.delete(month.key);
+            else excludedMonths.add(month.key);
+            render();
+          };
+          toggles.appendChild(toggle);
+        });
       }
 
-      const roi = _liquidMonthlyRoi();
-      let roiMonths = Object.keys(roi).filter(m => m < curMonth).sort();
-      if (roiMonths.length === 0) roiMonths = Object.keys(roi).sort();
-      roiMonths = roiMonths.slice(-12);
-      const rates = roiMonths.map(m => roi[m].pct / 100);
+      const showChart = shownMonths.length > 0;
+      emptyMessage.textContent = monthsInRange.length > 0 && !showChart ? 'NO MONTHS SELECTED.' : 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
+      emptyMessage.style.display = showChart ? 'none' : 'block';
+      canvas.style.display = showChart ? '' : 'none';
+      if (statsCard) statsCard.style.display = showChart ? '' : 'none';
+      if (!showChart) return;
 
-      const hasData = rates.length > 0 && liquidCurrentTotal > 0;
-      if (!hasData) {
-        empty.style.display = 'block';
-        if (statsRow) statsRow.style.display = 'none';
-        if (canvas) {
-          canvas.style.display = 'none';
-          if (canvas.parentElement) canvas.parentElement.style.display = 'none';
-        }
-        return;
-      }
-      empty.style.display = 'none';
-      if (statsRow) statsRow.style.display = '';
-      if (canvas) {
-        canvas.style.display = '';
-        if (canvas.parentElement) canvas.parentElement.style.display = '';
-      }
+      const netIncomeValues = shownMonths.map(month => month.netIncome);
+      const totalSavedValues = shownMonths.map(month => month.totalSaved);
+      const average = values => values.reduce((sum, value) => sum + value, 0) / values.length;
+      const signedHtml = value => '<span style="color:' + profitLossColor(value) + '">' + signedCurrency(value, mainCurrency) + '</span>';
+      const setStat = (id, value) => { const element = document.getElementById(id); if (element) element.innerHTML = signedHtml(value); };
+      setStat('sr-min', Math.min(...netIncomeValues));
+      setStat('sr-avg', average(netIncomeValues));
+      setStat('sr-max', Math.max(...netIncomeValues));
+      setStat('sr-min-saved', Math.min(...totalSavedValues));
+      setStat('sr-avg-saved', average(totalSavedValues));
+      setStat('sr-max-saved', Math.max(...totalSavedValues));
 
-      const mean = rates.reduce((s, v) => s + v, 0) / rates.length;
-      const variance = rates.reduce((s, v) => s + (v - mean) * (v - mean), 0) / rates.length;
-      const stdev = Math.sqrt(variance);
-
-      const histKeys = Object.keys(monthTotals).filter(m => m <= curMonth).sort().slice(-12);
-      const labels = [];
-      const histVals = [];
-      const pessVals = [];
-      const neutralVals = [];
-      const optVals = [];
-      histKeys.forEach(mk => {
-        labels.push(mk);
-        histVals.push(monthTotals[mk]);
-        pessVals.push(null);
-        neutralVals.push(null);
-        optVals.push(null);
-      });
-
-      const anchorIdx = histKeys.indexOf(curMonth);
-      const anchorVal = monthTotals[curMonth] || liquidCurrentTotal;
-      if (anchorIdx >= 0) {
-        pessVals[anchorIdx] = anchorVal;
-        neutralVals[anchorIdx] = anchorVal;
-        optVals[anchorIdx] = anchorVal;
-      }
-
-      const now = new Date();
-      const baseYear = now.getFullYear();
-      const baseMonth = now.getMonth();
-      let nRun = anchorVal;
-      let pRun = anchorVal;
-      let oRun = anchorVal;
-      for (let m = 1; m <= 12; m++) {
-        const d = new Date(baseYear, baseMonth + m, 1);
-        const mk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-        labels.push(mk);
-        histVals.push(null);
-        nRun *= (1 + mean + stdev);
-        pRun *= (1 + mean);
-        oRun *= (1 + mean + 2 * stdev);
-        pessVals.push(Math.max(0, pRun));
-        neutralVals.push(nRun);
-        optVals.push(oRun);
-      }
-      const projectedValue = nRun;
-
-      const initialDate = new Date(baseYear, baseMonth - 12, 1);
-      const initialMonthKey = initialDate.getFullYear() + '-' + String(initialDate.getMonth() + 1).padStart(2, '0');
-      const initialVal = monthTotals[initialMonthKey];
-
-      const growthAmt = projectedValue - anchorVal;
-      const growthPct = anchorVal > 0 ? (growthAmt / anchorVal) * 100 : 0;
-
-      const initialEl = document.getElementById('forecast-initial');
-      if (initialEl) initialEl.textContent = initialVal !== undefined ? formatCurrency(initialVal, mainCurrency) : 'N/A';
-      const currentEl = document.getElementById('forecast-current');
-      if (currentEl) currentEl.textContent = formatCurrency(anchorVal, mainCurrency);
-      const projectedEl = document.getElementById('forecast-projected');
-      if (projectedEl) projectedEl.textContent = formatCurrency(projectedValue, mainCurrency);
-      const growthEl = document.getElementById('forecast-growth');
-      if (growthEl) {
-        growthEl.innerHTML = (growthAmt >= 0 ? '+' : '') + formatCurrency(growthAmt, mainCurrency) + ' <span class="perf-pct">(' + (growthPct >= 0 ? '+' : '') + growthPct.toFixed(2) + '%)</span>';
-        growthEl.className = 'stat-value forecast-stat ' + (growthAmt >= 0 ? 'pos' : 'neg');
-      }
-      const roiEl = document.getElementById('forecast-roi');
-      if (roiEl) {
-        roiEl.innerHTML = (mean >= 0 ? '+' : '') + (mean * 100).toFixed(2) + '% <span class="perf-pct">+/&minus;' + (stdev * 100).toFixed(2) + '%</span>';
-        roiEl.className = 'stat-value forecast-stat ' + (mean >= 0 ? 'pos' : 'neg');
-      }
-
-      App._charts.forecast = new Chart(canvas.getContext('2d'), {
+      App._charts.savingsRate = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
-          labels,
+          labels: shownMonths.map(month => month.label),
           datasets: [
             {
-              label: 'HISTORY',
-              data: histVals,
-              borderColor: readAccent(),
-              backgroundColor: shadeAccent(readAccent(), 1, 0.05),
-              fill: true,
-              tension: 0.3,
-              pointRadius: 3,
-              pointBackgroundColor: readAccent(),
-              borderWidth: 2
+              label: 'NET INCOME', data: netIncomeValues, borderColor: readAccent(), backgroundColor: shadeAccent(readAccent(), 1, 0.08),
+              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: netIncomeValues.map(profitLossColor), borderWidth: 2, yAxisID: 'y',
             },
             {
-              label: 'PESSIMISTIC',
-              data: pessVals,
-              borderColor: '#ff3333',
-              backgroundColor: '#ff33330d',
-              borderDash: [6, 4],
-              tension: 0.3,
-              pointRadius: 3,
-              pointBackgroundColor: '#ff3333',
-              borderWidth: 2,
-              fill: false
+              label: 'TOTAL SAVED', data: totalSavedValues, borderColor: '#33ccff', backgroundColor: 'rgba(51,204,255,0.08)',
+              fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#33ccff', borderWidth: 2, yAxisID: 'y',
             },
-            {
-              label: 'NEUTRAL',
-              data: neutralVals,
-              borderColor: '#33ccff',
-              backgroundColor: '#33ccff0d',
-              borderDash: [6, 4],
-              tension: 0.3,
-              pointRadius: 3,
-              pointBackgroundColor: '#33ccff',
-              borderWidth: 2,
-              fill: false
-            },
-            {
-              label: 'OPTIMISTIC',
-              data: optVals,
-              borderColor: '#ffaa00',
-              backgroundColor: '#ffaa000d',
-              borderDash: [6, 4],
-              tension: 0.3,
-              pointRadius: 3,
-              pointBackgroundColor: '#ffaa00',
-              borderWidth: 2,
-              fill: false
-            }
-          ]
+          ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: {
-              position: 'bottom',
-              labels: {
-                color: '#d0d0d0',
-                font: { family: "'Share Tech Mono', monospace", size: 12 },
-                padding: 8
-              }
-            },
-            tooltip: {
-              callbacks: {
-                title: items => {
-                  const mk = items && items.length ? items[0].label : '';
-                  const d = new Date(mk + '-01');
-                  return d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
-                }
-              }
-            }
+            legend: { display: true, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: CHART_FONT } } },
+            tooltip: { callbacks: { label: item => (item.datasetIndex === 0 ? 'NET INCOME: ' : 'TOTAL SAVED: ') + formatCurrency(item.parsed.y, mainCurrency) } },
           },
           scales: {
-            x: {
-              ticks: {
-                color: '#888',
-                font: { size: 12, family: "'Share Tech Mono', monospace" },
-                callback: v => {
-                  const d = new Date(labels[v] + '-01');
-                  return d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
-                }
-              },
-              grid: { color: '#222' }
-            },
-            y: {
-              ticks: {
-                color: '#888',
-                font: { size: 12, family: "'Share Tech Mono', monospace" },
-                callback: v => formatCurrency(v, mainCurrency)
-              },
-              grid: { color: '#222' }
-            }
-          }
-        }
-      });
-    })();
-
-    // ==================== YEARLY PERFORMANCE ====================
-    (function() {
-      const grid = document.getElementById('decade-anal-grid');
-      const empty = document.getElementById('decade-anal-empty');
-      const leftBtn = document.getElementById('decade-anal-left');
-      const rightBtn = document.getElementById('decade-anal-right');
-      if (!grid || !empty) return;
-
-      const curYear = todayStr().substring(0, 4);
-      const candidateYears = [];
-      for (let i = 4; i >= 0; i--) candidateYears.push(String(Number(curYear) - i));
-
-      const flowTypes = ['deposit', 'withdrawal', 'valuation', 'buy', 'sell', 'asset-add', 'asset-sell'];
-      const sortedTxs = transactions
-        .filter(t => flowTypes.includes(t.type))
-        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-      const investedByYear = {};
-      sortedTxs.forEach(t => {
-        const y = (t.date || '').substring(0, 4);
-        if (!y) return;
-        if (t.type === 'deposit') investedByYear[y] = (investedByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-        else if (t.type === 'withdrawal') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-        else if (t.type === 'buy') investedByYear[y] = (investedByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-        else if (t.type === 'sell') investedByYear[y] = (investedByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-      });
-
-      // Net deposits per year (saving performance)
-      const depositsByYear = {};
-      sortedTxs.forEach(t => {
-        const y = (t.date || '').substring(0, 4);
-        if (!y) return;
-        if (t.type === 'deposit') depositsByYear[y] = (depositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-        else if (t.type === 'withdrawal') depositsByYear[y] = (depositsByYear[y] || 0) - Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-      });
-
-      // Gross deposits per year into performance-tracked accounts only
-      const perfDepositsByYear = {};
-      perfTxs.forEach(t => {
-        const y = (t.date || '').substring(0, 4);
-        if (!y || t.type !== 'deposit') return;
-        perfDepositsByYear[y] = (perfDepositsByYear[y] || 0) + Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-      });
-
-      // Value of performance-tracked accounts at a given date
-      const perfValueAt = (date) => {
-        const lastByAccount = {};
-        perfTxs.forEach(t => {
-          if ((t.date || '') > date) return;
-          const prev = lastByAccount[t.accountId];
-          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
-        });
-        let total = 0;
-        perfAccountIds.forEach(id => {
-          const last = lastByAccount[id];
-          if (last) total += (last.balanceAfter || 0) * rateFor(accCurrency[id], last.date);
-          else if (date === todayStr()) {
-            const acc = accounts.find(a => a.id === id);
-            total += (acc ? (acc.currentValue || 0) : 0) * rateFor(accCurrency[id], date);
-          }
-        });
-        return total;
-      };
-
-      // Net flows (deposits/withdrawals/buys/sells) within a date window for perf-tracked accounts
-      const perfNetFlows = (startDate, endDate) => {
-        let net = 0;
-        perfTxs.forEach(t => {
-          if ((t.date || '') < startDate || (t.date || '') > endDate) return;
-          if (t.type === 'deposit' && !_isOpeningContribution(t)) net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-          else if (t.type === 'withdrawal') net -= Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-          else if (t.type === 'buy') net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-          else if (t.type === 'sell') net -= Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-          else if (_isOpeningTx(t)) net += Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-        });
-        return net;
-      };
-
-      // Unrealized P/L of perf-tracked accounts for a given year
-      const perfPlForYear = (year) => {
-        const boy = year + '-01-01';
-        const eoy = year === curYear ? todayStr() : year + '-12-31';
-        const valueEoy = perfValueAt(eoy);
-        const valueBoy = perfValueAt(boy);
-        const flows = perfNetFlows(boy, eoy);
-        const abs = valueEoy - valueBoy - flows;
-        const base = valueBoy + flows;
-        return { abs, pct: base !== 0 ? (abs / base) * 100 : 0, roiPct: valueBoy !== 0 ? (abs / valueBoy) * 100 : null };
-      };
-
-      // Value of perf-tracked accounts using last snapshot strictly before a given date
-      const perfValueBefore = (date) => {
-        const lastByAccount = {};
-        perfTxs.forEach(t => {
-          if ((t.date || '') >= date) return;
-          const prev = lastByAccount[t.accountId];
-          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
-        });
-        let total = 0;
-        perfAccountIds.forEach(id => {
-          const last = lastByAccount[id];
-          if (last) total += (last.balanceAfter || 0) * rateFor(accCurrency[id], last.date);
-        });
-        return total;
-      };
-
-      // Time-weighted return: geometrically links sub-period returns between cash-flow dates
-      const twrForYear = (year) => {
-        const boy = year + '-01-01';
-        const eoy = year === curYear ? todayStr() : year + '-12-31';
-        const flowDates = [...new Set(
-          perfTxs
-            .filter(t => (t.date || '') >= boy && (t.date || '') <= eoy && (['deposit', 'withdrawal', 'buy', 'sell'].includes(t.type) ? !_isOpeningContribution(t) : _isOpeningTx(t)))
-            .map(t => t.date)
-        )].sort();
-
-        let product = 1;
-        let prevVal = perfValueAt(boy);
-        flowDates.forEach(d => {
-          const before = perfValueBefore(d);
-          if (prevVal !== 0) product *= (before / prevVal);
-          prevVal = perfValueAt(d);
-        });
-        const valEoy = perfValueAt(eoy);
-        if (prevVal !== 0) product *= (valEoy / prevVal);
-        return (product - 1) * 100;
-      };
-
-      // Money-weighted return (IRR): rate r solving NPV of all flows = 0
-      const mwrForYear = (year) => {
-        const boy = year + '-01-01';
-        const eoy = year === curYear ? todayStr() : year + '-12-31';
-        const t0 = new Date(boy).getTime();
-        const tEoy = new Date(eoy).getTime();
-        const flows = [{ t: 0, v: -perfValueAt(boy) }];
-        perfTxs.forEach(t => {
-          if ((t.date || '') < boy || (t.date || '') > eoy) return;
-          const y = (new Date(t.date).getTime() - t0) / (tEoy - t0);
-          const amt = Math.abs(t.amount) * rateFor(accCurrency[t.accountId], t.date);
-          if ((t.type === 'deposit' && !_isOpeningContribution(t)) || t.type === 'buy' || _isOpeningTx(t)) flows.push({ t: y, v: -amt });
-          else if (t.type === 'withdrawal' || t.type === 'sell') flows.push({ t: y, v: amt });
-        });
-        flows.push({ t: 1, v: perfValueAt(eoy) });
-
-        const npv = (r) => flows.reduce((s, f) => s + f.v / Math.pow(1 + r, f.t), 0);
-        let lo = -0.999;
-        let hi = 10;
-        if (npv(lo) * npv(hi) > 0) return null;
-        for (let i = 0; i < 200; i++) {
-          const mid = (lo + hi) / 2;
-          if (npv(mid) * npv(lo) > 0) lo = mid;
-          else hi = mid;
-        }
-        return ((lo + hi) / 2) * 100;
-      };
-
-      const netWorthAt = (eoyDate) => {
-        const lastByAccount = {};
-        sortedTxs.forEach(t => {
-          if ((t.date || '') > eoyDate) return;
-          const prev = lastByAccount[t.accountId];
-          if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
-        });
-
-        const accountValueAt = (a) => {
-          if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-            const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-            return { value: assetAccountMetrics(accountAssets[a.id], eoyDate, rateToAcc).value, date: eoyDate };
-          }
-          if (a.accountType === 'Precious Metal' && eoyDate === todayStr()) {
-            return { value: metalAccountValue(a, metalEntry, rateEntries, eoyDate), date: eoyDate };
-          }
-          const last = lastByAccount[a.id];
-          if (last) return { value: last.balanceAfter || 0, date: last.date };
-          if (eoyDate === todayStr()) return { value: a.currentValue || 0, date: eoyDate };
-          return { value: 0, date: eoyDate };
-        };
-
-        let netWorth = 0;
-        let liqNetWorth = 0;
-        accounts.forEach(a => {
-          if (a.includeInNetWorth === false) return;
-          const v = accountValueAt(a);
-          const val = v.value * rateFor(accCurrency[a.id], v.date);
-          netWorth += val;
-          if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) liqNetWorth += val;
-        });
-        return { netWorth, liqNetWorth };
-      };
-
-      const curMonthKey = todayStr().substring(0, 7);
-      const curMonthNum = Number(curMonthKey.substring(5, 7));
-      const monthsElapsedCur = Math.max(0, curMonthNum - 1);
-
-      const incomeUpTo = (year, upToMonth) => allIncomes
-        .filter(inc => (inc.month || '').startsWith(year) && (!upToMonth || Number((inc.month || '').substring(5, 7)) <= upToMonth))
-        .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || (year + '-01')) + '-01')), 0);
-
-      const expensesUpTo = (year, monthsCount) => {
-        let tot = 0;
-        allExpenses.filter(exp => exp.year === year).forEach(exp => {
-          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
-          if (exp.type === 'monthly') tot += v * monthsCount;
-          else if (!exp.paymentMonth) tot += v * (monthsCount / 12);
-          else if (Number(exp.paymentMonth) <= monthsCount) tot += v;
-        });
-        return tot;
-      };
-
-      const yearStats = {};
-      candidateYears.forEach(year => {
-        const eoyDate = year === curYear ? todayStr() : (year + '-12-31');
-        const { netWorth, liqNetWorth } = netWorthAt(eoyDate);
-
-        const isCurYear = year === curYear;
-        const income = isCurYear ? incomeUpTo(year, curMonthNum) : incomeUpTo(year, null);
-        const expenses = isCurYear ? expensesUpTo(year, monthsElapsedCur) : expensesUpTo(year, 12);
-
-        const investedSaved = investedByYear[year] || 0;
-        const surplus = income - expenses;
-        const savingPerf = depositsByYear[year] || 0;
-        const savingsRate = income > 0 ? (surplus / income) * 100 : null;
-        const investPerf = perfPlForYear(year);
-        const twr = twrForYear(year);
-        const mwr = mwrForYear(year);
-
-        yearStats[year] = { netWorth, liqNetWorth, netDeposits: investedSaved, income, expenses, surplus, savingPerf, savingsRate, investPerf, twr, mwr };
-      });
-
-      const years = candidateYears.filter(year => {
-        const hasTx = sortedTxs.some(t => (t.date || '').startsWith(year) && ['deposit', 'withdrawal', 'buy', 'sell', 'valuation'].includes(t.type));
-        const hasInc = allIncomes.some(inc => (inc.month || '').startsWith(year));
-        const hasExp = allExpenses.some(exp => exp.year === year);
-        return hasTx || hasInc || hasExp;
-      });
-      const yearsSet = new Set(years);
-
-      // Year-over-year deltas (previous calendar year as base; only if that year has data).
-      // For the current (partial) year, the previous year is prorated to the same period for a fair comparison.
-      Object.keys(yearStats).forEach(year => {
-        const prevYear = String(Number(year) - 1);
-        const prev = yearsSet.has(prevYear) ? yearStats[prevYear] : null;
-        const s = yearStats[year];
-        const isCurYear = year === curYear;
-        const prevIncome = isCurYear && prev ? incomeUpTo(prevYear, curMonthNum) : (prev ? prev.income : null);
-        const prevExpenses = isCurYear && prev ? expensesUpTo(prevYear, monthsElapsedCur) : (prev ? prev.expenses : null);
-        s.incomeDelta = prevIncome === null ? null : s.income - prevIncome;
-        s.expenseDelta = prevExpenses === null ? null : s.expenses - prevExpenses;
-        s.savingsRateDelta = (prev && s.savingsRate !== null && prev.savingsRate !== null) ? s.savingsRate - prev.savingsRate : null;
-        s.capitalDeployment = s.surplus > 0 ? (s.netDeposits / s.surplus) * 100 : null;
-      });
-
-      const firstYear = years[0];
-      const boy = firstYear ? netWorthAt(firstYear + '-01-01') : null;
-
-      const cards = [];
-      grid.innerHTML = '';
-
-      years.forEach((year, idx) => {
-        const s = yearStats[year];
-        const base = idx > 0 ? yearStats[years[idx - 1]] : boy;
-        const nwGrowth = base ? s.netWorth - base.netWorth : null;
-        const lqGrowth = base ? s.liqNetWorth - base.liqNetWorth : null;
-
-        const growthHtml = (amt) => {
-          if (amt === null || amt === undefined) return '<span class="val" style="color:#555">N/A</span>';
-          return '<span class="val" style="color:' + (amt >= 0 ? '#33ff33' : '#ff3333') + '">' + (amt >= 0 ? '+' : '') + formatCurrency(amt, mainCurrency) + '</span>';
-        };
-
-        const investPerfText = (s.investPerf.abs >= 0 ? '+' : '') + formatCurrency(s.investPerf.abs, mainCurrency) + ' (' + (s.investPerf.pct >= 0 ? '+' : '') + s.investPerf.pct.toFixed(2) + '%)';
-        const investPerfColor = s.investPerf.abs >= 0 ? '#33ff33' : '#ff3333';
-        const savingsRateText = s.savingsRate === null ? 'N/A' : (s.savingsRate >= 0 ? '+' : '') + s.savingsRate.toFixed(1) + '%';
-        const savingsRateColor = s.savingsRate === null ? '#555' : (s.savingsRate >= 0 ? '#33ff33' : '#ff3333');
-
-        const deltaHtml = (delta, opts) => {
-          if (delta === null || delta === undefined) return '<span class="val" style="color:#555">N/A</span>';
-          const good = opts && opts.invert ? delta < 0 : delta >= 0;
-          const color = good ? '#33ff33' : '#ff3333';
-          let txt = (delta >= 0 ? '+' : '-') + formatCurrency(Math.abs(delta), mainCurrency);
-          if (opts && opts.pct && opts.base) txt += ' (' + (delta >= 0 ? '+' : '-') + ((Math.abs(delta) / Math.abs(opts.base)) * 100).toFixed(1) + '%)';
-          return '<span class="val" style="color:' + color + '">' + txt + '</span>';
-        };
-
-        const info = (title) => '<span class="info-icon" title="' + title + '">i</span>';
-
-        const incomeDeltaHtml = deltaHtml(s.incomeDelta, { pct: true, base: s.income - (s.incomeDelta || 0) });
-        const expenseDeltaHtml = deltaHtml(s.expenseDelta, { pct: true, base: s.expenses - (s.expenseDelta || 0), invert: true });
-        const savingsDeltaColor = s.savingsRateDelta === null || s.savingsRateDelta >= 0 ? '#33ff33' : '#ff3333';
-        const savingsDeltaText = s.savingsRateDelta === null ? 'N/A' : (s.savingsRateDelta >= 0 ? '+' : '') + s.savingsRateDelta.toFixed(1) + 'pp';
-        const capDeployText = s.capitalDeployment === null ? 'N/A' : s.capitalDeployment.toFixed(1) + '%';
-        const twrText = s.twr === null || s.twr === undefined ? 'N/A' : (s.twr >= 0 ? '+' : '') + s.twr.toFixed(2) + '%';
-        const twrColor = s.twr >= 0 ? '#33ff33' : '#ff3333';
-        const mwrText = s.mwr === null || s.mwr === undefined ? 'N/A' : (s.mwr >= 0 ? '+' : '') + s.mwr.toFixed(2) + '%';
-        const mwrColor = s.mwr >= 0 ? '#33ff33' : '#ff3333';
-
-        const col = document.createElement('div');
-        col.className = 'col-3 earning-col';
-        col.innerHTML = '<div class="earning-month">' +
-          '<div class="earning-month-label">' + year + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">INCOME</span><span class="val">' + formatCurrency(s.income, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">INCOME YoY' + info('Change in income vs previous year') + '</span>' + incomeDeltaHtml + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">EXPENSES</span><span class="val">' + formatCurrency(s.expenses, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">EXPENSES YoY' + info('Change in expenses vs previous year') + '</span>' + expenseDeltaHtml + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">NET INCOME</span><span class="val">' + formatCurrency(s.surplus, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">SAVINGS RATE' + info('Share of income not spent. Formula: NET INCOME \u00F7 INCOME \u00D7 100') + '</span><span class="val" style="color:' + savingsRateColor + '">' + savingsRateText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">SAVINGS RATE YoY' + info('Change in savings rate vs previous year, in percentage points') + '</span><span class="val" style="color:' + savingsDeltaColor + '">' + savingsDeltaText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">TOTAL SAVED' + info('Deposits minus withdrawals made into all accounts during the year') + '</span><span class="val">' + formatCurrency(s.savingPerf, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">CAPITAL DEPLOYMENT' + info('How much of your net income actually reached your accounts. Formula: NET DEPOSITS (deposits + buys - withdrawals - sells) \u00F7 NET INCOME \u00D7 100. Above 100% means you also drew on existing cash.') + '</span><span class="val" style="color:#33ff33">' + capDeployText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">INVESTMENTS PERFORMANCE' + info('Gain in investment accounts relative to capital deployed. Formula: (value EoY - value BoY - net flows) \u00F7 (value BoY + net flows) \u00D7 100') + '</span><span class="val" style="color:' + investPerfColor + '">' + investPerfText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">TWR' + info('Time-weighted return: isolates market performance by removing the effect of cash flow timing. Best measure to compare against an index.') + '</span><span class="val" style="color:' + twrColor + '">' + twrText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">MWR' + info('Money-weighted return (IRR): accounts for the size and timing of every deposit/withdrawal, weighted by how long money was invested. Best measure of your personal experience.') + '</span><span class="val" style="color:' + mwrColor + '">' + mwrText + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">NET WORTH EoY</span><span class="val">' + formatCurrency(s.netWorth, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">NET WORTH GROWTH' + info('Change in net worth vs previous year-end') + '</span>' + growthHtml(nwGrowth) + '</div>' +
-          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH EoY</span><span class="val">' + formatCurrency(s.liqNetWorth, mainCurrency) + '</span></div>' +
-          '<div class="earning-month-line"><span class="lbl">LIQUID NET WORTH GROWTH' + info('Change in liquid net worth vs previous year-end') + '</span>' + growthHtml(lqGrowth) + '</div>' +
-          '</div>';
-        cards.push(col);
-        grid.appendChild(col);
-      });
-
-      if (years.length === 0) {
-        empty.style.display = 'block';
-        if (leftBtn) leftBtn.disabled = true;
-        if (rightBtn) rightBtn.disabled = true;
-        return;
-      }
-      empty.style.display = 'none';
-
-      const MAX_VISIBLE = 4;
-      let offset = Math.max(0, years.length - MAX_VISIBLE);
-      const renderCarousel = () => {
-        cards.forEach((card, i) => {
-          card.style.display = (i >= offset && i < offset + MAX_VISIBLE) ? '' : 'none';
-        });
-        if (leftBtn) leftBtn.disabled = offset <= 0;
-        if (rightBtn) rightBtn.disabled = offset >= years.length - MAX_VISIBLE;
-      };
-      if (leftBtn) leftBtn.addEventListener('click', () => { if (offset > 0) { offset--; renderCarousel(); } });
-      if (rightBtn) rightBtn.addEventListener('click', () => { if (offset < years.length - MAX_VISIBLE) { offset++; renderCarousel(); } });
-      renderCarousel();
-    })();
-
-    // Portfolio allocation chart (doughnut)
-    const allocCanvas = document.getElementById('chart-allocation');
-    if (allocCanvas) {
-      const labels = [];
-      const values = [];
-      const colors = [];
-      const rows = [];
-      const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
-      let ci = 0;
-      Object.values(pfValues).forEach(p => {
-        if (p.value > 0) {
-          const pct = totalValue > 0 ? Math.round(p.value / totalValue * 100) : 0;
-          labels.push(p.name + ' (' + pct + '%)');
-          values.push(p.value);
-          const color = palette[ci % palette.length];
-          colors.push(color);
-          rows.push({ name: p.name, pct, color });
-          ci++;
-        }
-      });
-      if (values.length === 0) {
-        labels.push('NO DATA');
-        values.push(1);
-        colors.push('#333333');
-      }
-      App._charts.allocation = new Chart(allocCanvas.getContext('2d'), {
-        type: 'doughnut',
-        data: { labels, datasets: [{ data: values, backgroundColor: colors, borderColor: '#161616', borderWidth: 2 }] },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false }
-          }
-        }
-      });
-      const legendEl = document.getElementById('alloc-legend');
-      if (legendEl) {
-        legendEl.innerHTML = rows.length
-          ? rows.map(r =>
-              '<div class="alloc-legend-row">' +
-                '<span class="alloc-legend-swatch" style="background:' + r.color + '"></span>' +
-                '<span class="alloc-legend-pct">' + r.pct + '%</span>' +
-                '<span class="alloc-legend-name">' + escapeHtml(r.name) + '</span>' +
-              '</div>'
-            ).join('')
-          : '<div class="alloc-legend-row"><span class="alloc-legend-name">NO DATA</span></div>';
-      }
-    }
-
-    // Range line chart — shared renderer for Performance Over Time & Investment Performance
-    function _renderRangeChart(canvas, chartKey, idSet, txList, range, color, opts) {
-      const isPercent = opts && opts.percent;
-
-      const accBalances = {};
-      idSet.forEach(id => accBalances[id] = 0);
-
-      // Group by month — record total after last tx in each month
-      const monthGroups = {};
-      txList.forEach(tx => {
-        accBalances[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-        const monthKey = (tx.date || '').substring(0, 7);
-        if (!monthKey) return;
-        let total = 0;
-        Object.values(accBalances).forEach(b => total += b);
-        monthGroups[monthKey] = total; // overwrites with last value of the month
-      });
-
-      let points = Object.entries(monthGroups).map(([month, value]) => ({ month, value }));
-
-      // add current snapshot
-      const curMonth = todayStr().substring(0, 7);
-      const currentTotal = Object.values(accBalances).reduce((s, v) => s + v, 0);
-      if (!monthGroups[curMonth] && currentTotal > 0) {
-        points.push({ month: curMonth, value: currentTotal });
-      }
-
-      // filter by range
-      if (points.length > 0) {
-        const latest = points.reduce((a, b) => a.month > b.month ? a : b).month;
-        let cutoffStr;
-        if (range === 'ytd') {
-          cutoffStr = todayStr().substring(0, 4) + '-01';
-        } else if (range === 'max') {
-          cutoffStr = '';
-        } else {
-          const years = parseInt(range.replace('y', '')) || 1;
-          const latestDate = new Date(latest + '-01');
-          const cutoff = new Date(latestDate);
-          cutoff.setFullYear(cutoff.getFullYear() - years);
-          cutoffStr = cutoff.toISOString().substring(0, 7);
-        }
-        if (cutoffStr) points = points.filter(p => p.month >= cutoffStr);
-      }
-
-      points.sort((a, b) => a.month.localeCompare(b.month));
-
-      if (points.length === 0) {
-        points.push({ month: curMonth, value: currentTotal || 0 });
-      }
-
-      const labels = points.map(p => {
-        const d = new Date(p.month + '-01');
-        return d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
-      });
-
-      let values;
-      if (isPercent) {
-        const monthly = _monthlyPctSeries(idSet, txList);
-        values = points.map(p => monthly[p.month] != null ? monthly[p.month].pct : 0);
-      } else {
-        values = points.map(p => p.value);
-      }
-
-      const zeroFillPlugin = isPercent ? {
-        id: 'zeroFillSplit',
-        beforeDatasetsDraw(chart) {
-          const meta = chart.getDatasetMeta(0);
-          if (!meta || meta.hidden) return;
-          const ctx = chart.ctx;
-          const yScale = chart.scales.y;
-          const pts = meta.data;
-          if (!pts || pts.length < 2) return;
-
-          const zeroY = yScale.getPixelForValue(0);
-          ctx.save();
-
-          for (let i = 0; i < pts.length - 1; i++) {
-            const x0 = pts[i].x, y0 = pts[i].y;
-            const x1 = pts[i + 1].x, y1 = pts[i + 1].y;
-            const v0 = values[i], v1 = values[i + 1];
-            const pos0 = v0 >= 0, pos1 = v1 >= 0;
-
-            if (pos0 === pos1) {
-              ctx.beginPath();
-              ctx.moveTo(x0, zeroY);
-              ctx.lineTo(x0, y0);
-              ctx.lineTo(x1, y1);
-              ctx.lineTo(x1, zeroY);
-              ctx.closePath();
-              ctx.fillStyle = pos0 ? 'rgba(51,255,51,0.18)' : 'rgba(255,51,51,0.18)';
-              ctx.fill();
-            } else {
-              const t = (0 - v0) / (v1 - v0);
-              const xCross = x0 + t * (x1 - x0);
-              if (pos0) {
-                ctx.beginPath(); ctx.moveTo(x0, zeroY); ctx.lineTo(x0, y0); ctx.lineTo(xCross, zeroY); ctx.closePath();
-                ctx.fillStyle = 'rgba(51,255,51,0.18)'; ctx.fill();
-              }
-              if (pos1) {
-                ctx.beginPath(); ctx.moveTo(xCross, zeroY); ctx.lineTo(x1, y1); ctx.lineTo(x1, zeroY); ctx.closePath();
-                ctx.fillStyle = 'rgba(51,255,51,0.18)'; ctx.fill();
-              }
-              if (!pos0) {
-                ctx.beginPath(); ctx.moveTo(x0, zeroY); ctx.lineTo(x0, y0); ctx.lineTo(xCross, zeroY); ctx.closePath();
-                ctx.fillStyle = 'rgba(255,51,51,0.18)'; ctx.fill();
-              }
-              if (!pos1) {
-                ctx.beginPath(); ctx.moveTo(xCross, zeroY); ctx.lineTo(x1, y1); ctx.lineTo(x1, zeroY); ctx.closePath();
-                ctx.fillStyle = 'rgba(255,51,51,0.18)'; ctx.fill();
-              }
-            }
-          }
-
-          pts.forEach((pt, i) => {
-            ctx.beginPath();
-            ctx.arc(pt.x, pt.y, 4, 0, Math.PI * 2);
-            ctx.fillStyle = values[i] >= 0 ? '#33ff33' : '#ff3333';
-            ctx.fill();
-            ctx.strokeStyle = '#1a1a2e';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          });
-
-          ctx.restore();
-        }
-      } : null;
-
-      const showAverage = opts && opts.average;
-      const datasets = [{
-        label: isPercent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
-        data: values,
-        borderColor: color,
-        backgroundColor: isPercent ? 'transparent' : color + '0d',
-        fill: isPercent ? false : true,
-        tension: isPercent ? 0.15 : 0.3,
-        pointRadius: isPercent ? 0 : 4,
-        pointBackgroundColor: isPercent ? undefined : color,
-        pointHitRadius: isPercent ? 8 : undefined,
-        borderWidth: 2
-      }];
-      if (showAverage) {
-        const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
-        datasets.push({
-          label: 'AVG',
-          data: values.map(() => avg),
-          borderColor: '#ffaa00',
-          borderDash: [6, 4],
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHitRadius: 12,
-          fill: false,
-          tension: 0
-        });
-      }
-
-      App._charts[chartKey] = new Chart(canvas.getContext('2d'), {
-        type: 'line',
-        data: {
-          labels,
-          datasets
+            x: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT } }, grid: { color: '#222' } },
+            y: { ticks: { color: '#888', font: { size: 12, family: CHART_FONT }, callback: value => formatCurrency(value, mainCurrency) }, grid: { color: '#222' } },
+          },
         },
-        plugins: zeroFillPlugin ? [zeroFillPlugin] : [],
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: showAverage, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: "'Share Tech Mono', monospace" } } },
-            tooltip: {
-              callbacks: {
-                title: items => items.length ? labels[items[0].dataIndex] : '',
-                label: item => {
-                  const fmt = isPercent ? v => v.toFixed(2) + '%' : v => formatCurrency(v, mainCurrency);
-                  if (item.datasetIndex === 1 && showAverage) return 'AVG: ' + fmt(item.parsed.y);
-                  return item.dataset.label + ': ' + fmt(item.parsed.y);
-                }
-              }
-            }
-          },
-          scales: {
-            x: {
-              ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" } },
-              grid: { color: '#222' }
-            },
-            y: {
-              ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" }, callback: v => isPercent ? v.toFixed(2) + '%' : formatCurrency(v, mainCurrency) },
-              grid: { color: '#222' }
-            }
-          }
-        }
       });
-    }
+    };
 
-    // Per-month unrealized P/L for a set of accounts (one value per month, non-cumulative)
-    function _monthlyPctSeries(idSet, txList) {
-      const bal = {};
-      idSet.forEach(id => bal[id] = 0);
-      const totalBal = () => Object.values(bal).reduce((s, v) => s + v, 0);
-      const results = {};
-      let curMonth = null;
-      let startBal = 0;
-      let monthFlows = 0;
-      txList.forEach(tx => {
-        const mk = (tx.date || '').substring(0, 7);
-        if (!mk) return;
-        if (mk !== curMonth) {
-          if (curMonth !== null) {
-            const abs = totalBal() - startBal - monthFlows;
-            const base = startBal + monthFlows;
-            results[curMonth] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
-          }
-          curMonth = mk;
-          startBal = totalBal();
-          monthFlows = 0;
-        }
-        bal[tx.accountId] = (tx.balanceAfter || 0) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'withdrawal') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'buy') monthFlows += Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (tx.type === 'sell') monthFlows -= Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-        if (_isOpeningTx(tx)) {
-          monthFlows += tx.amount * rateFor(accCurrency[tx.accountId], tx.date);
-        }
-      });
-      if (curMonth !== null) {
-        const abs = totalBal() - startBal - monthFlows;
-        const base = startBal + monthFlows;
-        results[curMonth] = { abs, pct: base !== 0 ? (abs / base) * 100 : 0 };
-      }
-      return results;
-    }
+    render();
+    document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(button => {
+      button.onclick = function () {
+        document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(other => other.classList.remove('active'));
+        this.classList.add('active');
+        render();
+      };
+    });
+  },
 
-    // Performance chart (line) — one dot per month, end-of-month value
-    const perfCanvas = document.getElementById('chart-performance');
-    if (perfCanvas) {
-      const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
-      const range = activeRange ? activeRange.dataset.range : '1y';
-      _renderRangeChart(perfCanvas, 'performance', perfAccountIds, perfTxs, range, readAccent());
-    }
-
-    // Investment Performance chart (line) — same range selector, investments only, in %
-    const investCanvas = document.getElementById('chart-investment');
-    if (investCanvas) {
-      const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
-      const range = activeRange ? activeRange.dataset.range : '1y';
-      _renderRangeChart(investCanvas, 'investment', perfAccountIds, perfTxs, range, '#33ccff', { percent: true, average: true });
-    }
-
-    // ==================== SAVINGS RATE TREND ====================
-    (function() {
-      const canvas = document.getElementById('chart-savings-rate');
-      const empty = document.getElementById('savings-rate-empty');
-      const statsCard = document.getElementById('sr-stats-card');
-      if (!canvas || !empty) return;
-
-      // Build months going back 5 years (60+ months) for range filtering
-      const srMonths = [];
-      for (let i = 60; i >= 0; i--) {
-        const d = new Date(todayDate.getFullYear(), todayDate.getMonth() - i, 1);
-        srMonths.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'));
-      }
-
-      const allMonthData = [];
-      const excludedMonths = (App._srExcludedMonths = App._srExcludedMonths || new Set());
-      srMonths.forEach(monthKey => {
-        const year = monthKey.substring(0, 4);
-        const mNum = parseInt(monthKey.substring(5, 7));
-        const monthIncome = allIncomes
-          .filter(inc => inc.month === monthKey)
-          .reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || (monthKey + '-01')), 0);
-        const yearExpenses = allExpenses.filter(exp => exp.year === year);
-        const monthlyTot = yearExpenses
-          .filter(exp => exp.type === 'monthly')
-          .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
-        const yearlyForMonth = yearExpenses
-          .filter(exp => exp.type === 'yearly')
-          .reduce((sum, exp) => {
-            if (exp.paymentMonth && Number(exp.paymentMonth) !== mNum) return sum;
-            const amt = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
-            // A yearly expense without a specific payment month is spread evenly across all 12 months
-            return sum + (exp.paymentMonth ? amt : amt / 12);
-          }, 0);
-        const totalExpenses = monthlyTot + yearlyForMonth;
-        const net = monthIncome - totalExpenses;
-        const rate = monthIncome > 0 ? (net / monthIncome) * 100 : null;
-
-        const monthTxs = transactions.filter(tx =>
-          (tx.date || '').startsWith(monthKey) &&
-          (tx.type === 'deposit' || tx.type === 'withdrawal' || tx.type === 'buy' || tx.type === 'sell')
-        );
-        const grossDeposits = monthTxs
-          .filter(tx => tx.type === 'deposit' || tx.type === 'withdrawal')
-          .reduce((sum, tx) => {
-            if (tx.type === 'deposit') return sum + Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-            return sum - Math.abs(tx.amount) * rateFor(accCurrency[tx.accountId], tx.date);
-          }, 0);
-
-        if (rate !== null) {
-          const d = new Date(monthKey + '-01');
-          allMonthData.push({
-            key: monthKey,
-            label: d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }),
-            netIncome: net,
-            totalSaved: grossDeposits
-          });
-        }
-      });
-
-      function renderSavingsRateTrend() {
-        if (App._charts.savingsRate) { try { App._charts.savingsRate.destroy(); } catch (e) {} delete App._charts.savingsRate; }
-
-        // Read active range
-        const activeBtn = document.querySelector('#sr-range-selectors .perf-btn.active');
-        const range = activeBtn ? activeBtn.dataset.range : '1y';
-
-        // Filter by range
-        let rangeFiltered = allMonthData;
-        if (allMonthData.length > 0) {
-          const latest = allMonthData[allMonthData.length - 1].key;
-          const latestDate = new Date(latest + '-01');
-          let cutoff;
-          if (range === 'ytd') {
-            cutoff = new Date(latestDate.getFullYear(), 0, 1);
-          } else if (range === 'max') {
-            cutoff = null;
-          } else {
-            const years = parseInt(range.replace('y', '')) || 1;
-            cutoff = new Date(latestDate);
-            cutoff.setMonth(cutoff.getMonth() - (years * 12 - 1));
-          }
-          if (cutoff) {
-            const cutoffKey = cutoff.getFullYear() + '-' + String(cutoff.getMonth() + 1).padStart(2, '0');
-            rangeFiltered = allMonthData.filter(m => m.key >= cutoffKey);
-          }
-        }
-
-        // Apply user-excluded months
-        const filtered = rangeFiltered.filter(m => !excludedMonths.has(m.key));
-
-        // Month include/exclude toggles
-        const togglesElEarly = document.getElementById('sr-month-toggles');
-        if (togglesElEarly) {
-          togglesElEarly.innerHTML = '';
-          rangeFiltered.forEach(m => {
-            const btn = document.createElement('span');
-            btn.className = 'perf-btn' + (excludedMonths.has(m.key) ? '' : ' active');
-            btn.textContent = m.label;
-            btn.title = excludedMonths.has(m.key) ? 'Excluded - click to include' : 'Included - click to exclude';
-            btn.onclick = function() {
-              if (excludedMonths.has(m.key)) excludedMonths.delete(m.key);
-              else excludedMonths.add(m.key);
-              renderSavingsRateTrend();
-            };
-            togglesElEarly.appendChild(btn);
-          });
-        }
-
-        if (rangeFiltered.length === 0) {
-          empty.style.display = 'block';
-          canvas.style.display = 'none';
-          if (statsCard) statsCard.style.display = 'none';
-          const togglesEl = document.getElementById('sr-month-toggles');
-          if (togglesEl) togglesEl.innerHTML = '';
-          return;
-        }
-        if (filtered.length === 0) {
-          empty.style.display = 'block';
-          empty.textContent = rangeFiltered.length > 0 ? 'NO MONTHS SELECTED.' : 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
-          canvas.style.display = 'none';
-          if (statsCard) statsCard.style.display = 'none';
-          return;
-        } else {
-          empty.textContent = 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
-          empty.style.display = 'none';
-          canvas.style.display = '';
-          if (statsCard) statsCard.style.display = '';
-        }
-
-        const monthLabels = filtered.map(m => m.label);
-        const netIncomeValues = filtered.map(m => m.netIncome);
-        const totalSavedValues = filtered.map(m => m.totalSaved);
-
-        // Stats from filtered data
-        const avgNet = netIncomeValues.reduce((s, v) => s + v, 0) / netIncomeValues.length;
-        const minNet = Math.min(...netIncomeValues);
-        const maxNet = Math.max(...netIncomeValues);
-        const avgSaved = totalSavedValues.reduce((s, v) => s + v, 0) / totalSavedValues.length;
-        const minSaved = Math.min(...totalSavedValues);
-        const maxSaved = Math.max(...totalSavedValues);
-
-        function _srCurHtml(val) {
-          const color = val >= 0 ? '#33ff33' : '#ff3333';
-          return '<span style="color:' + color + '">' + (val >= 0 ? '+' : '') + formatCurrency(val, mainCurrency) + '</span>';
-        }
-
-        const minEl = document.getElementById('sr-min');
-        const avgEl = document.getElementById('sr-avg');
-        const maxEl = document.getElementById('sr-max');
-        const minSavedEl = document.getElementById('sr-min-saved');
-        const avgSavedEl = document.getElementById('sr-avg-saved');
-        const maxSavedEl = document.getElementById('sr-max-saved');
-        if (minEl) minEl.innerHTML = _srCurHtml(minNet);
-        if (avgEl) avgEl.innerHTML = _srCurHtml(avgNet);
-        if (maxEl) maxEl.innerHTML = _srCurHtml(maxNet);
-        if (minSavedEl) minSavedEl.innerHTML = _srCurHtml(minSaved);
-        if (avgSavedEl) avgSavedEl.innerHTML = _srCurHtml(avgSaved);
-        if (maxSavedEl) maxSavedEl.innerHTML = _srCurHtml(maxSaved);
-
-        App._charts.savingsRate = new Chart(canvas.getContext('2d'), {
-          type: 'line',
-          data: {
-            labels: monthLabels,
-            datasets: [
-              {
-                label: 'NET INCOME',
-                data: netIncomeValues,
-                borderColor: readAccent(),
-                backgroundColor: shadeAccent(readAccent(), 1, 0.08),
-                fill: true,
-                tension: 0.3,
-                pointRadius: 3,
-                pointBackgroundColor: netIncomeValues.map(v => v >= 0 ? '#33ff33' : '#ff3333'),
-                borderWidth: 2,
-                yAxisID: 'y'
-              },
-              {
-                label: 'TOTAL SAVED',
-                data: totalSavedValues,
-                borderColor: '#33ccff',
-                backgroundColor: 'rgba(51,204,255,0.08)',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 3,
-                pointBackgroundColor: '#33ccff',
-                borderWidth: 2,
-                yAxisID: 'y'
-              }
-            ]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: true, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: "'Share Tech Mono', monospace" } } },
-              tooltip: {
-                callbacks: {
-                  label: item => {
-                    if (item.datasetIndex === 0) return 'NET INCOME: ' + formatCurrency(item.parsed.y, mainCurrency);
-                    return 'TOTAL SAVED: ' + formatCurrency(item.parsed.y, mainCurrency);
-                  }
-                }
-              }
-            },
-            scales: {
-              x: {
-                ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" } },
-                grid: { color: '#222' }
-              },
-              y: {
-                ticks: { color: '#888', font: { size: 12, family: "'Share Tech Mono', monospace" }, callback: v => formatCurrency(v, mainCurrency) },
-                grid: { color: '#222' }
-              }
-            }
-          }
-        });
-      }
-
-      renderSavingsRateTrend();
-
-      // Range selector click handler
-      document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(btn => {
-        btn.onclick = function() {
-          document.querySelectorAll('#sr-range-selectors .perf-btn').forEach(b => b.classList.remove('active'));
-          this.classList.add('active');
-          renderSavingsRateTrend();
-        };
-      });
-    })();
-
-    // Recent transactions (last 10)
-    const sortedTxs = [...transactions].sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date));
-    const recent = sortedTxs.slice(0, 10);
+  // The 10 most recently entered transactions
+  _renderDashboardRecentTransactions({ context }) {
     const tbody = document.getElementById('dash-tx-body');
-    const empty = document.getElementById('dash-tx-empty');
+    const emptyMessage = document.getElementById('dash-tx-empty');
+    const recent = [...context.transactions]
+      .sort((first, second) => new Date(second.createdAt || second.date) - new Date(first.createdAt || first.date))
+      .slice(0, 10);
     tbody.innerHTML = '';
+    emptyMessage.style.display = recent.length === 0 ? 'block' : 'none';
 
-    if (recent.length === 0) {
-      empty.style.display = 'block';
-    } else {
-      empty.style.display = 'none';
-      const accMap = {};
-      accounts.forEach(a => accMap[a.id] = a);
-      recent.forEach(tx => {
-        const acc = accMap[tx.accountId];
-        const typeLabel = tx.type === 'asset-add' ? 'ASSET ADDED' : tx.type === 'asset-sell' ? 'ASSET SOLD' : _isOpeningTx(tx) ? 'OPENING VALUATION' : tx.type.toUpperCase();
-        const typeClass = _isOpeningTx(tx) ? 'opening' : (tx.type === 'deposit' || tx.type === 'buy' || tx.type === 'asset-add') ? 'deposit' : (tx.type === 'withdrawal' || tx.type === 'sell' || tx.type === 'asset-sell') ? 'withdrawal' : 'valuation';
-        const displayAmount = tx.type === 'valuation' ? formatCurrency(tx.amount, acc ? acc.currency : 'CHF')
-          : formatCurrency(Math.abs(tx.amount), acc ? acc.currency : 'CHF');
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td><span class="tx-badge ${typeClass}">${typeLabel}</span></td>
-          <td>${acc ? escapeHtml(acc.name) : '—'}</td>
-          <td>${displayAmount}</td>
-          <td>${formatDate(tx.date)}</td>`;
-        tbody.appendChild(tr);
-      });
-    }
+    const accountsById = {};
+    context.accounts.forEach(account => { accountsById[account.id] = account; });
+    recent.forEach(transaction => {
+      const account = accountsById[transaction.accountId];
+      const currency = account ? account.currency : 'CHF';
+      const amount = transaction.type === 'valuation' ? transaction.amount : Math.abs(transaction.amount);
+      const row = document.createElement('tr');
+      row.innerHTML = `<td><span class="tx-badge ${transactionBadgeClass(transaction)}">${transactionTypeLabel(transaction)}</span></td>
+        <td>${account ? escapeHtml(account.name) : '—'}</td>
+        <td>${formatCurrency(amount, currency)}</td>
+        <td>${formatDate(transaction.date)}</td>`;
+      tbody.appendChild(row);
+    });
   },
 });

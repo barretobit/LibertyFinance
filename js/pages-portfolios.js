@@ -3,153 +3,107 @@ Object.assign(Pages, {
 
   async portfolios() {
     const portfolios = await DB.getAll('portfolios');
-    const accounts = await DB.getAll('accounts');
-    const transactions = await DB.getAll('transactions');
-    const assets = await DB.getAll('assets');
-    const settings = await DB.getSettings();
-    const mainCurrency = settings.mainCurrency || 'CHF';
-    const rateEntries = await DB.getAll('exchangeRates');
-    const metalEntry = await DB.getMetalPricesForDate(todayStr());
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
+    const context = await loadValuationContext();
+    const mainCurrency = context.mainCurrency;
     const list = document.getElementById('portfolio-list');
-    const empty = document.getElementById('portfolio-empty');
+    const emptyMessage = document.getElementById('portfolio-empty');
     list.innerHTML = '';
-
+    emptyMessage.style.display = portfolios.length === 0 ? 'block' : 'none';
     if (portfolios.length === 0) {
-      empty.style.display = 'block';
       this._renderPortfolioChart([], mainCurrency);
       return;
     }
-    empty.style.display = 'none';
 
-    const accountAssets = {};
-    assets.forEach(a => {
-      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
-      accountAssets[a.accountId].push(a);
-    });
-
-    const accEff = {};
-    accounts.forEach(a => {
-      const accTxs = transactions.filter(t => t.accountId === a.id);
-      let value, cost, date;
-      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-        const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
-        value = m.value;
-        cost = m.cost;
-        date = todayStr();
-      } else if (a.accountType === 'Precious Metal') {
-        value = metalAccountValue(a, metalEntry, rateEntries, todayStr());
-        cost = _effCostBasis(accTxs);
-        date = todayStr();
-      } else {
-        const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-          .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
-        value = _effValue(accTxs, a.currentValue);
-        cost = _effCostBasis(accTxs);
-        date = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
-      }
-      accEff[a.id] = { value, cost, date };
-    });
-
-    const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
-
-    // Effective values per portfolio and per account, all in main currency
-    const pfData = portfolios.map((p, pi) => {
-      const pfAccounts = accounts.filter(a => a.portfolioId === p.id);
-      const baseColor = palette[pi % palette.length];
-      const rows = pfAccounts.map((a, ai) => {
-        const val = accEff[a.id] ? accEff[a.id].value * rateFor(a.currency || 'CHF', accEff[a.id].date || todayStr()) : 0;
-        const shade = pfAccounts.length === 1 ? 0 : -0.3 + 0.6 * (ai / (pfAccounts.length - 1));
-        return {
-          id: a.id,
-          name: a.name,
-          value: val,
-          color: _shadeColor(baseColor, shade)
-        };
-      });
+    // Every account's current value in the main currency, grouped per portfolio.
+    // Accounts of a portfolio get shades of the portfolio's color.
+    const palette = chartPalette();
+    const portfolioRows = portfolios.map((portfolio, portfolioIndex) => {
+      const portfolioAccounts = context.accounts.filter(account => account.portfolioId === portfolio.id);
+      const baseColor = palette[portfolioIndex % palette.length];
+      const accountRows = portfolioAccounts.map((account, accountIndex) => ({
+        id: account.id,
+        name: account.name,
+        value: context.accountValueInMain(account),
+        color: tintColor(baseColor, portfolioAccounts.length === 1 ? 0 : -0.3 + 0.6 * (accountIndex / (portfolioAccounts.length - 1))),
+      }));
       return {
-        id: p.id,
-        name: p.name,
-        description: p.description || '',
+        id: portfolio.id,
+        name: portfolio.name,
+        description: portfolio.description || '',
         color: baseColor,
-        value: rows.reduce((s, r) => s + r.value, 0),
-        accounts: rows
+        value: accountRows.reduce((sum, row) => sum + row.value, 0),
+        accounts: accountRows,
       };
     });
 
-    // Render the portfolio cards
-    pfData.forEach(p => {
-      const col = document.createElement('div');
-      col.className = 'col-12';
-      col.innerHTML = `<div class="pf-card" onclick="App.navigate('portfolio-detail?id=${p.id}')">
-        <div class="pf-name">${escapeHtml(p.name)}</div>
-        <div class="pf-value">${formatCurrency(p.value, mainCurrency)}</div>
-        <div class="pf-desc">${escapeHtml(p.description || '')}</div>
-        <div class="pf-meta">${pluralize(p.accounts.length, 'ACCOUNT')}</div>
+    portfolioRows.forEach(portfolio => {
+      const column = document.createElement('div');
+      column.className = 'col-12';
+      column.innerHTML = `<div class="pf-card" onclick="App.navigate('portfolio-detail?id=${Number(portfolio.id)}')">
+        <div class="pf-name">${escapeHtml(portfolio.name)}</div>
+        <div class="pf-value">${formatCurrency(portfolio.value, mainCurrency)}</div>
+        <div class="pf-desc">${escapeHtml(portfolio.description)}</div>
+        <div class="pf-meta">${pluralize(portfolio.accounts.length, 'ACCOUNT')}</div>
       </div>`;
-      list.appendChild(col);
+      list.appendChild(column);
     });
 
-    this._renderPortfolioChart(pfData, mainCurrency);
+    this._renderPortfolioChart(portfolioRows, mainCurrency);
   },
 
   // Nested doughnut: outer ring = portfolios, inner ring = accounts within each portfolio
-  _renderPortfolioChart(pfData, mainCurrency) {
+  _renderPortfolioChart(portfolioRows, mainCurrency) {
     const wrap = document.getElementById('portfolio-chart-wrap');
     const canvas = document.getElementById('chart-portfolio-nested');
     const emptyState = document.getElementById('portfolio-chart-empty');
     const legendBox = document.getElementById('portfolio-chart-legend');
     if (!wrap || !canvas || !emptyState || !legendBox) return;
 
-    if (App._charts.portfolios) { try { App._charts.portfolios.destroy(); } catch (e) {} delete App._charts.portfolios; }
+    if (App._charts.portfolios) { try { App._charts.portfolios.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.portfolios; }
 
-    const chartData = pfData.filter(p => p.value > 0);
-
-    if (chartData.length === 0) {
-      wrap.style.display = 'none';
-      emptyState.style.display = 'block';
+    const shownPortfolios = portfolioRows.filter(portfolio => portfolio.value > 0);
+    wrap.style.display = shownPortfolios.length ? '' : 'none';
+    emptyState.style.display = shownPortfolios.length ? 'none' : 'block';
+    if (shownPortfolios.length === 0) {
       legendBox.innerHTML = '';
       return;
     }
-    wrap.style.display = '';
-    emptyState.style.display = 'none';
 
-    const outerRows = chartData.map(p => ({ name: p.name, value: p.value, color: p.color }));
-    const innerRows = [];
-    chartData.forEach(p => {
-      p.accounts.forEach(a => {
-        if (a.value > 0) innerRows.push({ name: a.name, value: a.value, color: a.color, portfolio: p.name });
+    const shownAccounts = [];
+    shownPortfolios.forEach(portfolio => {
+      portfolio.accounts.forEach(account => {
+        if (account.value > 0) shownAccounts.push({ ...account, portfolio: portfolio.name });
       });
     });
-    const total = outerRows.reduce((s, r) => s + r.value, 0) || 1;
-
-    const labels = outerRows.map(r => r.name).concat(innerRows.map(r => r.name));
-    const datasets = [
-      {
-        label: 'PORTFOLIOS',
-        data: outerRows.map(r => r.value),
-        backgroundColor: outerRows.map(r => r.color),
-        borderColor: '#161616',
-        borderWidth: 2,
-        weight: 2,
-        names: outerRows.map(r => r.name)
-      },
-      {
-        label: 'ACCOUNTS',
-        data: innerRows.map(r => r.value),
-        backgroundColor: innerRows.map(r => r.color),
-        borderColor: '#161616',
-        borderWidth: 2,
-        weight: 1,
-        names: innerRows.map(r => r.name),
-        portfolios: innerRows.map(r => r.portfolio)
-      }
-    ];
+    const total = shownPortfolios.reduce((sum, portfolio) => sum + portfolio.value, 0) || 1;
+    const percentOfTotal = (value) => ((value / total) * 100).toFixed(1);
 
     App._charts.portfolios = new Chart(canvas.getContext('2d'), {
       type: 'doughnut',
-      data: { labels, datasets },
+      data: {
+        labels: shownPortfolios.map(portfolio => portfolio.name).concat(shownAccounts.map(account => account.name)),
+        datasets: [
+          {
+            label: 'PORTFOLIOS',
+            data: shownPortfolios.map(portfolio => portfolio.value),
+            backgroundColor: shownPortfolios.map(portfolio => portfolio.color),
+            borderColor: '#161616',
+            borderWidth: 2,
+            weight: 2,
+            names: shownPortfolios.map(portfolio => portfolio.name),
+          },
+          {
+            label: 'ACCOUNTS',
+            data: shownAccounts.map(account => account.value),
+            backgroundColor: shownAccounts.map(account => account.color),
+            borderColor: '#161616',
+            borderWidth: 2,
+            weight: 1,
+            names: shownAccounts.map(account => account.name),
+            portfolios: shownAccounts.map(account => account.portfolio),
+          },
+        ],
+      },
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -159,47 +113,34 @@ Object.assign(Pages, {
           tooltip: {
             callbacks: {
               title: (items) => {
-                const it = items && items[0];
-                const ds = it && it.dataset;
-                return ds && ds.names ? (ds.names[it.dataIndex] || '') : '';
+                const item = items && items[0];
+                const dataset = item && item.dataset;
+                return dataset && dataset.names ? (dataset.names[item.dataIndex] || '') : '';
               },
-              label: (ctx) => {
-                const ds = ctx.dataset;
-                const name = ds.names[ctx.dataIndex] || '';
-                const val = ds.data[ctx.dataIndex] || 0;
-                const pct = (val / total * 100).toFixed(1);
-                const pf = ds.portfolios ? ds.portfolios[ctx.dataIndex] : null;
-                return (pf ? pf + ' / ' : '') + name + ': ' + formatCurrency(val, mainCurrency) + ' (' + pct + '%)';
-              }
-            }
-          }
-        }
-      }
+              label: (item) => {
+                const dataset = item.dataset;
+                const value = dataset.data[item.dataIndex] || 0;
+                const portfolioName = dataset.portfolios ? dataset.portfolios[item.dataIndex] : null;
+                return (portfolioName ? portfolioName + ' / ' : '') + (dataset.names[item.dataIndex] || '') + ': ' + formatCurrency(value, mainCurrency) + ' (' + percentOfTotal(value) + '%)';
+              },
+            },
+          },
+        },
+      },
     });
 
-    // Custom legend — portfolios with their accounts grouped beneath
-    let legendHtml = '';
-    chartData.forEach(p => {
-      legendHtml += `<div class="pf-legend-group">
-        <div class="pf-legend-row">
-          <span class="pf-legend-dot" style="background:${p.color}"></span>
-          <span class="pf-legend-name">${escapeHtml(p.name)}</span>
-          <span class="pf-legend-val">${formatCurrency(p.value, mainCurrency)}</span>
-          <span class="pf-legend-pct">${(p.value / total * 100).toFixed(1)}%</span>
+    // Legend: each portfolio with its accounts grouped beneath
+    const legendRowHtml = (row, extraClass) => `<div class="pf-legend-row${extraClass}">
+          <span class="pf-legend-dot" style="background:${row.color}"></span>
+          <span class="pf-legend-name">${escapeHtml(row.name)}</span>
+          <span class="pf-legend-val">${formatCurrency(row.value, mainCurrency)}</span>
+          <span class="pf-legend-pct">${percentOfTotal(row.value)}%</span>
         </div>`;
-      p.accounts.forEach(a => {
-        if (a.value > 0) {
-          legendHtml += `<div class="pf-legend-row sub">
-            <span class="pf-legend-dot" style="background:${a.color}"></span>
-            <span class="pf-legend-name">${escapeHtml(a.name)}</span>
-            <span class="pf-legend-val">${formatCurrency(a.value, mainCurrency)}</span>
-            <span class="pf-legend-pct">${(a.value / total * 100).toFixed(1)}%</span>
-          </div>`;
-        }
-      });
-      legendHtml += `</div>`;
-    });
-    legendBox.innerHTML = legendHtml;
+    legendBox.innerHTML = shownPortfolios.map(portfolio =>
+      '<div class="pf-legend-group">' +
+      legendRowHtml(portfolio, '') +
+      portfolio.accounts.filter(account => account.value > 0).map(account => legendRowHtml(account, ' sub')).join('') +
+      '</div>').join('');
   },
 
   // ==================== PORTFOLIO DETAIL ====================
@@ -207,119 +148,76 @@ Object.assign(Pages, {
   async portfolioDetail(id) {
     const portfolio = await DB.getById('portfolios', id);
     const accounts = await DB.getByIndex('accounts', 'portfolioId', id);
-    const transactions = await DB.getAll('transactions');
-    const assets = await DB.getAll('assets');
     const custodians = await DB.getAll('custodians');
-    const settings = await DB.getSettings();
-    const mainCurrency = settings.mainCurrency || 'CHF';
-    const rateEntries = await DB.getAll('exchangeRates');
-    const metalEntry = await DB.getMetalPricesForDate(todayStr());
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-    const custMap = {};
-    custodians.forEach(c => custMap[c.id] = c.name);
-
-    const accountAssets = {};
-    assets.forEach(a => {
-      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
-      accountAssets[a.accountId].push(a);
-    });
+    const context = await loadValuationContext();
+    const mainCurrency = context.mainCurrency;
+    const custodianNames = {};
+    custodians.forEach(custodian => { custodianNames[custodian.id] = custodian.name; });
 
     document.getElementById('pf-detail-title').textContent = portfolio ? portfolio.name : 'PORTFOLIO';
 
+    // Value and cost basis per account in its own currency; totals in the main currency
+    const accountFigures = {};
     let totalValue = 0;
     let totalCost = 0;
-
-    // compute effective value and cost basis per account (no mutation)
-    const effMap = {};
-    accounts.forEach(a => {
-      const accTxs = transactions.filter(t => t.accountId === a.id);
-      let costBasis, effVal, lastDate;
-      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-        const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
-        costBasis = m.cost;
-        effVal = m.value;
-        lastDate = todayStr();
-      } else if (a.accountType === 'Precious Metal') {
-        costBasis = _effCostBasis(accTxs);
-        effVal = metalAccountValue(a, metalEntry, rateEntries, todayStr());
-        lastDate = todayStr();
-      } else {
-        costBasis = _effCostBasis(accTxs);
-        effVal = _effValue(accTxs, a.currentValue);
-        const flowTxs = accTxs.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-          .sort((x, y) => (x.date || '').localeCompare(y.date || ''));
-        lastDate = flowTxs.length > 0 ? flowTxs[flowTxs.length - 1].date : null;
-      }
-      const cur = a.currency || 'CHF';
-      const rate = rateFor(cur, lastDate || todayStr());
-      effMap[a.id] = { costBasis, effVal, pl: effVal - costBasis };
-      totalValue += effVal * rate;
-      totalCost += costBasis * rate;
+    accounts.forEach(account => {
+      const value = context.accountValue(account);
+      const cost = context.accountCostBasis(account);
+      accountFigures[account.id] = { value, cost, profitLoss: value - cost };
+      const rate = context.rateToMain(account.currency, context.today);
+      totalValue += value * rate;
+      totalCost += cost * rate;
     });
-
-    const totalPL = totalValue - totalCost;
+    const totalProfitLoss = totalValue - totalCost;
 
     document.getElementById('pf-stat-value').textContent = formatCurrency(totalValue, mainCurrency);
     document.getElementById('pf-stat-accounts').textContent = accounts.length;
     document.getElementById('pf-stat-cost').textContent = formatCurrency(totalCost, mainCurrency);
-    const plEl = document.getElementById('pf-stat-pl');
-    plEl.textContent = formatCurrency(totalPL, mainCurrency);
-    plEl.style.color = totalPL >= 0 ? '#33ff33' : '#ff3333';
+    const profitLossElement = document.getElementById('pf-stat-pl');
+    profitLossElement.textContent = formatCurrency(totalProfitLoss, mainCurrency);
+    profitLossElement.style.color = profitLossColor(totalProfitLoss);
 
     const list = document.getElementById('account-list');
-    const empty = document.getElementById('account-empty');
+    const emptyMessage = document.getElementById('account-empty');
     list.innerHTML = '';
+    emptyMessage.style.display = accounts.length === 0 ? 'block' : 'none';
 
-    if (accounts.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
-
-    accounts.forEach(a => {
-      const { effVal, pl, costBasis } = effMap[a.id] || { effVal: 0, pl: 0, costBasis: 0 };
-      const plPct = costBasis !== 0 ? (pl / costBasis) * 100 : null;
+    accounts.forEach(account => {
+      const { value, cost, profitLoss } = accountFigures[account.id];
+      const profitLossPercent = cost !== 0 ? (profitLoss / cost) * 100 : null;
+      const accountType = account.accountType || ACCOUNT_TYPE.investment;
+      const accountId = Number(account.id);
       let metaExtra = '';
-      if (a.accountType === 'Precious Metal' && a.quantity) {
-        const spot = metalSpotPerGram(metalEntry, a.metalType, a.currency || 'CHF', rateEntries, todayStr());
-        const shownPrice = spot != null ? spot : (a.pricePerGram || 0);
-        metaExtra = ' &middot; ' + a.quantity + 'g ' + (a.metalType || '') + ' @ ' + formatCurrency(shownPrice, a.currency) + '/g';
-      } else if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-        const held = (accountAssets[a.id] || []).filter(x => !x.sold).length;
-        metaExtra = ' &middot; ' + pluralize(held, 'ASSET');
+      if (account.accountType === ACCOUNT_TYPE.preciousMetal && account.quantity) {
+        const spotPrice = metalSpotPerGram(context.todaysMetalPrices, account.metalType, account.currency || 'CHF', context.rateEntries, context.today);
+        const shownPrice = spotPrice != null ? spotPrice : (account.pricePerGram || 0);
+        metaExtra = ' &middot; ' + escapeHtml(account.quantity) + 'g ' + escapeHtml(account.metalType || '') + ' @ ' + formatCurrency(shownPrice, account.currency) + '/g';
+      } else if (isAssetAccount(account)) {
+        const heldCount = (context.assetsByAccount[account.id] || []).filter(asset => !asset.sold).length;
+        metaExtra = ' &middot; ' + pluralize(heldCount, 'ASSET');
       }
-      const col = document.createElement('div');
-      col.className = 'col-md-6 mb-3';
-      col.innerHTML = `<div class="acc-card" onclick="App.navigate('account-detail?id=${a.id}&pfid=${id}')">
+      const flagToggleHtml = (label, field, isOn) => `<label class="perf-toggle" onclick="event.stopPropagation()">
+              <span>${label}</span>
+              <input type="checkbox" class="perf-cb"
+                ${isOn ? 'checked' : ''}
+                onchange="App.toggleFlag(event, ${accountId}, '${field}', this.checked)">
+            </label>`;
+      const column = document.createElement('div');
+      column.className = 'col-md-6 mb-3';
+      column.innerHTML = `<div class="acc-card" onclick="App.navigate('account-detail?id=${accountId}&pfid=${Number(id)}')">
         <div class="acc-name">
-          <span>${escapeHtml(a.name)}</span>
+          <span>${escapeHtml(account.name)}</span>
           <div class="acc-toggles">
-            <label class="perf-toggle" onclick="event.stopPropagation()">
-              <span>Include in Net Worth</span>
-              <input type="checkbox" class="perf-cb"
-                ${a.includeInNetWorth !== false ? 'checked' : ''}
-                onchange="App.toggleFlag(event, ${a.id}, 'includeInNetWorth', this.checked)">
-            </label>
-            <label class="perf-toggle" onclick="event.stopPropagation()">
-              <span>Include in Liquid Net Worth</span>
-              <input type="checkbox" class="perf-cb"
-                ${a.includeInLiquidNetWorth !== false ? 'checked' : ''}
-                onchange="App.toggleFlag(event, ${a.id}, 'includeInLiquidNetWorth', this.checked)">
-            </label>
-            <label class="perf-toggle" onclick="event.stopPropagation()">
-              <span>Include in Performance</span>
-              <input type="checkbox" class="perf-cb"
-                ${a.trackPerformance !== false ? 'checked' : ''}
-                onchange="App.toggleFlag(event, ${a.id}, 'trackPerformance', this.checked)">
-            </label>
+            ${flagToggleHtml('Include in Net Worth', 'includeInNetWorth', account.includeInNetWorth !== false)}
+            ${flagToggleHtml('Include in Liquid Net Worth', 'includeInLiquidNetWorth', account.includeInLiquidNetWorth !== false)}
+            ${flagToggleHtml('Include in Performance', 'trackPerformance', account.trackPerformance !== false)}
           </div>
         </div>
-        <div class="acc-meta"><span class="type-badge type-${(a.accountType||'Investment Account').replace(/\s+/g,'-').toLowerCase()}">${a.accountType || 'Investment Account'}</span> &middot; ${custMap[a.custodianId] || '—'} &middot; ${a.currency || 'CHF'}${metaExtra}</div>
-        <div class="acc-value">${formatCurrency(effVal, a.currency)}</div>
-        <div class="acc-pl ${plClass(pl)}">${pl >= 0 ? '+' : ''}${formatCurrency(pl, a.currency)}<span class="acc-pl-pct">${plPct != null ? (plPct >= 0 ? '+' : '') + plPct.toFixed(2) + '%' : '&mdash;'}</span></div>
+        <div class="acc-meta"><span class="type-badge type-${escapeHtml(accountType.replace(/\s+/g, '-').toLowerCase())}">${escapeHtml(accountType)}</span> &middot; ${escapeHtml(custodianNames[account.custodianId] || '—')} &middot; ${escapeHtml(account.currency || 'CHF')}${metaExtra}</div>
+        <div class="acc-value">${formatCurrency(value, account.currency)}</div>
+        <div class="acc-pl ${plClass(profitLoss)}">${signedCurrency(profitLoss, account.currency)}<span class="acc-pl-pct">${profitLossPercent != null ? signedPercent(profitLossPercent, 2) : '&mdash;'}</span></div>
       </div>`;
-      list.appendChild(col);
+      list.appendChild(column);
     });
   },
 });

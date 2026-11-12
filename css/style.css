@@ -806,6 +806,14 @@ body {
 }
 
 /* ===== DASHBOARD ===== */
+.dash-rate-warning {
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  padding: 8px 14px;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
 .dash-total {
   display: flex;
   flex-direction: column;

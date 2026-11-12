@@ -34,7 +34,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - **Earning Performance**: your last 12 months of income, savings and investment performance in a carousel 📊
 - **Yearly Performance**: net worth, liquid net worth, growth and management performance per year (last 5) 🗓️
 - **Goals overview** with live waterfall allocation across funding accounts 🎯
-- **Forecast**: a 12 month projection based on historical monthly ROI, with pessimistic / neutral / optimistic scenarios 🔮
+- **Forecast**: a 12 month projection based on historical monthly ROI, with pessimistic / neutral / optimistic scenarios (average monthly return, minus / plus one standard deviation) 🔮
 - **Recent Transactions** feed for quick review 🧾
 
 ### 🗂️ Portfolios & Accounts
@@ -59,7 +59,14 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
 - Track valuables like cars, watches or furniture 🛋️
 - **Straight line depreciation** per year (negative % = appreciation)
+- **Ownership %** for shared assets: value, cost and P&L count only your share
 - Sell assets and track **realized P&L**
+
+### 🏠 Real Estate
+
+- Properties with their **mortgage** and your **ownership %**: the account shows the full property value, the mortgage and your share (equity)
+- **Property valuations**: record the market value on any date (VALUE action); from that date on the property is valued from it, and any depreciation continues from there
+- Before the first valuation, the purchase value is used
 
 ### 💵 Incomes & Expenses
 
@@ -92,6 +99,8 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
 - Fully **date based**: rates are stored per day, so historical values convert correctly 🗓️
 - Currency conversion for all amounts into your **main currency** (CHF/EUR/USD/GBP/JPY)
+- Every rate is stored against **CHF** (1 unit = x CHF), whatever your main currency is, so all profiles share the same rates safely
+- The dashboard warns when a currency in use has **no rate at all** (those amounts would otherwise count 1:1)
 - **Autofill** from the free **Frankfurter API** with one click (only foreign currencies actually used are fetched) 🔄
 - **Startup sync**: today's FX snapshot is silently refreshed for the currencies your accounts actually use
 - Manual save of rates for any date
@@ -133,6 +142,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - `js/db.js`: the **data layer**: a file backed CRUD API (`DB.*`) that the whole UI uses. It talks to the active storage adapter, so nothing else knows or cares where files live 📄
 - `js/storage.js`: the **storage layer**: two interchangeable adapters plus a small IndexedDB helper (see below) 📂
 - `js/utils.js`: currency formatting, **date based FX conversion**, asset depreciation math
+- `js/valuation.js`: the shared rules for what an account and the whole profile are worth on a date, and which transactions count as new capital, so every page shows the same numbers
 - `js/app.js`: router, modals and CRUD orchestration
 - `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals), `pages-wallstreet` (market overview)
 - `js/randata.js`: the **market data client**: fetches 10-year market history from the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) — one full load plus small daily incremental pulls — and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
@@ -151,7 +161,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - Click **OPEN DATA FOLDER** and pick your data folder once. The app remembers it and reconnects automatically on your next visit.
 - The button becomes **CHANGE DATA FOLDER** once connected. Click it anytime to switch to a different folder (e.g. if you picked the wrong one).
 - Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
-- A `Backups/` subfolder is created next to your data; every time you open a profile, a timestamped snapshot is saved (newest 30 kept).
+- A `Backups/` subfolder is created next to your data; every time you open a profile, a timestamped snapshot is saved. Backups are never deleted by the app.
 - A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`) plus a small `randata-meta.json` with sync bookkeeping. Each page reads only the resources it needs.
 - FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.
 - **Your files are just files**: copy them, back them up, open them in another device, anything.
@@ -160,6 +170,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 
 - Click **OPEN PROFILE FILE** to open a single `.json` profile.
 - Edits are kept safe in an in browser mirror (IndexedDB), so nothing is lost between visits.
+- Opening a file always loads that file. If the browser held a different copy of the same profile, that copy is downloaded first (`<profile>-browser-copy-<timestamp>.json`), so unsaved edits are never lost.
 - Use **SAVE FILE** (settings menu inside the app) to **download** the current profile. That's how you keep a real updated file on disk.
 - Backups, market data and the `Resources/` market cache live in the browser's own storage, not on disk.
 - **EXPORT** (settings menu) gives you a JSON backup file you can carry anywhere; **IMPORT** restores it.
@@ -244,6 +255,7 @@ LibertyFinance/
 │   ├── storage.js          # storage layer (folder + file adapters)
 │   ├── db.js               # data layer (DB.* API on top of storage)
 │   ├── utils.js            # FX conversion, formatting, depreciation
+│   ├── valuation.js        # account values, net worth and performance rules shared by every page
 │   ├── app.js              # router, modals, CRUD orchestration
 │   ├── pages-shared.js     # renderer helpers + Pages namespace
 │   ├── pages-dashboard.js  # dashboard renderer
@@ -254,11 +266,20 @@ LibertyFinance/
 │   ├── pages-market.js     # exchange rates + metal prices
 │   ├── pages-wallstreet.js # market overview (Wall Street)
 │   └── randata.js          # Randata API client + Resources/ cache
+├── tests/                  # checks for the money math and data loading (node tests/run.js)
 ├── flags/                  # region flag SVGs (used across pages)
 ├── logo.png
 ├── version.txt             # web UI version tag
 ├── server.js               # static dev server (local preview only)
 └── .nojekyll               # tells GitHub Pages to serve files asis
+```
+
+### 🧪 Running the checks
+
+The money math (exchange rates, asset values, net worth, performance) and the profile loading rules have plain Node.js checks, no install needed:
+
+```
+node tests/run.js
 ```
 
 ---
