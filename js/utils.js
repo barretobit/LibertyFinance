@@ -108,8 +108,10 @@ function nowISO() {
   return new Date().toISOString();
 }
 
-function pluralize(n, word) {
-  return n + ' ' + (n === 1 ? word : word + 's');
+// "1 ASSET", "0 ASSETS", "2 accounts": the plural "s" follows the word's case
+function pluralize(count, word) {
+  if (count === 1) return count + ' ' + word;
+  return count + ' ' + word + (word === word.toUpperCase() ? 'S' : 's');
 }
 
 function plClass(value) {
@@ -154,9 +156,20 @@ function assetOwnershipShare(asset) {
   return (isNaN(percent) ? 100 : percent) / 100;
 }
 
-// Mortgage still owed on the asset; only Real Estate carries one
-function assetMortgage(asset) {
-  return isRealEstateAsset(asset) ? parseFloat(asset.debt) || 0 : 0;
+// Latest dated entry ({ date: 'YYYY-MM-DD', ... }) on or before `date`, or null
+function latestEntryOnOrBefore(entries, date) {
+  return (entries || [])
+    .filter(entry => entry && entry.date && entry.date <= date)
+    .reduce((latest, entry) => (!latest || entry.date > latest.date ? entry : latest), null);
+}
+
+// Mortgage still owed on `date` (no date: today), full amount; only Real Estate
+// carries one. The latest dated balance on or before the date, else the mortgage
+// entered at purchase (asset.debt).
+function assetMortgage(asset, date) {
+  if (!isRealEstateAsset(asset)) return 0;
+  const balance = latestEntryOnOrBefore(asset.mortgageBalances, date || todayStr());
+  return parseFloat(balance ? balance.amount : asset.debt) || 0;
 }
 
 // True once the asset is sold on `date` (no date: today)
@@ -173,13 +186,6 @@ function yearsBetween(startDate, endDate) {
   return milliseconds / (365.25 * 86400000);
 }
 
-// Latest Real Estate valuation on or before `date` (YYYY-MM-DD), or null
-function latestAssetValuation(asset, date) {
-  return (asset.valuations || [])
-    .filter(valuation => valuation && valuation.date && valuation.date <= date)
-    .reduce((latest, valuation) => (!latest || valuation.date > latest.date ? valuation : latest), null);
-}
-
 // Full value of the asset on `date`: 100% ownership, mortgage not deducted.
 // Straight-line depreciation from a starting point: value × max(0, 1 − (percent/100) × years).
 // Real Estate starts from its latest valuation on or before the date when there
@@ -187,7 +193,7 @@ function latestAssetValuation(asset, date) {
 // from the purchase value at the purchase date.
 function assetFullValue(asset, date) {
   const onDate = date || todayStr();
-  const valuation = isRealEstateAsset(asset) ? latestAssetValuation(asset, onDate) : null;
+  const valuation = isRealEstateAsset(asset) ? latestEntryOnOrBefore(asset.valuations, onDate) : null;
   const startValue = valuation ? parseFloat(valuation.value) || 0 : parseFloat(asset.purchaseValue) || 0;
   const startDate = valuation ? valuation.date : asset.purchaseDate;
   const depreciationPercent = parseFloat(asset.depreciationPct) || 0;
@@ -199,16 +205,18 @@ function assetFullValue(asset, date) {
 function assetCurrentValue(asset, date) {
   if (!asset || isAssetSoldOn(asset, date)) return 0;
   if (asset.purchaseDate && date && date < asset.purchaseDate) return 0;
-  return (assetFullValue(asset, date) - assetMortgage(asset)) * assetOwnershipShare(asset);
+  return (assetFullValue(asset, date) - assetMortgage(asset, date)) * assetOwnershipShare(asset);
 }
 
 function assetCostValue(asset) {
   return asset ? (parseFloat(asset.purchaseValue) || 0) : 0;
 }
 
-// Owned cost basis: the owned share of the purchase value, net of the mortgage
-function assetOwnedCost(asset) {
-  return (assetCostValue(asset) - assetMortgage(asset)) * assetOwnershipShare(asset);
+// Owned cost basis on `date`: the owned share of the purchase price net of the
+// mortgage still owed then. Repaying the mortgage is capital put in, so the
+// cost rises with it and P&L stays the change in the property's value.
+function assetOwnedCost(asset, date) {
+  return (assetCostValue(asset) - assetMortgage(asset, date)) * assetOwnershipShare(asset);
 }
 
 // Realized profit or loss on the owned share, once sold
@@ -233,7 +241,7 @@ function assetAccountMetrics(assets, date, rateFor) {
     if (asset.purchaseDate && date && date < asset.purchaseDate) return;
     count++;
     value += assetCurrentValue(asset, date) * rate;
-    cost += assetOwnedCost(asset) * rate;
+    cost += assetOwnedCost(asset, date) * rate;
   });
   return { value, cost, count, soldCount, realized, pl: value - cost };
 }

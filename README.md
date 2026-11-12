@@ -66,7 +66,9 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
 - Properties with their **mortgage** and your **ownership %**: the account shows the full property value, the mortgage and your share (equity)
 - **Property valuations**: record the market value on any date (VALUE action); from that date on the property is valued from it, and any depreciation continues from there
-- Before the first valuation, the purchase value is used
+- **Mortgage balances**: record the mortgage still owed on any date (MORTGAGE action), e.g. after a repayment; past months keep the balance they had
+- Before the first valuation or balance, the purchase price and the mortgage at purchase are used
+- Repayments are capital you put in, not a gain: the P&L stays the change in the property's value
 
 ### 💵 Incomes & Expenses
 

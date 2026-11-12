@@ -3,7 +3,7 @@ const { loadScripts, assertNear, test, assert } = require('./helpers');
 
 const utils = loadScripts(['js/utils.js'], [
   'chfPerUnit', 'currencyRateTo', 'currenciesWithoutRate', 'assetFullValue', 'assetCurrentValue', 'assetOwnedCost',
-  'assetRealizedPL', 'assetAccountMetrics', 'isIsoDate', 'escapeHtml', 'signedCurrency', 'signedPercent',
+  'assetRealizedPL', 'assetAccountMetrics', 'isIsoDate', 'escapeHtml', 'signedCurrency', 'signedPercent', 'pluralize',
 ]);
 
 // Rates are stored as "1 unit = rate CHF"
@@ -76,6 +76,17 @@ test('Real Estate valuations apply from their date on', () => {
   assert.ok(Math.abs(utils.assetFullValue(appreciatingFlat, '2027-01-01') - 1020000) < 100, 'depreciation restarts at the valuation date');
 });
 
+test('Real Estate mortgage balances apply from their date on', () => {
+  const repaidFlat = { ...flat, mortgageBalances: [{ date: '2024-01-01', amount: 450000 }, { date: '2022-01-01', amount: 480000 }] };
+  assertNear(utils.assetCurrentValue(repaidFlat, '2021-06-01'), 150000, 'before any balance: the mortgage at purchase, (800k - 500k) x 50%');
+  assertNear(utils.assetCurrentValue(repaidFlat, '2023-06-01'), 160000, 'after the 2022 balance: (800k - 480k) x 50%');
+  assertNear(utils.assetCurrentValue(repaidFlat, '2026-06-01'), 175000, 'after the 2024 balance: (800k - 450k) x 50%');
+  // Repaying the mortgage is capital put in, not a gain: P&L stays the change in property value
+  assertNear(utils.assetAccountMetrics([repaidFlat], '2026-06-01').pl, 0, 'no value change, no P&L');
+  const appreciatedFlat = { ...repaidFlat, valuations: [{ date: '2025-01-01', value: 900000 }] };
+  assertNear(utils.assetAccountMetrics([appreciatedFlat], '2026-06-01').pl, 50000, '(900k - 800k) x 50%');
+});
+
 test('small helpers', () => {
   assert.ok(utils.isIsoDate('2026-11-12'));
   assert.ok(!utils.isIsoDate("2026-11-12');alert(1)//"));
@@ -84,4 +95,7 @@ test('small helpers', () => {
   assert.strictEqual(utils.escapeHtml(null), '');
   assert.strictEqual(utils.signedPercent(1.234, 2), '+1.23%');
   assert.strictEqual(utils.signedPercent(-1.234, 1), '-1.2%');
+  assert.strictEqual(utils.pluralize(0, 'ASSET'), '0 ASSETS');
+  assert.strictEqual(utils.pluralize(1, 'ACCOUNT'), '1 ACCOUNT');
+  assert.strictEqual(utils.pluralize(2, 'account'), '2 accounts');
 });

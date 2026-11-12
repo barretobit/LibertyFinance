@@ -164,9 +164,11 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     transactionsByAccount[transaction.accountId].push(transaction);
   });
   const assetsByAccount = {};
+  const assetsById = {};
   assets.forEach(asset => {
     if (!assetsByAccount[asset.accountId]) assetsByAccount[asset.accountId] = [];
     assetsByAccount[asset.accountId].push(asset);
+    assetsById[asset.id] = asset;
   });
 
   const rateToMain = (currency, date) => currencyRateTo(rateEntries, currency || 'CHF', mainCurrency, date);
@@ -261,6 +263,20 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     return totals;
   }
 
+  // Capital a transaction moves, in the main currency (see capitalFlow()). An asset
+  // purchase or sale moves only the owned equity: the owned share of the price,
+  // net of the mortgage, in the asset's own currency. The full price would count
+  // a 900k flat bought with a 600k mortgage at 50% as 900k put in for 150k of equity.
+  function capitalInMain(transaction, flowOptions = {}) {
+    const asset = assetsById[transaction.assetId];
+    const isAssetEvent = transaction.type === 'asset-add' || transaction.type === 'asset-sell';
+    if (isAssetEvent && flowOptions.includeAssetEvents && asset) {
+      const ownedEquity = (Math.abs(transaction.amount || 0) - assetMortgage(asset, transaction.date)) * assetOwnershipShare(asset);
+      return toMain(transaction.type === 'asset-add' ? ownedEquity : -ownedEquity, asset.currency, transaction.date);
+    }
+    return toMain(capitalFlow(transaction, flowOptions), accountCurrency(transaction.accountId), transaction.date);
+  }
+
   // Investment result per month of `accountIds`: { 'YYYY-MM': { abs, pct } }, see periodResult()
   function monthlyReturns(accountIds, flowOptions) {
     const results = {};
@@ -276,7 +292,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
         startTotal = totalBefore;
         capitalAdded = 0;
       }
-      capitalAdded += toMain(capitalFlow(transaction, flowOptions), accountCurrency(transaction.accountId), transaction.date);
+      capitalAdded += capitalInMain(transaction, flowOptions);
     });
     if (month !== null) results[month] = periodResult(startTotal, finalTotal, capitalAdded);
     return results;
@@ -288,7 +304,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     let capitalAdded = 0;
     replayBalances(accountIds, (transaction, totalBefore, totalAfter) => {
       if (transaction.date < cutoffDate) totalAtCutoff = totalAfter;
-      else capitalAdded += toMain(capitalFlow(transaction), accountCurrency(transaction.accountId), transaction.date);
+      else capitalAdded += capitalInMain(transaction);
     });
     return periodResult(totalAtCutoff, currentTotal, capitalAdded);
   }
@@ -310,7 +326,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
   function capitalAddedBetween(accountIds, startDate, endDate) {
     return balanceTransactionsOf(accountIds)
       .filter(transaction => (transaction.date || '') >= startDate && (transaction.date || '') <= endDate)
-      .reduce((sum, transaction) => sum + toMain(capitalFlow(transaction), accountCurrency(transaction.accountId), transaction.date), 0);
+      .reduce((sum, transaction) => sum + capitalInMain(transaction), 0);
   }
 
   return {
@@ -331,6 +347,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     accountValue,
     accountCostBasis,
     accountValueInMain,
+    capitalInMain,
     netWorth,
     isLiquidAccount,
     balanceTransactionsOf,

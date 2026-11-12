@@ -337,7 +337,11 @@ const App = {
       const hasStartingValue = !editId && accountType !== ACCOUNT_TYPE.tangibleAsset && accountType !== ACCOUNT_TYPE.realEstate;
       if (startingFields) startingFields.style.display = hasStartingValue ? "block" : "none";
     }
-    typeField.onchange = toggleAccountTypeFields;
+    // A home is not liquid: a new Real Estate account starts outside liquid net worth
+    typeField.onchange = () => {
+      toggleAccountTypeFields();
+      if (!editId) includeInLiquidField.checked = typeField.value !== ACCOUNT_TYPE.realEstate;
+    };
 
     function updateStartingSymbol() {
       if (startingSymbol) startingSymbol.textContent = currencyField.value || mainCurrency;
@@ -586,12 +590,37 @@ const App = {
     const account = await DB.getById("accounts", accountId);
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || "CHF";
-    const title = document.getElementById("modal-asset-title");
-    if (title) title.textContent = assetId ? "EDIT ASSET" : "ADD ASSET";
+    // The same form adds a property or any other asset: only Real Estate has a mortgage, and its own wording
+    const isProperty = !!account && account.accountType === ACCOUNT_TYPE.realEstate;
+    const wording = isProperty
+      ? {
+          title: assetId ? "EDIT PROPERTY" : "ADD PROPERTY",
+          name: "e.g. Flat in Zurich",
+          value: "PURCHASE PRICE (WHOLE PROPERTY)",
+          depreciation: "VALUE CHANGE PER YEAR (%)",
+          depreciationPlaceholder: "usually 0; -2 = +2% a year",
+          ownership: "YOUR OWNERSHIP (%)",
+          help: "YOUR SHARE = (PROPERTY VALUE - MORTGAGE) x YOUR OWNERSHIP. LATER MARKET VALUES AND MORTGAGE REPAYMENTS GO IN THE ASSETS TABLE (VALUE, MORTGAGE); UNTIL THEN THE PURCHASE FIGURES COUNT. USE A NEGATIVE % FOR APPRECIATION.",
+        }
+      : {
+          title: assetId ? "EDIT ASSET" : "ADD ASSET",
+          name: "e.g. Car, Laptop, Sofa",
+          value: "VALUE",
+          depreciation: "DEPRECIATION PER YEAR (%)",
+          depreciationPlaceholder: "e.g. 20",
+          ownership: "OWNERSHIP (%)",
+          help: "VALUE DEPRECIATES STRAIGHT-LINE BY THE % PER YEAR SINCE THE PURCHASE DATE. USE A NEGATIVE % FOR APPRECIATION.",
+        };
+    document.getElementById("modal-asset-title").textContent = wording.title;
+    document.getElementById("asset-name").placeholder = wording.name;
+    document.getElementById("asset-value-label").textContent = wording.value;
+    document.getElementById("asset-depreciation-label").textContent = wording.depreciation;
+    document.getElementById("asset-depreciation").placeholder = wording.depreciationPlaceholder;
+    document.getElementById("asset-ownership-label").textContent = wording.ownership;
+    document.getElementById("asset-help").textContent = wording.help;
+    document.getElementById("asset-debt").closest(".mb-3").style.display = isProperty ? "" : "none";
     document.getElementById("asset-id").value = assetId || "";
     document.getElementById("asset-account-id").value = accountId;
-    // Only Real Estate carries a mortgage
-    document.getElementById("asset-debt").closest(".mb-3").style.display = account && account.accountType === "Real Estate" ? "" : "none";
     const currencyField = document.getElementById("asset-currency");
     currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
     if (assetId) {
@@ -816,54 +845,89 @@ const App = {
     await DB.put("accounts", account);
   },
 
-  // ==================== REAL ESTATE VALUATIONS ====================
-  // A valuation is the property's full market value (100% ownership, before
-  // the mortgage) on a date; see assetFullValue() in utils.js for how it is used.
+  // ==================== REAL ESTATE HISTORY ====================
+  // A property keeps two dated histories, edited in the same window:
+  // - valuations: its full market value (100%, before the mortgage), see assetFullValue()
+  // - mortgageBalances: the full mortgage still owed, see assetMortgage()
+  // Each entry applies from its date on; before the first one, the purchase figures count.
 
-  async showAssetValuations(assetId) {
+  _assetHistoryKinds: {
+    valuations: {
+      title: "PROPERTY VALUE",
+      valueLabel: "MARKET VALUE (100%, BEFORE MORTGAGE)",
+      column: "MARKET VALUE",
+      help: "FROM THIS DATE ON, THE PROPERTY IS VALUED FROM THIS AMOUNT, AND ANY DEPRECIATION CONTINUES FROM HERE. A NEW VALUATION ON THE SAME DATE REPLACES THE OLD ONE.",
+      purchaseLabel: "PURCHASE PRICE",
+      purchaseAmount: (asset) => assetCostValue(asset),
+      field: "value",
+      savedMessage: "PROPERTY VALUE UPDATED",
+    },
+    mortgageBalances: {
+      title: "MORTGAGE",
+      valueLabel: "MORTGAGE STILL OWED (FULL AMOUNT)",
+      column: "MORTGAGE",
+      help: "FROM THIS DATE ON, THIS IS THE MORTGAGE OWED ON THE PROPERTY, E.G. AFTER A REPAYMENT. A NEW BALANCE ON THE SAME DATE REPLACES THE OLD ONE.",
+      purchaseLabel: "AT PURCHASE",
+      purchaseAmount: (asset) => parseFloat(asset.debt) || 0,
+      field: "amount",
+      savedMessage: "MORTGAGE UPDATED",
+    },
+  },
+
+  async showAssetHistory(assetId, kind) {
     const asset = await DB.getById("assets", assetId);
-    if (!asset) return;
+    const settings = this._assetHistoryKinds[kind];
+    if (!asset || !settings) return;
+    this._assetHistoryKind = kind;
+    document.getElementById("asset-valuation-title").textContent = settings.title;
+    document.getElementById("asset-valuation-value-label").textContent = settings.valueLabel;
+    document.getElementById("asset-valuation-column").textContent = settings.column;
+    document.getElementById("asset-valuation-help").textContent = settings.help;
     document.getElementById("asset-valuation-asset-id").value = asset.id;
     document.getElementById("asset-valuation-name").textContent = asset.name || "—";
     document.getElementById("asset-valuation-currency").textContent = asset.currency || "CHF";
     document.getElementById("asset-valuation-value").value = "";
     document.getElementById("asset-valuation-date").value = todayStr();
-    this._renderAssetValuationList(asset);
+    this._renderAssetHistoryList(asset);
     this._modals.assetValuation.show();
   },
 
-  _renderAssetValuationList(asset) {
-    const list = document.getElementById("asset-valuation-list");
-    const valuations = (asset.valuations || []).filter((valuation) => isIsoDate(valuation.date)).sort((first, second) => second.date.localeCompare(first.date));
-    list.innerHTML = valuations.length
-      ? valuations
-          .map(
-            (valuation) =>
-              "<tr><td>" +
-              formatDate(valuation.date) +
-              "</td><td>" +
-              formatCurrency(parseFloat(valuation.value) || 0, asset.currency) +
-              '</td><td class="text-end"><a class="tx-link" onclick="App.deleteAssetValuation(this, ' +
-              Number(asset.id) +
-              ", '" +
-              valuation.date +
-              "')\">DELETE</a></td></tr>"
-          )
-          .join("")
-      : '<tr><td colspan="3" class="text-muted">NO VALUATIONS YET: THE PURCHASE VALUE IS USED.</td></tr>';
+  // Newest entry first; the purchase figures close the list (they cannot be deleted here)
+  _renderAssetHistoryList(asset) {
+    const kind = this._assetHistoryKind;
+    const settings = this._assetHistoryKinds[kind];
+    const entries = (asset[kind] || []).filter((entry) => isIsoDate(entry.date)).sort((first, second) => second.date.localeCompare(first.date));
+    const entryRows = entries.map(
+      (entry) =>
+        "<tr><td>" +
+        formatDate(entry.date) +
+        "</td><td>" +
+        formatCurrency(parseFloat(entry[settings.field]) || 0, asset.currency) +
+        '</td><td class="text-end"><a class="tx-link" onclick="App.deleteAssetHistoryEntry(this, ' +
+        Number(asset.id) +
+        ", '" +
+        entry.date +
+        "')\">DELETE</a></td></tr>"
+    );
+    const purchaseRow =
+      '<tr class="text-muted"><td>' + formatDate(asset.purchaseDate) + "</td><td>" + formatCurrency(settings.purchaseAmount(asset), asset.currency) + '</td><td class="text-end">' + settings.purchaseLabel + "</td></tr>";
+    document.getElementById("asset-valuation-list").innerHTML = entryRows.join("") + purchaseRow;
   },
 
-  async saveAssetValuation() {
+  async saveAssetHistoryEntry() {
+    const kind = this._assetHistoryKind;
+    const settings = this._assetHistoryKinds[kind];
     const assetId = parseInt(document.getElementById("asset-valuation-asset-id").value);
     const date = document.getElementById("asset-valuation-date").value;
-    const value = parseFloat(document.getElementById("asset-valuation-value").value);
+    const amount = parseFloat(document.getElementById("asset-valuation-value").value);
 
+    if (!settings) return;
     if (!isIsoDate(date)) {
       this.toast("ENTER A VALID DATE");
       return;
     }
-    if (isNaN(value) || value < 0) {
-      this.toast("ENTER A VALID VALUE");
+    if (isNaN(amount) || amount < 0) {
+      this.toast("ENTER A VALID AMOUNT");
       return;
     }
     const asset = await DB.getById("assets", assetId);
@@ -872,34 +936,35 @@ const App = {
       return;
     }
     if (asset.purchaseDate && date < asset.purchaseDate) {
-      this.toast("THE VALUATION DATE IS BEFORE THE PURCHASE DATE");
+      this.toast("THE DATE IS BEFORE THE PURCHASE DATE");
       return;
     }
 
-    // One valuation per date: a new one on the same date replaces the old one
-    asset.valuations = (asset.valuations || []).filter((valuation) => valuation.date !== date).concat({ date, value });
+    // One entry per date: a new one on the same date replaces the old one
+    asset[kind] = (asset[kind] || []).filter((entry) => entry.date !== date).concat({ date, [settings.field]: amount });
     await DB.put("assets", asset);
     await this._refreshAssetAccountValue(asset.accountId);
 
     this._modals.assetValuation.hide();
-    this.toast("PROPERTY VALUE UPDATED");
+    this.toast(settings.savedMessage);
     this.route();
   },
 
-  // Deleting takes two clicks on the same link, so a stray click cannot remove a
-  // valuation (a confirm dialog cannot open on top of this one).
-  async deleteAssetValuation(link, assetId, date) {
+  // Deleting takes two clicks on the same link, so a stray click cannot remove an
+  // entry (a confirm dialog cannot open on top of this window).
+  async deleteAssetHistoryEntry(link, assetId, date) {
     if (link.dataset.armed !== "true") {
       link.dataset.armed = "true";
       link.textContent = "CLICK AGAIN TO DELETE";
       return;
     }
+    const kind = this._assetHistoryKind;
     const asset = await DB.getById("assets", assetId);
-    if (!asset) return;
-    asset.valuations = (asset.valuations || []).filter((valuation) => valuation.date !== date);
+    if (!asset || !this._assetHistoryKinds[kind]) return;
+    asset[kind] = (asset[kind] || []).filter((entry) => entry.date !== date);
     await DB.put("assets", asset);
     await this._refreshAssetAccountValue(asset.accountId);
-    this._renderAssetValuationList(asset);
+    this._renderAssetHistoryList(asset);
     this.route();
   },
 
@@ -1199,6 +1264,15 @@ const App = {
         data.openingQuantity = Math.max(0, previousAccount.openingQuantity + (data.quantity - (previousAccount.quantity || 0)));
       }
       await DB.put("accounts", data);
+      // Assets carry their account's type (it decides whether the mortgage counts):
+      // a type change must reach them, then the account value is recomputed from them.
+      if (previousAccount && previousAccount.accountType !== data.accountType) {
+        for (const asset of await DB.getByIndex("assets", "accountId", data.id)) {
+          asset.accountType = data.accountType;
+          await DB.put("assets", asset);
+        }
+        if (isAssetAccount(data)) await this._refreshAssetAccountValue(data.id);
+      }
       await this._recomputeAccountBalances(data.id);
     } else {
       data.currentValue = 0;
@@ -1883,7 +1957,7 @@ const SAVE_HANDLERS = [
   "saveMetal",
   "saveAsset",
   "saveSellAsset",
-  "saveAssetValuation",
+  "saveAssetHistoryEntry",
   "saveIncome",
   "saveExpense",
   "saveDebt",
@@ -1895,7 +1969,7 @@ const OTHER_CHANGING_HANDLERS = [
   "deleteAccount",
   "deletePortfolio",
   "deleteAsset",
-  "deleteAssetValuation",
+  "deleteAssetHistoryEntry",
   "deleteTransaction",
   "deleteIncome",
   "deleteExpense",

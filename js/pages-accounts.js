@@ -82,8 +82,9 @@ Object.assign(Pages, {
   },
 
   // Value, P&L, cost and custodian cards. Real Estate shows the full property
-  // value, the owned share net of the mortgage, and the mortgage instead.
-  _renderAccountStats({ account, currentValue, costBasis, custodianName, isPreciousMetal, isRealEstate, assets }) {
+  // value, the owned share net of the mortgage, the mortgage, and the change in
+  // the owned share's value (repayments are capital, not a gain) instead.
+  _renderAccountStats({ account, context, currentValue, costBasis, custodianName, isPreciousMetal, isRealEstate, assets }) {
     const currency = account.currency;
     const profitLoss = currentValue - costBasis;
     const valueElement = document.getElementById('acc-stat-value');
@@ -96,13 +97,20 @@ Object.assign(Pages, {
     document.getElementById('acc-stat-pl-label').textContent = isRealEstate ? 'SHARE VALUE' : 'UNREALIZED P&L';
     document.getElementById('acc-stat-cost-label').textContent = isRealEstate ? 'DEBT (MORTGAGE)' : 'INPUT';
     document.getElementById('acc-stat-meta').closest('.col-md-3').style.display = isRealEstate ? 'none' : '';
+    document.getElementById('acc-stat-gain-card').style.display = isRealEstate ? '' : 'none';
 
     if (isRealEstate) {
+      const gainElement = document.getElementById('acc-stat-gain');
+      gainElement.textContent = signedCurrency(profitLoss, currency) + (costBasis !== 0 ? ' (' + signedPercent((profitLoss / costBasis) * 100, 2) + ')' : '');
+      gainElement.style.color = profitLossColor(profitLoss);
+      // Each property is stored in its own currency: convert into the account's
+      const rateToAccount = context.assetRateToAccount(account);
+      const inAccountCurrency = (asset, amount) => amount * rateToAccount(asset.currency || 'CHF', context.today);
       const heldAssets = assets.filter(asset => !asset.sold);
-      valueElement.textContent = formatCurrency(heldAssets.reduce((sum, asset) => sum + assetFullValue(asset, todayStr()), 0), currency);
+      valueElement.textContent = formatCurrency(heldAssets.reduce((sum, asset) => sum + inAccountCurrency(asset, assetFullValue(asset, context.today)), 0), currency);
       profitLossElement.textContent = formatCurrency(currentValue, currency);
       profitLossElement.style.color = 'var(--accent)';
-      costElement.textContent = formatCurrency(heldAssets.reduce((sum, asset) => sum + (parseFloat(asset.debt) || 0), 0), currency);
+      costElement.textContent = formatCurrency(heldAssets.reduce((sum, asset) => sum + inAccountCurrency(asset, assetMortgage(asset, context.today)), 0), currency);
     } else {
       valueElement.textContent = formatCurrency(currentValue, currency);
       profitLossElement.textContent = signedCurrency(profitLoss, currency);
@@ -177,10 +185,17 @@ Object.assign(Pages, {
   _accountPerformanceSince(page, startDate) {
     const { context, assets, currentValue } = page;
     if (page.isAssetAccount) {
+      // Capital put in is the change in owned cost: purchases and mortgage repayments
+      // raise it, sales lower it. A sale's realized gain counts as result.
       const rateToAccount = context.assetRateToAccount(page.account);
-      const startValue = assetAccountMetrics(assets, startDate, rateToAccount).value;
-      const endValue = assetAccountMetrics(assets, context.today, rateToAccount).value;
-      return { ...periodResult(startValue, endValue, 0), startValue, deposited: 0 };
+      const atStart = assetAccountMetrics(assets, startDate, rateToAccount);
+      const atEnd = assetAccountMetrics(assets, context.today, rateToAccount);
+      const capitalAdded = atEnd.cost - atStart.cost;
+      const realizedInPeriod = atEnd.realized - atStart.realized;
+      const result = periodResult(atStart.value, atEnd.value + realizedInPeriod, capitalAdded);
+      // Percent of the equity held over the period: a sale's capital leaving does not shrink the base
+      const base = atStart.value + Math.max(0, capitalAdded);
+      return { abs: result.abs, pct: base > 0 ? (result.abs / base) * 100 : 0, startValue: atStart.value, deposited: capitalAdded };
     }
     let startValue = 0;
     let capitalAdded = 0;
@@ -411,20 +426,32 @@ Object.assign(Pages, {
       .forEach(transaction => {
         const transactionId = Number(transaction.id);
         const isAssetEvent = transaction.type === 'asset-add' || transaction.type === 'asset-sell';
+        const asset = isAssetEvent ? assetsById[transaction.assetId] : null;
         let amountText;
+        let assetBreakdown = '';
         if (transaction.type === 'valuation') {
           amountText = formatCurrency(transaction.amount, currency);
+        } else if (asset) {
+          // An asset purchase or sale moves the owned equity in or out of the account:
+          // the owned share of the price, net of the mortgage, in the asset's currency.
+          const price = Math.abs(transaction.amount || 0);
+          const mortgage = assetMortgage(asset, transaction.date);
+          const share = assetOwnershipShare(asset);
+          const ownedEquity = (price - mortgage) * share;
+          amountText = (transaction.type === 'asset-add' ? '+' : '-') + formatCurrency(ownedEquity * rateToAccount(asset.currency || 'CHF', transaction.date), currency);
+          if (mortgage > 0 || share !== 1) {
+            assetBreakdown = (transaction.type === 'asset-add' ? 'PRICE ' : 'SALE ') + formatCurrency(price, asset.currency) +
+              (mortgage > 0 ? ' &middot; MORTGAGE ' + formatCurrency(mortgage, asset.currency) : '') +
+              ' &middot; YOUR ' + escapeHtml(+(share * 100).toFixed(2)) + '% = ' + formatCurrency(ownedEquity, asset.currency);
+          }
         } else if (transaction.type === 'buy' || transaction.type === 'sell' || isAssetEvent) {
-          let amount = Math.abs(transaction.amount);
-          // Asset events are stored in the asset's currency
-          const asset = isAssetEvent ? assetsById[transaction.assetId] : null;
-          if (asset) amount *= rateToAccount(asset.currency || 'CHF', transaction.date);
-          amountText = (transaction.amount >= 0 ? '+' : '-') + formatCurrency(amount, currency);
+          amountText = (transaction.amount >= 0 && transaction.type !== 'asset-sell' ? '+' : '-') + formatCurrency(Math.abs(transaction.amount), currency);
         } else {
           amountText = formatCurrency(Math.abs(transaction.amount), currency);
         }
 
         let notesHtml = escapeHtml(transaction.notes || '');
+        if (assetBreakdown) notesHtml += '<br><small style="color:#888">' + assetBreakdown + '</small>';
         if (transaction.quantity != null) {
           let metalLine = (transaction.type === 'buy' ? '+' : transaction.type === 'sell' ? '&minus;' : '') + escapeHtml(transaction.quantity) + 'g';
           if (transaction.pricePerGram) metalLine += ' @ ' + pricePerGramText(transaction);
@@ -476,8 +503,11 @@ Object.assign(Pages, {
       const editLink = '<a class="tx-link me-2" onclick="App.showModal(\'asset\', ' + Number(asset.accountId) + ', ' + assetId + ')">EDIT</a>';
       const deleteLink = '<a class="tx-link" onclick="App.deleteAsset(' + assetId + ')">DELETE</a>';
       const sellLink = '<a class="tx-link me-2" onclick="App.showModal(\'sellAsset\', ' + assetId + ')">SELL</a>';
-      const valueLink = isRealEstate ? '<a class="tx-link me-2" onclick="App.showAssetValuations(' + assetId + ')">VALUE</a>' : '';
-      const actionsHtml = asset.sold ? editLink + deleteLink : valueLink + sellLink + editLink + deleteLink;
+      const propertyLinks = isRealEstate
+        ? '<a class="tx-link me-2" onclick="App.showAssetHistory(' + assetId + ', \'valuations\')">VALUE</a>' +
+          '<a class="tx-link me-2" onclick="App.showAssetHistory(' + assetId + ', \'mortgageBalances\')">MORTGAGE</a>'
+        : '';
+      const actionsHtml = asset.sold ? editLink + deleteLink : propertyLinks + sellLink + editLink + deleteLink;
 
       const row = document.createElement('tr');
       row.innerHTML = `<td>${escapeHtml(asset.name)}</td>
@@ -486,7 +516,7 @@ Object.assign(Pages, {
         <td>${escapeHtml(assetCurrency)}</td>
         <td>${escapeHtml(asset.depreciationPct || 0)}%</td>
         <td>${valueHtml}</td>
-        ${isRealEstate ? '<td>' + formatCurrency(parseFloat(asset.debt) || 0, assetCurrency) + '</td>' : ''}
+        ${isRealEstate ? '<td>' + (asset.sold ? '<span class="text-muted">—</span>' : formatCurrency(assetMortgage(asset, todayStr()), assetCurrency)) + '</td>' : ''}
         <td>${asset.sold ? '<span class="tx-badge withdrawal">SOLD</span>' : '<span class="tx-badge deposit">HELD</span>'}</td>
         <td>${profitLossHtml}</td>
         <td>${actionsHtml}</td>`;

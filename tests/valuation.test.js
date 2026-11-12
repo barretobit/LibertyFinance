@@ -129,6 +129,27 @@ test('performance since a date and recorded totals', () => {
   assertNear(context.capitalAddedBetween(accountIds, '2026-01-01', '2026-12-31'), 150, 'deposits of 100 and 50');
 });
 
+test('buying or selling a property moves only the owned equity as capital', () => {
+  const context = valuation.createValuationContext({
+    accounts: [{ id: 6, name: 'Flat', accountType: 'Real Estate', currency: 'CHF' }],
+    transactions: [
+      { id: 1, accountId: 6, assetId: 2, type: 'asset-add', amount: 900000, date: '2024-06-01', balanceAfter: 150000 },
+      { id: 2, accountId: 6, assetId: 3, type: 'asset-add', amount: 100000, date: '2024-07-01', balanceAfter: 150000 + 90000 },
+    ],
+    assets: [
+      { id: 2, accountId: 6, purchaseValue: 900000, debt: 600000, ownershipPct: 50, purchaseDate: '2024-06-01', currency: 'CHF', accountType: 'Real Estate' },
+      { id: 3, accountId: 6, purchaseValue: 100000, debt: 0, ownershipPct: 100, purchaseDate: '2024-07-01', currency: 'EUR', accountType: 'Real Estate' },
+    ],
+    rateEntries: [{ date: '2024-01-01', rates: { EUR: 0.9 } }],
+    todaysMetalPrices: null,
+    mainCurrency: 'CHF',
+  });
+  const returns = context.monthlyReturns(new Set([6]), { includeAssetEvents: true });
+  assertNear(returns['2024-06'].abs, 0, 'a 900k flat with a 600k mortgage at 50% brings in 150k, not 900k');
+  assertNear(returns['2024-07'].abs, 0, 'a 100k EUR studio counts at its own currency rate (90k CHF)');
+  assertNear(context.capitalInMain({ accountId: 6, assetId: 2, type: 'asset-sell', amount: 1100000 }, { includeAssetEvents: true }), -250000, 'sold for 1.1M: (1.1M - 600k) x 50% leaves');
+});
+
 test('an account without transactions counts its stored value only today', () => {
   const context = sampleContext({ transactions: [] });
   const cash = context.accounts[0];

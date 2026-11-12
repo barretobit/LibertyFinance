@@ -99,16 +99,14 @@ const DB = (() => {
     data.goals = data.goals || [];
     data.settings = normalizeSettings(data.settings);
 
-    // Annotate assets with their account type so valuation logic (e.g. Real
-    // Estate handling) can rely on it even for assets created before the field
-    // existed.
+    // Every asset carries its account's type, so valuation logic (e.g. the Real
+    // Estate mortgage) can rely on it. Kept in sync on load: it may be missing on
+    // older assets, or stale when the account's type was changed before this fix.
     const accountById = {};
     (data.accounts || []).forEach(account => { accountById[account.id] = account; });
     (data.assets || []).forEach(asset => {
-      if (!asset.accountType && !asset.assetType && asset.accountId != null) {
-        const account = accountById[asset.accountId];
-        if (account && account.accountType) asset.accountType = account.accountType;
-      }
+      const account = asset.assetType ? null : accountById[asset.accountId];
+      if (account && account.accountType) asset.accountType = account.accountType;
     });
 
     await loadMarket();
