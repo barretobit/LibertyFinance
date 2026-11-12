@@ -48,10 +48,6 @@ const _WS_ETF_REGION = {
   VOO: "US", IVV: "US", SPY: "US", VTI: "US", QQQ: "US",
   VT: "GLO", VEA: "INT", VXUS: "INT", VWO: "INT", BND: "US",
 };
-const _WS_STOCK_COLORS = [
-  readAccent(), "#33ccff", "#ffcc00", "#ff9900", "#ff66cc",
-  "#9966ff", "#00cc88", "#66ffcc", "#ff8866", "#aaccff",
-];
 const _WS_CRYPTO_COLORS = [
   "#f7931a", "#627eea", "#26a17b", "#00ffa3", "#f3ba2f",
 ];
@@ -570,19 +566,19 @@ Object.assign(Pages, {
   },
 
   async wallStreetResync() {
-    const btn = document.getElementById("ws-resync-btn");
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "SYNCING...";
+    const button = document.getElementById("ws-resync-btn");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "SYNCING...";
     }
     try {
-      const r = await Randata.sync();
+      const result = await Randata.sync();
       await this.wallStreet();
-      App.toast(r.status === "offline" ? "MARKET DATA OFFLINE" : r.status === "fresh" ? "MARKET DATA AVAILABLE" : r.status === "busy" ? "MARKET DATA SYNC IN PROGRESS" : "MARKET DATA SYNCED");
+      App.toast(result.status === "offline" ? "MARKET DATA OFFLINE" : result.status === "fresh" ? "MARKET DATA AVAILABLE" : "MARKET DATA SYNCED");
     } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "RESYNC";
+      if (button) {
+        button.disabled = false;
+        button.textContent = "RESYNC";
       }
     }
   },

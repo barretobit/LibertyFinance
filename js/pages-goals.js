@@ -1,149 +1,115 @@
 Object.assign(Pages, {
   // ==================== GOALS ====================
 
-  // Waterfall: higher-priority goals consume account value first;
-  // later goals only see what remains. Consumed per allocation in row order, capped at target.
-  _computeGoalWaterfall(goals, accValue) {
-    const remaining = {};
-    Object.keys(accValue).forEach(id => remaining[id] = accValue[id]);
+  // Waterfall: higher-priority goals take from the account values first; later
+  // goals only see what is left. Each allocation is taken in row order, capped at the target.
+  _computeGoalWaterfall(goals, accountValues) {
+    const remaining = { ...accountValues };
     return goals.map(goal => {
-      let current = 0;
-      let totalAvail = 0;
-      const claims = (goal.allocations || []).map(a => {
-        const accCurrent = remaining[a.accountId] || 0;
-        const avail = accCurrent * ((a.pct || 0) / 100);
-        totalAvail += avail;
-        const need = (goal.target || 0) - current;
-        const take = Math.max(0, Math.min(avail, need));
-        if (take > 0) {
-          current += take;
-          remaining[a.accountId] = accCurrent - take;
+      let funded = 0;
+      let totalAvailable = 0;
+      const claims = (goal.allocations || []).map(allocation => {
+        const accountValue = remaining[allocation.accountId] || 0;
+        const available = accountValue * ((allocation.pct || 0) / 100);
+        totalAvailable += available;
+        const stillNeeded = (goal.target || 0) - funded;
+        const taken = Math.max(0, Math.min(available, stillNeeded));
+        if (taken > 0) {
+          funded += taken;
+          remaining[allocation.accountId] = accountValue - taken;
         }
-        return { accountId: a.accountId, pct: a.pct || 0, accCurrent, avail, take };
+        return { accountId: allocation.accountId, percent: allocation.pct || 0, accountValue, available, taken };
       });
-      return { goal, current, totalAvail, claims };
+      return { goal, funded, totalAvailable, claims };
     });
   },
 
-  _goalCardHtml(goalRes, accNames, compact, mainCurrency) {
-    const goal = goalRes.goal;
-    const cur = mainCurrency || 'CHF';
-    const total = goalRes.totalAvail;
+  _goalCardHtml(goalResult, accountNames, compact, mainCurrency) {
+    const goal = goalResult.goal;
+    const currency = mainCurrency || 'CHF';
+    const total = goalResult.totalAvailable;
     const target = goal.target || 0;
-    const pct = target > 0 ? Math.min(100, (total / target) * 100) : 0;
-    const diff = total - target;
+    const percent = target > 0 ? Math.min(100, (total / target) * 100) : 0;
+    const difference = total - target;
     const reached = total >= target;
-    const statusText = diff < 0 ? 'SHORT BY ' + formatCurrency(-diff, cur)
-      : diff > 0 ? 'EXCEED BY ' + formatCurrency(diff, cur)
+    const goalId = Number(goal.id);
+    const statusText = difference < 0 ? 'SHORT BY ' + formatCurrency(-difference, currency)
+      : difference > 0 ? 'EXCEED BY ' + formatCurrency(difference, currency)
       : 'TARGET REACHED';
     const targetLineHtml =
       '<div class="goal-target-line">' +
-      '<div class="goal-tv-row ' + (reached ? 'is-reached' : '') + '"><span>Target:</span><span>' + formatCurrency(target, cur) + '</span></div>' +
-      '<div class="goal-tv-row ' + (reached ? 'is-reached' : 'is-short') + '"><span>Actual:</span><span>' + formatCurrency(total, cur) + '</span></div>' +
+      '<div class="goal-tv-row ' + (reached ? 'is-reached' : '') + '"><span>Target:</span><span>' + formatCurrency(target, currency) + '</span></div>' +
+      '<div class="goal-tv-row ' + (reached ? 'is-reached' : 'is-short') + '"><span>Actual:</span><span>' + formatCurrency(total, currency) + '</span></div>' +
       '</div>';
     const statusHtml =
       '<div class="goal-status-row">' +
-      '<div class="goal-status ' + (diff < 0 ? 'danger' : 'ok') + '">' + statusText + '</div>' +
-      '<span class="goal-pct" style="color:' + (reached ? 'var(--accent)' : 'var(--text-primary)') + '">' + pct.toFixed(1) + '%</span>' +
+      '<div class="goal-status ' + (difference < 0 ? 'danger' : 'ok') + '">' + statusText + '</div>' +
+      '<span class="goal-pct" style="color:' + (reached ? 'var(--accent)' : 'var(--text-primary)') + '">' + percent.toFixed(1) + '%</span>' +
       '</div>';
-    const allocHtml = goalRes.claims.map(c => {
-      const name = accNames[c.accountId] || ('ACCOUNT #' + c.accountId);
+    const allocationsHtml = goalResult.claims.map(claim => {
+      const name = accountNames[claim.accountId] || ('ACCOUNT #' + claim.accountId);
       return '<div class="goal-alloc-line">' +
         '<span class="goal-alloc-name">' + escapeHtml(name) + '</span>' +
-        '<span>' + formatCurrency(c.accCurrent, cur) + '</span>' +
-        '<span>' + c.pct + '% ' + formatCurrency(c.take, cur) + '</span>' +
-        '<span>' + formatCurrency(c.accCurrent - c.take, cur) + '</span>' +
+        '<span>' + formatCurrency(claim.accountValue, currency) + '</span>' +
+        '<span>' + escapeHtml(claim.percent) + '% ' + formatCurrency(claim.taken, currency) + '</span>' +
+        '<span>' + formatCurrency(claim.accountValue - claim.taken, currency) + '</span>' +
         '</div>';
     }).join('') || '<div class="goal-alloc-line"><span class="text-muted">NO ACCOUNTS ASSIGNED</span></div>';
 
     return '<div class="goal-card">' +
       '<div class="goal-card-top">' +
-      '<span class="goal-name"><span class="goal-priority">#' + (goal.order != null ? goal.order : '-') + '</span> ' + escapeHtml(goal.name) + '</span>' +
+      '<span class="goal-name"><span class="goal-priority">#' + escapeHtml(goal.order != null ? goal.order : '-') + '</span> ' + escapeHtml(goal.name) + '</span>' +
       '<span class="goal-reached" style="' + (reached ? '' : 'display:none') + '">REACHED</span>' +
       '</div>' +
       targetLineHtml +
       statusHtml +
-      '<div class="goal-progress"><div class="goal-progress-fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="goal-progress"><div class="goal-progress-fill" style="width:' + percent + '%"></div></div>' +
       (compact ? '' :
       '<div class="goal-allocations">' +
       '<div class="goal-alloc-header"><span>ACCOUNT</span><span>AVAILABLE</span><span>TAKE</span><span>LEFT</span></div>' +
-      allocHtml + '</div>') +
+      allocationsHtml + '</div>') +
       '<div class="goal-actions">' +
-      '<a class="tx-link me-2" onclick="App.moveGoal(' + goal.id + ', -1)">UP</a>' +
-      '<a class="tx-link me-2" onclick="App.moveGoal(' + goal.id + ', 1)">DOWN</a>' +
-      '<a class="tx-link me-2" onclick="App.showModal(\'goal\', ' + goal.id + ')">EDIT</a>' +
-      '<a class="tx-link" onclick="App.deleteGoal(' + goal.id + ')">DELETE</a>' +
+      '<a class="tx-link me-2" onclick="App.moveGoal(' + goalId + ', -1)">UP</a>' +
+      '<a class="tx-link me-2" onclick="App.moveGoal(' + goalId + ', 1)">DOWN</a>' +
+      '<a class="tx-link me-2" onclick="App.showModal(\'goal\', ' + goalId + ')">EDIT</a>' +
+      '<a class="tx-link" onclick="App.deleteGoal(' + goalId + ')">DELETE</a>' +
       '</div>' +
       '</div>';
   },
 
-  async _buildGoalContext() {
-    const accounts = await DB.getAll('accounts');
-    const transactions = await DB.getAll('transactions');
-    const assets = await DB.getAll('assets');
-    const settings = await DB.getSettings();
-    const mainCurrency = settings.mainCurrency || 'CHF';
-    const rateEntries = await DB.getAll('exchangeRates');
-    const metalEntry = await DB.getMetalPricesForDate(todayStr());
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-    const accTxs = {};
-    transactions.filter(t => t.type === 'deposit' || t.type === 'withdrawal' || t.type === 'valuation' || t.type === 'buy' || t.type === 'sell' || t.type === 'asset-add' || t.type === 'asset-sell')
-      .forEach(t => {
-        const prev = accTxs[t.accountId];
-        if (!prev || (t.date || '') >= (prev.date || '')) accTxs[t.accountId] = t;
-      });
-    const accountAssets = {};
-    assets.forEach(a => {
-      if (!accountAssets[a.accountId]) accountAssets[a.accountId] = [];
-      accountAssets[a.accountId].push(a);
+  // Current value of every account in the main currency, and its name, for the goal cards
+  _goalAccountValues(context) {
+    const accountValues = {};
+    const accountNames = {};
+    context.accounts.forEach(account => {
+      accountValues[account.id] = context.accountValueInMain(account);
+      accountNames[account.id] = account.name;
     });
-    const accValue = {};
-    const accNames = {};
-    accounts.forEach(a => {
-      let raw;
-      let latest = null;
-      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
-        const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
-        raw = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
-      } else if (a.accountType === 'Precious Metal') {
-        raw = metalAccountValue(a, metalEntry, rateEntries, todayStr());
-      } else {
-        latest = accTxs[a.id];
-        raw = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
-      }
-      accValue[a.id] = raw * rateFor(a.currency || 'CHF', a.accountType === 'Precious Metal' ? todayStr() : (latest ? latest.date : todayStr()));
-      accNames[a.id] = a.name;
-    });
-    return { accValue, accNames };
+    return { accountValues, accountNames };
+  },
+
+  // Priority order: lowest order number first, goals without one last, then by id
+  _sortGoalsByPriority(goals) {
+    const orderOf = (goal) => (goal.order != null ? goal.order : Infinity);
+    return [...goals].sort((first, second) => (orderOf(first) - orderOf(second)) || (first.id - second.id));
   },
 
   async goals() {
     const goals = await DB.getAll('goals');
-    const settings = await DB.getSettings();
-    const mainCurrency = settings.mainCurrency || 'CHF';
-    const { accValue, accNames } = await this._buildGoalContext();
+    const context = await loadValuationContext();
 
     const list = document.getElementById('goal-list');
-    const empty = document.getElementById('goal-empty');
+    const emptyMessage = document.getElementById('goal-empty');
     list.innerHTML = '';
+    emptyMessage.style.display = goals.length === 0 ? 'block' : 'none';
+    if (goals.length === 0) return;
 
-    if (goals.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
-
-    goals.sort((a, b) =>
-      ((a.order != null ? a.order : Infinity) - (b.order != null ? b.order : Infinity)) || (a.id - b.id)
-    );
-
-    const results = this._computeGoalWaterfall(goals, accValue);
-
-    results.forEach(goalRes => {
-      const col = document.createElement('div');
-      col.className = 'col-md-6 goal-col';
-      col.innerHTML = this._goalCardHtml(goalRes, accNames, undefined, mainCurrency);
-      list.appendChild(col);
+    const { accountValues, accountNames } = this._goalAccountValues(context);
+    this._computeGoalWaterfall(this._sortGoalsByPriority(goals), accountValues).forEach(goalResult => {
+      const column = document.createElement('div');
+      column.className = 'col-md-6 goal-col';
+      column.innerHTML = this._goalCardHtml(goalResult, accountNames, false, context.mainCurrency);
+      list.appendChild(column);
     });
   },
 });

@@ -24,6 +24,7 @@ const Storage = (() => {
   const CLASSIC_FILE_PREFIX = 'classic-file:';
   const CLASSIC_BACKUPS_PREFIX = 'classic-backups:';
   const PENDING_OPEN_KEY = 'classic-pending-open';
+  const OPEN_ERROR_KEY = 'liberty-finance-open-error';
   const MAX_BACKUPS = 30;
 
   // Shared data files written by features (rates, market cache, randata cache).
@@ -240,30 +241,21 @@ const Storage = (() => {
     },
 
     async backup(name, json) {
-      const dir = await this.connect();
+      const folder = await this.connect();
       let content = json;
       const existing = await this.read(name);
       if (existing != null) content = existing;
 
-      let backupsDir;
+      let backupsFolder;
       try {
-        backupsDir = await dir.getDirectoryHandle('Backups', { create: true });
-      } catch (e) { return; }
-      const stamp = timestamp();
-      const fh = await backupsDir.getFileHandle(name.replace(/\.json$/i, '') + '-' + stamp + '.json', { create: true });
-      const w = await fh.createWritable();
-      await w.write(content);
-      await w.close();
-
-      const entries = [];
-      for await (const [n, h] of backupsDir.entries()) {
-        if (h.kind === 'file' && n.toLowerCase().endsWith('.json')) entries.push(n);
-      }
-      entries.sort();
-      while (entries.length > MAX_BACKUPS) {
-        const old = entries.shift();
-        try { await backupsDir.removeEntry(old); } catch (e) { /* ignored */ }
-      }
+        backupsFolder = await folder.getDirectoryHandle('Backups', { create: true });
+      } catch (error) { return; }
+      const profileName = name.replace(/\.json$/i, '');
+      const backupFileHandle = await backupsFolder.getFileHandle(profileName + '-' + timestamp() + '.json', { create: true });
+      const writable = await backupFileHandle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      // Backups on disk are never deleted by the app: they are small and the user owns the folder.
     }
   };
 
@@ -370,6 +362,19 @@ const Storage = (() => {
     } catch (e) { return null; }
   }
 
+  // Carry the reason a profile could not be opened back to the picker page (app -> index)
+  function setOpenError(message) {
+    try { sessionStorage.setItem(OPEN_ERROR_KEY, message); } catch (error) { /* ignored */ }
+  }
+
+  function consumeOpenError() {
+    try {
+      const message = sessionStorage.getItem(OPEN_ERROR_KEY);
+      sessionStorage.removeItem(OPEN_ERROR_KEY);
+      return message;
+    } catch (error) { return null; }
+  }
+
   async function pickNewFolder() {
     // Opening a folder is always a deliberate, gesture-driven act: force the
     // picker even if a handle from a previous session exists.
@@ -382,16 +387,15 @@ const Storage = (() => {
     setMode,
     setSessionMode,
     supportsDirectory: () => !!window.showDirectoryPicker,
-    currentKind: () => (adapter ? adapter.kind : null),
     pickNewFolder,
-    idbGet,
-    idbSet,
-    idbDel,
+    timestamp,
     download,
     openFileDialog,
     normalizeFileName,
     setPendingOpen,
     consumePendingOpen,
+    setOpenError,
+    consumeOpenError,
     LAST_FILE_KEY
   };
 })();

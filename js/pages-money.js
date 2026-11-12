@@ -1,29 +1,42 @@
+// Change against the previous year, with its percent: "+CHF 1,200.00 (+4.00%)"
+function yearOverYearText(change, previousTotal, mainCurrency) {
+  const percent = previousTotal !== 0 ? (change / previousTotal) * 100 : null;
+  return signedCurrency(change, mainCurrency) + (percent != null ? ' (' + signedPercent(percent, 2) + ')' : '');
+}
+
+// Fills a year <select> with the given years plus the current one, newest first,
+// keeping the selection; returns the selected year
+function fillYearSelect(select, years) {
+  const previousSelection = select.value;
+  const currentYear = new Date().getFullYear().toString();
+  const options = [...new Set(years.filter(Boolean))].sort().reverse();
+  if (!options.includes(currentYear)) options.unshift(currentYear);
+  select.innerHTML = options.map(year => `<option value="${escapeHtml(year)}">${escapeHtml(year)}</option>`).join('');
+  select.value = previousSelection && options.includes(previousSelection) ? previousSelection : currentYear;
+  return select.value;
+}
+
 Object.assign(Pages, {
   // ==================== CUSTODIANS ====================
 
   async custodians() {
     const custodians = await DB.getAll('custodians');
     const list = document.getElementById('custodian-list');
-    const empty = document.getElementById('custodian-empty');
+    const emptyMessage = document.getElementById('custodian-empty');
     list.innerHTML = '';
+    emptyMessage.style.display = custodians.length === 0 ? 'block' : 'none';
 
-    if (custodians.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
-
-    custodians.forEach(c => {
-      const col = document.createElement('div');
-      col.className = 'col-md-4 col-sm-6 mb-3';
-      col.innerHTML = `<div class="cus-card">
-        <div class="cus-name">${escapeHtml(c.name)}</div>
-        <div class="cus-notes">${escapeHtml(c.notes || '')}</div>
+    custodians.forEach(custodian => {
+      const column = document.createElement('div');
+      column.className = 'col-md-4 col-sm-6 mb-3';
+      column.innerHTML = `<div class="cus-card">
+        <div class="cus-name">${escapeHtml(custodian.name)}</div>
+        <div class="cus-notes">${escapeHtml(custodian.notes || '')}</div>
         <div class="cus-actions">
-          <button class="btn btn-gta btn-sm me-2" onclick="App.showModal('custodian', ${c.id})">EDIT</button>
+          <button class="btn btn-gta btn-sm me-2" onclick="App.showModal('custodian', ${Number(custodian.id)})">EDIT</button>
         </div>
       </div>`;
-      list.appendChild(col);
+      list.appendChild(column);
     });
   },
 
@@ -34,80 +47,55 @@ Object.assign(Pages, {
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
     const rateEntries = await DB.getAll('exchangeRates');
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-    const yearEl = document.getElementById('income-year-select');
-    if (!yearEl) return;
+    const inMain = (income) => (income.amount || 0) * currencyRateTo(rateEntries, income.currency || 'CHF', mainCurrency, income.date || ((income.month || '') + '-01'));
+    const yearSelect = document.getElementById('income-year-select');
+    if (!yearSelect) return;
 
-    // populate year dropdown (preserve selection)
-    const prevYear = yearEl.value;
-    const years = [...new Set(allIncomes.map(inc => (inc.month || '').substring(0, 4)).filter(Boolean))].sort().reverse();
-    const currentYear = new Date().getFullYear().toString();
-    if (!years.includes(currentYear)) years.unshift(currentYear);
-    yearEl.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
-    yearEl.value = prevYear && years.includes(prevYear) ? prevYear : currentYear;
-    const selectedYear = yearEl.value;
-
-    const filtered = allIncomes.filter(inc => (inc.month || '').startsWith(selectedYear));
-    const total = filtered.reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
-    const monthsWithIncome = new Set(filtered.map(inc => inc.month).filter(Boolean)).size;
-
+    const selectedYear = fillYearSelect(yearSelect, allIncomes.map(income => (income.month || '').substring(0, 4)));
+    const yearIncomes = allIncomes.filter(income => (income.month || '').startsWith(selectedYear));
+    const total = yearIncomes.reduce((sum, income) => sum + inMain(income), 0);
+    const monthsWithIncome = new Set(yearIncomes.map(income => income.month).filter(Boolean)).size;
     document.getElementById('income-total').textContent = formatCurrency(total, mainCurrency);
-    document.getElementById('income-avg-monthly').textContent =
-      formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0, mainCurrency);
+    document.getElementById('income-avg-monthly').textContent = formatCurrency(monthsWithIncome > 0 ? total / monthsWithIncome : 0, mainCurrency);
 
-    const prevYearStr = String(Number(selectedYear) - 1);
-
-    // The current year is not finished: compare only months elapsed so far in both years.
+    // The current year is not finished: compare only the months elapsed so far in both years
     const today = new Date();
-    const curYear = today.getFullYear().toString();
-    const curMonth = String(today.getMonth() + 1).padStart(2, '0');
-    const cutoff = selectedYear === curYear ? selectedYear + '-' + curMonth : null;
-
-    const inCutoff = (inc, yearStr) => {
-      const m = (inc.month || '');
-      return m.startsWith(yearStr) && (!cutoff || m.substring(0, 7) <= cutoff);
-    };
-    const prevCutoff = cutoff ? prevYearStr + '-' + curMonth : null;
-    const inPrevCutoff = (inc, yearStr) => {
-      const m = (inc.month || '');
-      return m.startsWith(yearStr) && (!prevCutoff || m.substring(0, 7) <= prevCutoff);
-    };
-
-    const prevFiltered = allIncomes.filter(inc => inPrevCutoff(inc, prevYearStr));
-    const prevTotal = prevFiltered.reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
-    const changeTotal = allIncomes.filter(inc => inCutoff(inc, selectedYear)).reduce((sum, inc) => sum + (inc.amount || 0) * rateFor(inc.currency || 'CHF', inc.date || ((inc.month || '') + '-01')), 0);
-    const changeEl = document.getElementById('income-change');
-    if (prevFiltered.length === 0) {
-      changeEl.textContent = '-';
+    const currentMonth = String(today.getMonth() + 1).padStart(2, '0');
+    const isCurrentYear = selectedYear === today.getFullYear().toString();
+    const incomesOfYear = (year) => allIncomes.filter(income => {
+      const month = income.month || '';
+      return month.startsWith(year) && (!isCurrentYear || month.substring(0, 7) <= year + '-' + currentMonth);
+    });
+    const previousIncomes = incomesOfYear(String(Number(selectedYear) - 1));
+    const changeElement = document.getElementById('income-change');
+    if (previousIncomes.length === 0) {
+      changeElement.textContent = '-';
     } else {
-      const change = changeTotal - prevTotal;
-      const pct = prevTotal !== 0 ? (change / prevTotal) * 100 : null;
-      changeEl.textContent = (change >= 0 ? '+' : '') + formatCurrency(change, mainCurrency) + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : '');
+      const previousTotal = previousIncomes.reduce((sum, income) => sum + inMain(income), 0);
+      const comparableTotal = incomesOfYear(selectedYear).reduce((sum, income) => sum + inMain(income), 0);
+      changeElement.textContent = yearOverYearText(comparableTotal - previousTotal, previousTotal, mainCurrency);
     }
 
     const tbody = document.getElementById('income-list-body');
-    const empty = document.getElementById('income-empty');
+    const emptyMessage = document.getElementById('income-empty');
     tbody.innerHTML = '';
+    emptyMessage.style.display = yearIncomes.length === 0 ? 'block' : 'none';
 
-    if (filtered.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
-
-    const sorted = filtered.sort((a, b) => new Date(a.date || a.id) - new Date(b.date || b.id));
-    sorted.forEach(inc => {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(inc.source)}</td>
-        <td>${formatCurrency(inc.amount, inc.currency)}</td>
-        <td>${formatDate(inc.date)}</td>
-        <td>${escapeHtml(inc.notes || '')}</td>
-        <td>
-          <a class="tx-link me-2" onclick="App.showModal('income', ${inc.id})">EDIT</a>
-          <a class="tx-link" onclick="App.deleteIncome(${inc.id})">DELETE</a>
-        </td>`;
-      tbody.appendChild(tr);
-    });
+    yearIncomes
+      .sort((first, second) => (first.date || '').localeCompare(second.date || '') || first.id - second.id)
+      .forEach(income => {
+        const incomeId = Number(income.id);
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${escapeHtml(income.source)}</td>
+          <td>${formatCurrency(income.amount, income.currency)}</td>
+          <td>${formatDate(income.date)}</td>
+          <td>${escapeHtml(income.notes || '')}</td>
+          <td>
+            <a class="tx-link me-2" onclick="App.showModal('income', ${incomeId})">EDIT</a>
+            <a class="tx-link" onclick="App.deleteIncome(${incomeId})">DELETE</a>
+          </td>`;
+        tbody.appendChild(row);
+      });
   },
 
   // ==================== EXPENSES ====================
@@ -117,97 +105,74 @@ Object.assign(Pages, {
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
     const rateEntries = await DB.getAll('exchangeRates');
-    const rateFor = (currency, date) => _rateFromEntries(rateEntries, currency, mainCurrency, date);
-    const yearEl = document.getElementById('expense-year-select');
-    if (!yearEl) return;
+    const rateOf = (expense) => currencyRateTo(rateEntries, expense.currency || 'CHF', mainCurrency, expense.date || ((expense.year || '') + '-01-01'));
+    // Cost of an expense over a year, in its own currency: monthly ones count twelve times
+    const annualCost = (expense) => (expense.amount || 0) * (expense.type === 'monthly' ? 12 : 1);
+    const yearSelect = document.getElementById('expense-year-select');
+    if (!yearSelect) return;
 
-    const prevYear = yearEl.value;
-    const years = [...new Set(allExpenses.map(exp => exp.year).filter(Boolean))].sort().reverse();
-    const currentYear = new Date().getFullYear().toString();
-    if (!years.includes(currentYear)) years.unshift(currentYear);
-    yearEl.innerHTML = years.map(y => `<option value="${y}">${y}</option>`).join('');
-    yearEl.value = prevYear && years.includes(prevYear) ? prevYear : currentYear;
-    const selectedYear = yearEl.value;
-
-    const filtered = allExpenses.filter(exp => exp.year === selectedYear);
+    const selectedYear = fillYearSelect(yearSelect, allExpenses.map(expense => expense.year));
+    const yearExpenses = allExpenses.filter(expense => expense.year === selectedYear);
     let totalAnnual = 0;
     let totalMonthly = 0;
-    filtered.forEach(exp => {
-      const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'));
-      if (exp.type === 'monthly') {
-        totalAnnual += v * 12;
-        totalMonthly += v;
+    yearExpenses.forEach(expense => {
+      const amount = (expense.amount || 0) * rateOf(expense);
+      if (expense.type === 'monthly') {
+        totalAnnual += amount * 12;
+        totalMonthly += amount;
       } else {
-        totalAnnual += v;
-        // Yearly expense without a payment month is spread across 12 months
-        if (!exp.paymentMonth) totalMonthly += v / 12;
+        totalAnnual += amount;
+        // A yearly expense without a payment month is spread across the 12 months
+        if (!expense.paymentMonth) totalMonthly += amount / 12;
       }
     });
-
     document.getElementById('expense-total').textContent = formatCurrency(totalAnnual, mainCurrency);
     document.getElementById('expense-total-monthly').textContent = formatCurrency(totalMonthly, mainCurrency);
 
-    const prevYearStr = String(Number(selectedYear) - 1);
-    const prevFiltered = allExpenses.filter(exp => exp.year === prevYearStr);
-    let prevTotalAnnual = 0;
-    prevFiltered.forEach(exp => {
-      const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'));
-      if (exp.type === 'monthly') prevTotalAnnual += v * 12;
-      else prevTotalAnnual += v;
-    });
-    const changeEl = document.getElementById('expense-change');
-    if (prevFiltered.length === 0) {
-      changeEl.textContent = '-';
+    const previousExpenses = allExpenses.filter(expense => expense.year === String(Number(selectedYear) - 1));
+    const changeElement = document.getElementById('expense-change');
+    if (previousExpenses.length === 0) {
+      changeElement.textContent = '-';
     } else {
-      const change = totalAnnual - prevTotalAnnual;
-      const pct = prevTotalAnnual !== 0 ? (change / prevTotalAnnual) * 100 : null;
-      changeEl.textContent = (change >= 0 ? '+' : '') + formatCurrency(change, mainCurrency) + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)' : '');
+      const previousTotal = previousExpenses.reduce((sum, expense) => {
+        const amount = (expense.amount || 0) * rateOf(expense);
+        return sum + (expense.type === 'monthly' ? amount * 12 : amount);
+      }, 0);
+      changeElement.textContent = yearOverYearText(totalAnnual - previousTotal, previousTotal, mainCurrency);
     }
 
     const tbody = document.getElementById('expense-list-body');
-    const empty = document.getElementById('expense-empty');
-    tbody.innerHTML = '';
-
+    const emptyMessage = document.getElementById('expense-empty');
     const chartWrap = document.getElementById('expense-chart-wrap');
     const chartEmpty = document.getElementById('expense-chart-empty');
-    const chartKey = 'expenseWeight';
-    if (App._charts[chartKey]) { try { App._charts[chartKey].destroy(); } catch (e) {} delete App._charts[chartKey]; }
+    tbody.innerHTML = '';
+    if (App._charts.expenseWeight) { try { App._charts.expenseWeight.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.expenseWeight; }
 
-    if (filtered.length === 0) {
-      empty.style.display = 'block';
-      if (chartWrap) chartWrap.style.display = 'none';
-      if (chartEmpty) chartEmpty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
-    if (chartWrap) chartWrap.style.display = '';
-    if (chartEmpty) chartEmpty.style.display = 'none';
+    const hasExpenses = yearExpenses.length > 0;
+    emptyMessage.style.display = hasExpenses ? 'none' : 'block';
+    if (chartWrap) chartWrap.style.display = hasExpenses ? '' : 'none';
+    if (chartEmpty) chartEmpty.style.display = hasExpenses ? 'none' : 'block';
+    if (!hasExpenses) return;
 
-    const chartItems = filtered
-      .map(exp => {
-        const base = (exp.amount || 0) * (exp.type === 'monthly' ? 12 : 1);
-        return {
-          label: exp.text,
-          annual: base * rateFor(exp.currency || 'CHF', exp.date || ((exp.year || '') + '-01-01'))
-        };
-      })
-      .sort((a, b) => b.annual - a.annual);
-
+    // Horizontal bars of each expense's annual cost, biggest first
+    const chartItems = yearExpenses
+      .map(expense => ({ label: expense.text, annual: annualCost(expense) * rateOf(expense) }))
+      .sort((first, second) => second.annual - first.annual);
     const chartCanvas = document.getElementById('chart-expense-weight');
-    if (chartCanvas && chartItems.length > 0) {
+    if (chartCanvas) {
       if (chartWrap) chartWrap.style.height = Math.max(220, chartItems.length * 34) + 'px';
-      const palette = [readAccent(), '#33ccff', '#ffaa00', '#ff6633', '#cc33ff', '#33ffcc', '#ff3388'];
-      App._charts[chartKey] = new Chart(chartCanvas.getContext('2d'), {
+      const palette = chartPalette();
+      App._charts.expenseWeight = new Chart(chartCanvas.getContext('2d'), {
         type: 'bar',
         data: {
-          labels: chartItems.map(i => i.label),
+          labels: chartItems.map(item => item.label),
           datasets: [{
             label: 'ANNUAL COST',
-            data: chartItems.map(i => i.annual),
-            backgroundColor: chartItems.map((_, idx) => palette[idx % palette.length]),
+            data: chartItems.map(item => item.annual),
+            backgroundColor: chartItems.map((item, index) => palette[index % palette.length]),
             borderColor: '#161616',
-            borderWidth: 1
-          }]
+            borderWidth: 1,
+          }],
         },
         options: {
           indexAxis: 'y',
@@ -215,80 +180,67 @@ Object.assign(Pages, {
           maintainAspectRatio: false,
           plugins: {
             legend: { display: false },
-            tooltip: { callbacks: { label: ctx => formatCurrency(ctx.parsed.x, mainCurrency) } }
+            tooltip: { callbacks: { label: item => formatCurrency(item.parsed.x, mainCurrency) } },
           },
           scales: {
-            x: {
-              ticks: { color: '#888', font: { size: 13, family: "'Share Tech Mono', monospace" }, callback: v => formatCurrency(v, mainCurrency) },
-              grid: { color: '#222' }
-            },
-            y: {
-              ticks: { color: '#888', font: { size: 13, family: "'Share Tech Mono', monospace" } },
-              grid: { display: false }
-            }
-          }
-        }
+            x: { ticks: { color: '#888', font: { size: 13, family: CHART_FONT }, callback: value => formatCurrency(value, mainCurrency) }, grid: { color: '#222' } },
+            y: { ticks: { color: '#888', font: { size: 13, family: CHART_FONT } }, grid: { display: false } },
+          },
+        },
       });
     }
 
-    const monthNames = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
-    filtered.sort((a, b) => (b.amount || 0) - (a.amount || 0)).forEach(exp => {
-      const annualCost = exp.type === 'monthly' ? (exp.amount || 0) * 12 : (exp.amount || 0);
-      const paymentLabel = exp.type === 'yearly' && exp.paymentMonth ? monthNames[Number(exp.paymentMonth) - 1] : '-';
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(exp.text)}</td>
-        <td><span class="tx-badge ${exp.type === 'monthly' ? 'deposit' : 'valuation'}">${exp.type.toUpperCase()}</span></td>
-        <td>${paymentLabel}</td>
-        <td>${formatCurrency(exp.amount, exp.currency)}</td>
-        <td>${formatCurrency(annualCost, exp.currency)}</td>
-        <td>${escapeHtml(exp.notes || '')}</td>
-        <td>
-          <a class="tx-link me-2" onclick="App.showModal('expense', ${exp.id})">EDIT</a>
-          <a class="tx-link" onclick="App.deleteExpense(${exp.id})">DELETE</a>
-        </td>`;
-      tbody.appendChild(tr);
-    });
-
-
+    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    yearExpenses
+      .sort((first, second) => (second.amount || 0) - (first.amount || 0))
+      .forEach(expense => {
+        const expenseId = Number(expense.id);
+        const paymentLabel = expense.type === 'yearly' && expense.paymentMonth ? monthNames[Number(expense.paymentMonth) - 1] : '-';
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${escapeHtml(expense.text)}</td>
+          <td><span class="tx-badge ${expense.type === 'monthly' ? 'deposit' : 'valuation'}">${escapeHtml(String(expense.type || '').toUpperCase())}</span></td>
+          <td>${escapeHtml(paymentLabel || '-')}</td>
+          <td>${formatCurrency(expense.amount, expense.currency)}</td>
+          <td>${formatCurrency(annualCost(expense), expense.currency)}</td>
+          <td>${escapeHtml(expense.notes || '')}</td>
+          <td>
+            <a class="tx-link me-2" onclick="App.showModal('expense', ${expenseId})">EDIT</a>
+            <a class="tx-link" onclick="App.deleteExpense(${expenseId})">DELETE</a>
+          </td>`;
+        tbody.appendChild(row);
+      });
   },
+
+  // ==================== DEBTS ====================
 
   async debts() {
     const allDebts = await DB.getAll('debts');
     const settings = await DB.getSettings();
     const mainCurrency = settings.mainCurrency || 'CHF';
-    const debtsIn = allDebts.filter(d => d.direction === 'in');
-    const debtsOut = allDebts.filter(d => d.direction !== 'in');
-
-    const totalIn = debtsIn.reduce((sum, d) => sum + (d.amount || 0), 0);
-    const totalOut = debtsOut.reduce((sum, d) => sum + (d.amount || 0), 0);
-
-    document.getElementById('debt-owe').textContent = formatCurrency(totalOut, mainCurrency);
-    document.getElementById('debt-in').textContent = formatCurrency(totalIn, mainCurrency);
+    const totalOf = (debts) => debts.reduce((sum, debt) => sum + (debt.amount || 0), 0);
+    document.getElementById('debt-owe').textContent = formatCurrency(totalOf(allDebts.filter(debt => debt.direction !== 'in')), mainCurrency);
+    document.getElementById('debt-in').textContent = formatCurrency(totalOf(allDebts.filter(debt => debt.direction === 'in')), mainCurrency);
 
     const tbody = document.getElementById('debt-list-body');
-    const empty = document.getElementById('debt-empty');
+    const emptyMessage = document.getElementById('debt-empty');
     tbody.innerHTML = '';
-
-    if (allDebts.length === 0) {
-      empty.style.display = 'block';
-      return;
-    }
-    empty.style.display = 'none';
+    emptyMessage.style.display = allDebts.length === 0 ? 'block' : 'none';
 
     allDebts.forEach(debt => {
-      const isIn = debt.direction === 'in';
-      const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${escapeHtml(debt.description)}</td>
+      const isOwedToMe = debt.direction === 'in';
+      const debtId = Number(debt.id);
+      const row = document.createElement('tr');
+      row.innerHTML = `<td>${escapeHtml(debt.description)}</td>
         <td>${escapeHtml(debt.person || '-')}</td>
-        <td><span class="tx-badge ${isIn ? 'deposit' : 'withdrawal'}">${isIn ? 'OWED TO ME' : 'I OWE'}</span></td>
+        <td><span class="tx-badge ${isOwedToMe ? 'deposit' : 'withdrawal'}">${isOwedToMe ? 'OWED TO ME' : 'I OWE'}</span></td>
         <td>${formatCurrency(debt.amount, mainCurrency)}</td>
         <td>${debt.date ? formatDate(debt.date) : '-'}</td>
         <td>${escapeHtml(debt.notes || '')}</td>
         <td>
-          <a class="tx-link me-2" onclick="App.showModal('debt', ${debt.id})">EDIT</a>
-          <a class="tx-link" onclick="App.deleteDebt(${debt.id})">DELETE</a>
+          <a class="tx-link me-2" onclick="App.showModal('debt', ${debtId})">EDIT</a>
+          <a class="tx-link" onclick="App.deleteDebt(${debtId})">DELETE</a>
         </td>`;
-      tbody.appendChild(tr);
+      tbody.appendChild(row);
     });
   },
 });

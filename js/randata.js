@@ -69,7 +69,6 @@ const Randata = (() => {
   let adapter = null;
   let cache = {};
   let metaCache = null;
-  let syncing = false;
   let lastResult = null;
   let syncInFlight = null;
   let legacyRemoved = false;
@@ -412,22 +411,18 @@ const Randata = (() => {
         try { await a.remove('randata.json'); } catch (e) { /* non-fatal */ }
       }
 
-      const allCurrent = classKeys.every((cls) => syncedOn(cls) === today);
-      const anyCurrent = classKeys.some((cls) => syncedOn(cls) === today);
-      const status = allCurrent ? 'synced' : (anyCurrent ? 'synced' : 'offline');
-      lastResult = summary(status, today);
+      // Synced when at least one class is current for today, offline otherwise.
+      const anyClassCurrent = classKeys.some((cls) => syncedOn(cls) === today);
+      lastResult = summary(anyClassCurrent ? 'synced' : 'offline', today);
       return lastResult;
     } catch (e) {
       lastResult = { status: 'offline', error: e.message || String(e) };
       return lastResult;
-    } finally {
-      syncing = false;
     }
   }
 
   async function sync() {
     if (syncInFlight) return syncInFlight;
-    syncing = true;
     syncInFlight = doSync().finally(() => { syncInFlight = null; });
     return syncInFlight;
   }
@@ -460,7 +455,6 @@ const Randata = (() => {
     sync,
     readFile,
     readClass,
-    isSyncing: () => syncing,
     getLastResult: () => lastResult
   };
 })();
