@@ -139,6 +139,8 @@ Object.assign(Pages, {
         totalMonthly += v;
       } else {
         totalAnnual += v;
+        // Yearly expense without a payment month is spread across 12 months
+        if (!exp.paymentMonth) totalMonthly += v / 12;
       }
     });
 

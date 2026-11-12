@@ -327,7 +327,7 @@ const App = {
     function toggleAccountTypeFields() {
       const t = typeField.value;
       pmFields.style.display = t === "Precious Metal" ? "block" : "none";
-      if (startingFields) startingFields.style.display = editId || t === "Tangible Asset" ? "none" : "block";
+      if (startingFields) startingFields.style.display = editId || t === "Tangible Asset" || t === "Real Estate" ? "none" : "block";
     }
     typeField.onchange = toggleAccountTypeFields;
 
@@ -618,14 +618,17 @@ const App = {
         document.getElementById("asset-name").value = asset.name || "";
         document.getElementById("asset-value").value = asset.purchaseValue != null ? asset.purchaseValue : "";
         document.getElementById("asset-depreciation").value = asset.depreciationPct != null ? asset.depreciationPct : "";
-        document.getElementById("asset-date").value = asset.purchaseDate || todayStr();
+        document.getElementById("asset-ownership").value = asset.ownershipPct != null ? asset.ownershipPct : 100;
+        document.getElementById("asset-debt").value = asset.debt != null ? asset.debt : "";
+         document.getElementById("asset-date").value = asset.purchaseDate || todayStr();
         curField.value = asset.currency || (account && account.currency) || mainCurrency;
       }
     } else {
       document.getElementById("asset-name").value = "";
       document.getElementById("asset-value").value = "";
       document.getElementById("asset-depreciation").value = "";
-      document.getElementById("asset-date").value = todayStr();
+      document.getElementById("asset-debt").value = "";
+       document.getElementById("asset-date").value = todayStr();
       curField.value = (account && account.currency) || mainCurrency;
     }
     this._modals.asset.show();
@@ -636,7 +639,9 @@ const App = {
     const accountId = parseInt(document.getElementById("asset-account-id").value);
     const name = document.getElementById("asset-name").value.trim();
     const purchaseValue = parseFloat(document.getElementById("asset-value").value);
-    const depreciationPct = parseFloat(document.getElementById("asset-depreciation").value) || 0;
+const debt = parseFloat(document.getElementById("asset-debt").value) || 0;    const depreciationPct = parseFloat(document.getElementById("asset-depreciation").value) || 0;
+  const ownershipPct = parseFloat(document.getElementById("asset-ownership").value);
+  const ownershipFinal = isNaN(ownershipPct) ? 100 : ownershipPct;
     const purchaseDate = document.getElementById("asset-date").value || todayStr();
     const currency = document.getElementById("asset-currency").value || "CHF";
 
@@ -662,8 +667,11 @@ const App = {
       asset.name = name;
       asset.purchaseValue = purchaseValue;
       asset.depreciationPct = depreciationPct;
+      asset.ownershipPct = ownershipFinal;
       asset.purchaseDate = purchaseDate;
       asset.currency = currency;
+      asset.debt = debt;
+      if (account && account.accountType) asset.accountType = account.accountType;
       await DB.put("assets", asset);
 
       const account = await DB.getById("accounts", accountId);
@@ -697,7 +705,7 @@ const App = {
       return;
     }
 
-    const asset = { accountId, name, purchaseValue, depreciationPct, purchaseDate, currency, sold: false, saleValue: null, saleDate: null };
+    const asset = { accountId, name, purchaseValue, debt, depreciationPct, ownershipPct: ownershipFinal, purchaseDate, currency, accountType: account && account.accountType ? account.accountType : null, sold: false, saleValue: null, saleDate: null };
     const newId = await DB.add("assets", asset);
 
     const account = await DB.getById("accounts", accountId);
@@ -800,7 +808,7 @@ const App = {
     await DB.del("assets", id);
 
     const account = await DB.getById("accounts", asset.accountId);
-    if (account && account.accountType === "Tangible Asset") {
+    if (account && account.accountType === "Tangible Asset" || account.accountType === "Real Estate") {
       const accountAssets = await DB.getByIndex("assets", "accountId", asset.accountId);
       const rateEntries = await DB.getAll("exchangeRates");
       const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || "CHF", account.currency || "CHF", date);
@@ -1091,8 +1099,8 @@ const App = {
 
     const isNew = !id;
     const accountType = document.getElementById("account-type").value;
-    const startingValue = isNew && accountType !== "Tangible Asset" ? parseFloat(document.getElementById("account-starting-value").value) || 0 : 0;
-    const startingContrib = isNew && accountType !== "Tangible Asset" ? parseFloat(document.getElementById("account-starting-contrib").value) || 0 : 0;
+    const startingValue = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate" ? parseFloat(document.getElementById("account-starting-value").value) || 0 : 0;
+    const startingContrib = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate" ? parseFloat(document.getElementById("account-starting-contrib").value) || 0 : 0;
     const startingDate = isNew ? document.getElementById("account-starting-date").value || todayStr() : todayStr();
 
     let existingValue = 0;
@@ -1704,7 +1712,7 @@ const App = {
     const account = await DB.getById("accounts", accountId);
     if (!account) return;
     const type = account.accountType;
-    if (type === "Tangible Asset" || type === "Precious Metal") return; // computed from assets/quantity
+    if (type === "Tangible Asset" || type === "Real Estate" || type === "Precious Metal") return; // computed from assets/quantity
     const flowTypes = ["deposit", "withdrawal", "valuation", "buy", "sell"];
     const txs = (await DB.getByIndex("transactions", "accountId", accountId)).filter((t) => flowTypes.includes(t.type)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
     if (txs.length === 0) return;

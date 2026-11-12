@@ -139,10 +139,26 @@ function assetYearsElapsed(asset, date) {
 // Straight-line depreciation: current = purchase × max(0, 1 − (pct/100) × years)
 function assetCurrentValue(asset, date) {
   if (!asset || asset.sold) return 0;
+  if (asset.purchaseDate && date && (date + '') < (asset.purchaseDate + '')) return 0;
   const purchaseValue = parseFloat(asset.purchaseValue) || 0;
+  const ownership = (parseFloat(asset.ownershipPct) || 100) / 100;
+  // Real Estate is valued manually; fall back to purchase value until a valuation exists
+  if (asset.accountType === 'Real Estate' || asset.assetType === 'Real Estate') {
+    let base = purchaseValue;
+    if (Array.isArray(asset.valuations) && asset.valuations.length) {
+      const sorted = asset.valuations.filter(v => v.date && v.date <= (date || '')).sort((a,b)=>a.date.localeCompare(b.date));
+      const last = sorted.length ? sorted[sorted.length-1] : asset.valuations.slice().sort((a,b)=>a.date.localeCompare(b.date))[0];
+      if (last && last.value != null) base = parseFloat(last.value) || 0;
+    }
+    const pct = parseFloat(asset.depreciationPct) || 0;
+    const years = assetYearsElapsed(asset, date);
+    base = base * Math.max(0, 1 - (pct / 100) * years);
+    const debt = parseFloat(asset.debt) || 0;
+    return (base - debt) * ownership;
+  }
   const pct = parseFloat(asset.depreciationPct) || 0;
   const years = assetYearsElapsed(asset, date);
-  return purchaseValue * Math.max(0, 1 - (pct / 100) * years);
+  return purchaseValue * Math.max(0, 1 - (pct / 100) * years) * ownership;
 }
 
 function assetCostValue(asset) {
@@ -169,7 +185,14 @@ function assetAccountMetrics(assets, date, rateFor) {
     }
     count++;
     value += assetCurrentValue(a, date) * r;
-    cost += assetCostValue(a) * r;
+    const isRe = a.accountType === 'Real Estate' || a.assetType === 'Real Estate';
+    if (isRe) {
+      const ownership = (parseFloat(a.ownershipPct) || 100) / 100;
+      const debt = parseFloat(a.debt) || 0;
+      cost += ((parseFloat(a.purchaseValue) || 0) - debt) * ownership * r;
+    } else {
+      cost += assetCostValue(a) * r;
+    }
   });
   return { value, cost, count, soldCount, realized, pl: value - cost };
 }

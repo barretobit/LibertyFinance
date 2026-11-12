@@ -1,3 +1,6 @@
+v1.21 — 11 Nov 2026
+- Dashboard Savings Rate Trend chart now lets you deselect individual months; statistics exclude deselected months
+
 v1.20 — 11 Sep 2026
 - New WALL STREET market overview page (Indexes, ETFs, Stocks, Cryptos, Metals)
 - Randata API sync with per-class cache in the Resources/ folder, served offline afterwards

@@ -44,7 +44,7 @@ Object.assign(Pages, {
       let latest = accTxs[a.id];
       let v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
       let vDate = latest ? latest.date : todayStr();
-      if (a.accountType === 'Tangible Asset') {
+      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
         const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
         v = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
         vDate = todayStr();
@@ -68,7 +68,7 @@ Object.assign(Pages, {
       const latest = accTxs[a.id];
       const v = latest ? (latest.balanceAfter || 0) : (a.currentValue || 0);
       if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-        if (a.accountType === 'Tangible Asset') {
+        if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
           const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
           liqTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
         } else if (a.accountType === 'Precious Metal') {
@@ -81,7 +81,7 @@ Object.assign(Pages, {
     document.getElementById('dash-liquid-value').textContent = formatCurrency(liqTotal, mainCurrency);
 
     // Build perf-tracked month groups for performance card & chart
-    const perfAccountIds = new Set(accounts.filter(a => a.trackPerformance !== false).map(a => a.id));
+    const perfAccountIds = new Set(accounts.filter(a => a.trackPerformance !== false && a.accountType !== 'Tangible Asset' && a.accountType !== 'Real Estate').map(a => a.id));
     const perfMonthGroups = {};
     const _perfBal = {};
     perfAccountIds.forEach(id => _perfBal[id] = 0);
@@ -210,7 +210,7 @@ Object.assign(Pages, {
         if (!prev || (t.date || '') > (prev.date || '')) lastByAccount[t.accountId] = t;
       });
       const accountValueAt = (a) => {
-        if (a.accountType === 'Tangible Asset') {
+        if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
           const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
           return { value: assetAccountMetrics(accountAssets[a.id], end, rateToAcc).value, date: end };
         }
@@ -250,8 +250,12 @@ Object.assign(Pages, {
         .filter(exp => exp.type === 'monthly')
         .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
       const yearlyForMonth = yearExpenses
-        .filter(exp => exp.type === 'yearly' && (!exp.paymentMonth || Number(exp.paymentMonth) === mNum))
-        .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
+        .filter(exp => exp.type === 'yearly')
+        .reduce((sum, exp) => {
+          const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
+          if (exp.paymentMonth) return Number(exp.paymentMonth) === mNum ? sum + v : sum;
+          return sum + v / 12;
+        }, 0);
       const totalExpenses = monthlyTot + yearlyForMonth;
 
       const expected = monthIncome - totalExpenses;
@@ -392,7 +396,7 @@ Object.assign(Pages, {
       let liquidCurrentTotal = 0;
       accounts.forEach(a => {
         if (a.includeInLiquidNetWorth !== false && a.portfolioId != 3) {
-          if (a.accountType === 'Tangible Asset') {
+          if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
             const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
             liquidCurrentTotal += assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value * rateFor(accCurrency[a.id], todayStr());
           } else {
@@ -817,7 +821,7 @@ Object.assign(Pages, {
         });
 
         const accountValueAt = (a) => {
-          if (a.accountType === 'Tangible Asset') {
+          if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
             const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
             return { value: assetAccountMetrics(accountAssets[a.id], eoyDate, rateToAcc).value, date: eoyDate };
           }
@@ -855,7 +859,8 @@ Object.assign(Pages, {
         allExpenses.filter(exp => exp.year === year).forEach(exp => {
           const v = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
           if (exp.type === 'monthly') tot += v * monthsCount;
-          else if (!exp.paymentMonth || Number(exp.paymentMonth) <= monthsCount) tot += v;
+          else if (!exp.paymentMonth) tot += v * (monthsCount / 12);
+          else if (Number(exp.paymentMonth) <= monthsCount) tot += v;
         });
         return tot;
       };
@@ -1306,6 +1311,7 @@ Object.assign(Pages, {
       }
 
       const allMonthData = [];
+      const excludedMonths = (App._srExcludedMonths = App._srExcludedMonths || new Set());
       srMonths.forEach(monthKey => {
         const year = monthKey.substring(0, 4);
         const mNum = parseInt(monthKey.substring(5, 7));
@@ -1317,8 +1323,13 @@ Object.assign(Pages, {
           .filter(exp => exp.type === 'monthly')
           .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
         const yearlyForMonth = yearExpenses
-          .filter(exp => exp.type === 'yearly' && (!exp.paymentMonth || Number(exp.paymentMonth) === mNum))
-          .reduce((sum, exp) => sum + (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01')), 0);
+          .filter(exp => exp.type === 'yearly')
+          .reduce((sum, exp) => {
+            if (exp.paymentMonth && Number(exp.paymentMonth) !== mNum) return sum;
+            const amt = (exp.amount || 0) * rateFor(exp.currency || 'CHF', exp.date || (year + '-01-01'));
+            // A yearly expense without a specific payment month is spread evenly across all 12 months
+            return sum + (exp.paymentMonth ? amt : amt / 12);
+          }, 0);
         const totalExpenses = monthlyTot + yearlyForMonth;
         const net = monthIncome - totalExpenses;
         const rate = monthIncome > 0 ? (net / monthIncome) * 100 : null;
@@ -1353,7 +1364,7 @@ Object.assign(Pages, {
         const range = activeBtn ? activeBtn.dataset.range : '1y';
 
         // Filter by range
-        let filtered = allMonthData;
+        let rangeFiltered = allMonthData;
         if (allMonthData.length > 0) {
           const latest = allMonthData[allMonthData.length - 1].key;
           const latestDate = new Date(latest + '-01');
@@ -1369,19 +1380,51 @@ Object.assign(Pages, {
           }
           if (cutoff) {
             const cutoffKey = cutoff.getFullYear() + '-' + String(cutoff.getMonth() + 1).padStart(2, '0');
-            filtered = allMonthData.filter(m => m.key >= cutoffKey);
+            rangeFiltered = allMonthData.filter(m => m.key >= cutoffKey);
           }
         }
 
-        if (filtered.length === 0) {
+        // Apply user-excluded months
+        const filtered = rangeFiltered.filter(m => !excludedMonths.has(m.key));
+
+        // Month include/exclude toggles
+        const togglesElEarly = document.getElementById('sr-month-toggles');
+        if (togglesElEarly) {
+          togglesElEarly.innerHTML = '';
+          rangeFiltered.forEach(m => {
+            const btn = document.createElement('span');
+            btn.className = 'perf-btn' + (excludedMonths.has(m.key) ? '' : ' active');
+            btn.textContent = m.label;
+            btn.title = excludedMonths.has(m.key) ? 'Excluded - click to include' : 'Included - click to exclude';
+            btn.onclick = function() {
+              if (excludedMonths.has(m.key)) excludedMonths.delete(m.key);
+              else excludedMonths.add(m.key);
+              renderSavingsRateTrend();
+            };
+            togglesElEarly.appendChild(btn);
+          });
+        }
+
+        if (rangeFiltered.length === 0) {
           empty.style.display = 'block';
           canvas.style.display = 'none';
           if (statsCard) statsCard.style.display = 'none';
+          const togglesEl = document.getElementById('sr-month-toggles');
+          if (togglesEl) togglesEl.innerHTML = '';
           return;
         }
-        empty.style.display = 'none';
-        canvas.style.display = '';
-        if (statsCard) statsCard.style.display = '';
+        if (filtered.length === 0) {
+          empty.style.display = 'block';
+          empty.textContent = rangeFiltered.length > 0 ? 'NO MONTHS SELECTED.' : 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
+          canvas.style.display = 'none';
+          if (statsCard) statsCard.style.display = 'none';
+          return;
+        } else {
+          empty.textContent = 'NO INCOME DATA FOR THE LAST 12 MONTHS.';
+          empty.style.display = 'none';
+          canvas.style.display = '';
+          if (statsCard) statsCard.style.display = '';
+        }
 
         const monthLabels = filtered.map(m => m.label);
         const netIncomeValues = filtered.map(m => m.netIncome);

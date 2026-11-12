@@ -16,7 +16,7 @@ Object.assign(Pages, {
     document.getElementById('acc-detail-back').href = '#portfolio-detail?id=' + (account.portfolioId || '');
 
     const isPm = account.accountType === 'Precious Metal';
-    const isTa = account.accountType === 'Tangible Asset';
+    const isTa = account.accountType === 'Tangible Asset' || account.accountType === 'Real Estate';
 
     const settings = await DB.getSettings();
     const rateEntries = await DB.getAll('exchangeRates');
@@ -76,10 +76,23 @@ Object.assign(Pages, {
     }
     if (isTa) {
       if (document.getElementById('acc-stat-assets')) {
+        const isRe = account.accountType === 'Real Estate';
+        if (isRe) {
+          const debtTotal = accountAssets.filter(a => !a.sold).reduce((sum, a) => sum + (parseFloat(a.debt) || 0), 0);
+          const totalValue100 = accountAssets.filter(a => !a.sold).reduce((sum, a) => sum + assetCurrentValue(Object.assign({}, a, { ownershipPct: 100, debt: 0 }), todayStr()), 0);
+          if (document.getElementById('acc-stat-value-label')) document.getElementById('acc-stat-value-label').textContent = 'TOTAL VALUE';
+          if (document.getElementById('acc-stat-value')) document.getElementById('acc-stat-value').textContent = formatCurrency(totalValue100, account.currency);
+          if (document.getElementById('acc-stat-pl-label')) document.getElementById('acc-stat-pl-label').textContent = 'SHARE VALUE';
+          if (document.getElementById('acc-stat-cost-label')) document.getElementById('acc-stat-cost-label').textContent = 'DEBT (MORTGAGE)';
+          if (document.getElementById('acc-stat-pl')) { document.getElementById('acc-stat-pl').textContent = formatCurrency(currentVal, account.currency); document.getElementById('acc-stat-pl').style.color = 'var(--accent)'; }
+          if (document.getElementById('acc-stat-cost')) document.getElementById('acc-stat-cost').textContent = formatCurrency(debtTotal, account.currency);
+          const metaEl = document.getElementById('acc-stat-meta');
+          if (metaEl && metaEl.parentElement && metaEl.parentElement.parentElement) metaEl.parentElement.parentElement.style.display = 'none';
+        }
         const held = accountAssets.filter(a => !a.sold).length;
         document.getElementById('acc-stat-assets').textContent = pluralize(held, 'ASSET');
       }
-      this._renderAssetsTable(accountAssets, account.currency);
+      this._renderAssetsTable(accountAssets, account.currency, account.accountType === 'Real Estate');
     }
 
     // Performance period selectors
@@ -89,8 +102,9 @@ Object.assign(Pages, {
 
     function _accPerfSince(cutoffDate) {
       if (isTa) {
-        const vNow = assetAccountMetrics(accountAssets, todayStr(), rateToAcc).value;
-        const vCutoff = assetAccountMetrics(accountAssets, cutoffDate, rateToAcc).value;
+        const _assets = accountAssets;
+        const vNow = assetAccountMetrics(_assets, todayStr(), rateToAcc).value;
+        const vCutoff = assetAccountMetrics(_assets, cutoffDate, rateToAcc).value;
         const abs = vNow - vCutoff;
         const base = vCutoff;
         return { abs, pct: base !== 0 ? (abs / base) * 100 : 0, initial: vCutoff, input: 0 };
@@ -101,9 +115,13 @@ Object.assign(Pages, {
         totalAtCutoff = tx.balanceAfter || 0;
       });
       let netDeposits = 0;
+      let totalDeposits = 0;
       accTxsSorted.forEach(tx => {
         if (tx.date < cutoffDate) return;
-        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) netDeposits += Math.abs(tx.amount);
+        if (tx.type === 'deposit' && !_isOpeningContribution(tx)) {
+          netDeposits += Math.abs(tx.amount);
+          totalDeposits += Math.abs(tx.amount);
+        }
         if (tx.type === 'withdrawal') netDeposits -= Math.abs(tx.amount);
         if (tx.type === 'buy') netDeposits += Math.abs(tx.amount);
         if (tx.type === 'sell') netDeposits -= Math.abs(tx.amount);
@@ -114,7 +132,7 @@ Object.assign(Pages, {
       const abs = currentVal - totalAtCutoff - netDeposits;
       const base = totalAtCutoff + netDeposits;
       const pct = base !== 0 ? (abs / base) * 100 : 0;
-      return { abs, pct, initial: totalAtCutoff, input: netDeposits };
+      return { abs, pct, initial: totalAtCutoff, input: totalDeposits };
     }
 
     const today = todayStr();
@@ -144,7 +162,8 @@ Object.assign(Pages, {
       const pctEl = document.getElementById('acc-perf-pct');
       if (!initialEl || !actualEl || !inputEl || !plEl || !pctEl) return;
       initialEl.textContent = formatCurrency(val.initial, account.currency);
-      actualEl.textContent = formatCurrency(currentVal, account.currency);
+      let _actualVal = currentVal;
+      actualEl.textContent = formatCurrency(_actualVal, account.currency);
       inputEl.textContent = formatCurrency(val.input, account.currency);
       plEl.textContent = (val.abs >= 0 ? '+' : '') + formatCurrency(val.abs, account.currency);
       plEl.style.color = val.abs >= 0 ? '#33ff33' : '#ff3333';
@@ -193,7 +212,27 @@ Object.assign(Pages, {
         });
         const curMonth = today.substring(0, 7);
         if (currentVal > 0) byMonth[curMonth] = currentVal;
-        points = Object.entries(byMonth).map(([month, value]) => ({ month, value }));
+        const sortedMonths = Object.keys(byMonth).sort();
+        let t0 = 0;
+        accTxsSorted.forEach(tx => { if (tx.date >= cutoff) return; t0 = tx.balanceAfter || t0; });
+        let cf = 0;
+        const mf = {};
+        accTxsSorted.forEach(tx => {
+          if (tx.date < cutoff) return;
+          const mk = (tx.date || '').substring(0, 7);
+          if (!mk) return;
+          let f = 0;
+          if (tx.type === 'deposit' && !_isOpeningContribution(tx)) f = Math.abs(tx.amount);
+          if (tx.type === 'withdrawal') f = -Math.abs(tx.amount);
+          if (tx.type === 'buy') f = Math.abs(tx.amount);
+          if (tx.type === 'sell') f = -Math.abs(tx.amount);
+          if (_isOpeningTx(tx)) f = tx.amount;
+          mf[mk] = (mf[mk] || 0) + f;
+        });
+        points = sortedMonths.map(m => {
+          cf += (mf[m] || 0);
+          return { month: m, value: byMonth[m], flow: t0 + cf };
+        });
       }
       points.sort((a, b) => a.month.localeCompare(b.month));
 
@@ -218,6 +257,15 @@ Object.assign(Pages, {
             tension: 0.25,
             pointRadius: 2,
             pointBackgroundColor: readAccent()
+          }, {
+             label: "Deposits / Withdrawals",
+             data: points.map(p => p.flow != null ? p.flow : null),
+             borderColor: "#ffcc00",
+             backgroundColor: "transparent",
+             fill: false,
+             tension: 0.25,
+             pointRadius: 2,
+             pointBackgroundColor: "#ffcc00"
           }]
         },
         options: {
@@ -260,6 +308,7 @@ Object.assign(Pages, {
     let _randataData = null;
     (async function() {
       const section = document.getElementById('acc-index-compare-section');
+      if (!account || !/investment/i.test(account.accountType || '')) { if (section) section.style.display = 'none'; return; }
       try {
         const file = await Randata.readClass('index');
         if (!file || !file.data) return;
@@ -510,11 +559,13 @@ Object.assign(Pages, {
     }
   },
 
-  _renderAssetsTable(assets, currency) {
+  _renderAssetsTable(assets, currency, showDebt) {
     const tbody = document.getElementById('ta-assets-body');
     const empty = document.getElementById('ta-assets-empty');
     const table = document.getElementById('ta-assets-table');
     tbody.innerHTML = '';
+    const debtTh = Array.from(table.querySelectorAll('th')).find(th => /DEBT/.test(th.textContent));
+    if (debtTh) debtTh.style.display = showDebt ? '' : 'none';
 
     const sorted = [...assets].sort((a, b) => {
       if (a.sold !== b.sold) return a.sold ? 1 : -1;
@@ -555,6 +606,7 @@ Object.assign(Pages, {
         <td>${assetCur}</td>
         <td>${(asset.depreciationPct || 0)}%</td>
         <td>${valueHtml}</td>
+        ${showDebt ? '<td>' + formatCurrency(asset.debt || 0, assetCur) + '</td>' : ''}
         <td>${statusHtml}</td>
         <td>${plHtml}</td>
         <td>${actionsHtml}</td>`;

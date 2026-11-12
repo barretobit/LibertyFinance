@@ -159,7 +159,9 @@
                       </div>
                     </div>
                   </div>
-                  <div id="savings-rate-empty" class="empty-state">NO INCOME DATA FOR THE LAST 12 MONTHS.</div>
+                  <div id="sr-month-toggles" class="sr-month-toggles"></div>
+                   <div class="sr-month-hint">Click a month to include/exclude it from the graph and statistics.</div>
+                   <div id="savings-rate-empty" class="empty-state">NO INCOME DATA FOR THE LAST 12 MONTHS.</div>
                 </div>
               </div>
             </div>
@@ -320,13 +322,13 @@
           </div>
           <div class="row mb-4">
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">CURRENT VALUE</span><span class="stat-value" id="acc-stat-value" style="color:var(--accent)">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label" id="acc-stat-value-label">CURRENT VALUE</span><span class="stat-value" id="acc-stat-value" style="color:var(--accent)">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">UNREALIZED P&amp;L</span><span class="stat-value" id="acc-stat-pl">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label" id="acc-stat-pl-label">UNREALIZED P&amp;L</span><span class="stat-value" id="acc-stat-pl">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
-              <div class="stat-card"><span class="stat-label">INPUT</span><span class="stat-value" id="acc-stat-cost">CHF 0.00</span></div>
+              <div class="stat-card"><span class="stat-label" id="acc-stat-cost-label">INPUT</span><span class="stat-value" id="acc-stat-cost">CHF 0.00</span></div>
             </div>
             <div class="col-md-3 mb-3">
               <div class="stat-card"><span class="stat-label">CUSTODIAN / CURRENCY</span><span class="stat-value stat-value-sm" id="acc-stat-meta">—</span></div>
@@ -416,6 +418,7 @@
                       <th>CURRENCY</th>
                       <th>DEPR / YR</th>
                       <th>CURRENT VALUE</th>
+                       <th>DEBT (MORTGAGE)</th>
                       <th>STATUS</th>
                       <th>P&amp;L</th>
                       <th></th>
@@ -1026,6 +1029,7 @@
                 <option value="Investment Account">Investment Account</option>
                 <option value="Retirement Fund">Retirement Fund</option>
                 <option value="Tangible Asset">Tangible Asset</option>
+                <option value="Real Estate">Real Estate</option>
                 <option value="Precious Metal">Precious Metal</option>
               </select>
             </div>
@@ -1217,8 +1221,10 @@
             <input type="hidden" id="asset-account-id" />
             <div class="mb-3"><label class="form-label">NAME</label><input type="text" class="form-control form-gta" id="asset-name" placeholder="e.g. Car, Laptop, Sofa" /></div>
             <div class="mb-3"><label class="form-label">VALUE</label><input type="number" step="0.01" min="0" class="form-control form-gta" id="asset-value" placeholder="0.00" /></div>
+<div class="mb-3"><label class="form-label">DEBT (MORTGAGE)</label><input type="number" step="0.01" min="0" class="form-control form-gta" id="asset-debt" placeholder="0.00" /></div>
             <div class="mb-3"><label class="form-label">CURRENCY</label><select class="form-select form-gta" id="asset-currency"></select></div>
             <div class="mb-3"><label class="form-label">DEPRECIATION PER YEAR (%)</label><input type="number" step="0.01" min="-100" max="100" class="form-control form-gta" id="asset-depreciation" placeholder="e.g. 20" /></div>
+            <div class="mb-3"><label class="form-label">OWNERSHIP (%)</label><input type="number" step="0.01" min="0" max="100" class="form-control form-gta" id="asset-ownership" placeholder="100" /></div>
             <div class="mb-3"><label class="form-label">PURCHASE DATE</label><input type="date" class="form-control form-gta" id="asset-date" /></div>
             <small class="text-muted">VALUE DEPRECIATES STRAIGHT-LINE BY THE % PER YEAR SINCE THE PURCHASE DATE. USE A NEGATIVE % FOR APPRECIATION.</small>
           </div>
@@ -1461,13 +1467,13 @@
     </script>
     <script src="js/storage.js?v=3"></script>
     <script src="js/randata.js?v=6"></script>
-<script src="js/db.js?v=24"></script>
-<script src="js/utils.js?v=24"></script>
-<script src="js/app.js?v=27"></script>
+<script src="js/db.js?v=25"></script>
+<script src="js/utils.js?v=27"></script>
+<script src="js/app.js?v=28"></script>
 <script src="js/pages-shared.js?v=27"></script>
 <script src="js/pages-dashboard.js?v=29"></script>
-<script src="js/pages-portfolios.js?v=28"></script>
-<script src="js/pages-accounts.js?v=30"></script>
+<script src="js/pages-portfolios.js?v=29"></script>
+<script src="js/pages-accounts.js?v=31"></script>
 <script src="js/pages-money.js?v=28"></script>
 <script src="js/pages-goals.js?v=27"></script>
 <script src="js/pages-market.js?v=27"></script>

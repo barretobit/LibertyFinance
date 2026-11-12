@@ -32,7 +32,7 @@ Object.assign(Pages, {
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
       let value, cost, date;
-      if (a.accountType === 'Tangible Asset') {
+      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
         const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
         const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
         value = m.value;
@@ -234,7 +234,7 @@ Object.assign(Pages, {
     accounts.forEach(a => {
       const accTxs = transactions.filter(t => t.accountId === a.id);
       let costBasis, effVal, lastDate;
-      if (a.accountType === 'Tangible Asset') {
+      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
         const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
         const m = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc);
         costBasis = m.cost;
@@ -285,7 +285,7 @@ Object.assign(Pages, {
         const spot = metalSpotPerGram(metalEntry, a.metalType, a.currency || 'CHF', rateEntries, todayStr());
         const shownPrice = spot != null ? spot : (a.pricePerGram || 0);
         metaExtra = ' &middot; ' + a.quantity + 'g ' + (a.metalType || '') + ' @ ' + formatCurrency(shownPrice, a.currency) + '/g';
-      } else if (a.accountType === 'Tangible Asset') {
+      } else if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
         const held = (accountAssets[a.id] || []).filter(x => !x.sold).length;
         metaExtra = ' &middot; ' + pluralize(held, 'ASSET');
       }

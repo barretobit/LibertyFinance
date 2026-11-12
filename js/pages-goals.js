@@ -102,7 +102,7 @@ Object.assign(Pages, {
     accounts.forEach(a => {
       let raw;
       let latest = null;
-      if (a.accountType === 'Tangible Asset') {
+      if (a.accountType === 'Tangible Asset' || a.accountType === 'Real Estate') {
         const rateToAcc = (cur, date) => currencyRateTo(rateEntries, cur || 'CHF', a.currency || 'CHF', date);
         raw = assetAccountMetrics(accountAssets[a.id], todayStr(), rateToAcc).value;
       } else if (a.accountType === 'Precious Metal') {

@@ -79,6 +79,18 @@ const DB = (() => {
     data.goals = data.goals || [];
     data.settings = normalizeSettings(data.settings);
 
+    // Annotate assets with their account type so valuation logic (e.g. Real
+    // Estate handling) can rely on it even for assets created before the field
+    // existed.
+    const accountById = {};
+    (data.accounts || []).forEach(a => { accountById[a.id] = a; });
+    (data.assets || []).forEach(asset => {
+      if (!asset.accountType && !asset.assetType && asset.accountId != null) {
+        const acc = accountById[asset.accountId];
+        if (acc && acc.accountType) asset.accountType = acc.accountType;
+      }
+    });
+
     await loadMarket();
 
     // One-time migration: move legacy rates stored in the profile file into the shared market file

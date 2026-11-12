@@ -997,6 +997,25 @@ body {
   border-color: var(--accent);
 }
 
+.sr-month-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sr-month-toggles .perf-btn {
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
+.sr-month-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 6px;
+  letter-spacing: 0.5px;
+}
+
 /* ===== PORTFOLIO CARDS ===== */
 .pf-card {
   background: var(--bg-card);
