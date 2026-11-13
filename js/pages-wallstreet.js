@@ -404,8 +404,18 @@ Object.assign(Pages, {
 
       this._wsRenderPrefs();
 
-      await Randata.sync();
-      const file = await Randata.readFile();
+      // The local market files draw the page at once and a background sync
+      // redraws it if new bars arrive. Only a first load (nothing synced yet)
+      // waits for the network, so stale or half-built data is never shown.
+      const shownVersion = Randata.dataVersion();
+      let file = await Randata.readFile();
+      let syncing = null;
+      if (file.synced_date) {
+        syncing = Randata.sync();
+      } else {
+        await Randata.sync();
+        file = await Randata.readFile();
+      }
       const data = file.data || {};
       const assets = file.assets || [];
       const usdPer = wsRateMap(data, assets);
@@ -470,6 +480,8 @@ Object.assign(Pages, {
         if (groups[cls]) groups[cls].push(item);
       });
 
+      const nodata = document.getElementById("ws-nodata");
+      if (nodata) nodata.innerHTML = "";
       if (hasData) {
         this._wsRenderGroup("#ws-index-grid", "#ws-index-empty", groups.index);
         this._wsRenderGroup("#ws-etf-grid", "#ws-etf-empty", groups.etf);
@@ -498,13 +510,20 @@ Object.assign(Pages, {
           data, metaBySym, startDate, usdPer,
         );
         this._wsRenderOutlook(groups.index, range);
-      } else {
-        const nodata = document.getElementById("ws-nodata");
-        if (nodata) nodata.innerHTML = '<div class="card-gta"><div class="card-gta-body"><div class="empty-state" style="display:block">NO MARKET DATA — PRESS RESYNC OR REOPEN A PROFILE TO SYNC.</div></div></div>';
+      } else if (nodata) {
+        nodata.innerHTML = '<div class="card-gta"><div class="card-gta-body"><div class="empty-state" style="display:block">NO MARKET DATA — PRESS RESYNC OR REOPEN A PROFILE TO SYNC.</div></div></div>';
       }
 
       this._wsBindRangeButtons();
 
+      if (syncing) {
+        syncing.then(() => {
+          const page = document.getElementById("page-wall-street");
+          if (Randata.dataVersion() !== shownVersion && page && page.classList.contains("active")) Pages.wallStreet();
+        });
+        // Resolves once the background sync is done, so callers can report its result.
+        return syncing;
+      }
     } finally {
       const loading = document.getElementById("ws-loading");
       if (loading) loading.classList.remove("show");
@@ -572,7 +591,7 @@ Object.assign(Pages, {
       button.textContent = "SYNCING...";
     }
     try {
-      const result = await Randata.sync();
+      const result = await Randata.sync({ force: true });
       await this.wallStreet();
       App.toast(result.status === "offline" ? "MARKET DATA OFFLINE" : result.status === "fresh" ? "MARKET DATA AVAILABLE" : "MARKET DATA SYNCED");
     } finally {

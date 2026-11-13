@@ -3,19 +3,21 @@
  * Fetches 10-year historical financial data (indexes / stocks / ETFs / metals /
  * cryptos) plus latest FX closes from the Randata Finance API.
  *
- * History comes from the flat history endpoints (rows sorted by symbol then
- * date: { symbol, date, open, high, low, close, volume }):
- *   - Full load:   the ten-year set is pulled as contiguous one-year
- *     GET /finance/history/range?from=..&to=.. chunks, stopping at the first
- *     empty year. A single /finance/history/all?limit=500000 request carries
- *     ~460k rows and is cut off (HTTP 502) by the host proxy before it can
- *     finish, so chunking is the reliable path.
- *   - Incremental: GET /finance/history/range?from=..&to=.. tail window, served
- *     from the server's in-memory cache when from lies within ~1 year.
+ * History comes from two endpoints; every symbol ends up as one date-ascending
+ * array of bars { date, open, high, low, close, volume }:
+ *   - Full load:   GET /finance/history/year/{year} for each calendar year,
+ *     a few in parallel. Randata prepares these year documents in memory after
+ *     every cache load, so they never wait on its database. Years are joined
+ *     oldest first, which keeps each symbol's bars in date order.
+ *   - Incremental: GET /finance/history/range?from=..&to=.. tail window (rows
+ *     sorted by symbol then date), served from the server's in-memory cache.
  * Bars are grouped per symbol and split into the per-class files by matching
  * each symbol against the /finance/assets catalog. New catalog symbols force
  * a full reload so freshly onboarded assets arrive with their complete
  * backfilled history, not just the incremental window.
+ *
+ * The class files are read and parsed once per page; later syncs work on the
+ * in-memory copy and ask the server for news at most every few minutes.
  *
  * Each asset class is persisted as its own file inside the Resources/ folder:
  *   indexes.json · stocks.json · etfs.json · metals.json · cryptos.json · fx.json
@@ -36,19 +38,22 @@ const Randata = (() => {
   const API_BASE = 'https://randata.onrender.com';
   const CACHE_STATUS_API = 'finance/cache/status';
   const HISTORY_RANGE_API = 'finance/history/range';
+  const HISTORY_YEAR_API = 'finance/history/year';
   const FX_RATES_API = 'finance/fx/rates';
   const META_FILE = 'randata-meta.json';
 
-  // The full 10-year set (~460k bars) is pulled as contiguous one-year chunks:
-  // a single history/all dump is cut off by the host proxy (~502), while a
-  // one-year range window comfortably completes. The loop stops at the first
-  // empty year, so the chunk count follows the server's actual data depth.
-  const CHUNK_DAYS = 365;
-  const MAX_FULL_CHUNKS = 15;
+  // The full set (~460k bars) is pulled one calendar year per request: a single
+  // history/all dump is cut off by the host proxy (~502). Years without data
+  // come back empty, so this only has to reach back past the server's window.
+  const MAX_HISTORY_YEARS = 15;
+  const PARALLEL_YEAR_REQUESTS = 4;
   const REQUEST_TIMEOUT_MS = 90000;
+  // A sync with everything already current skips the server check this long.
+  const STATUS_CHECK_INTERVAL_MS = 5 * 60 * 1000;
   // Bump when the Resources/ file layout changes: files written under a
   // different schema are ignored, forcing one full reload.
-  const SCHEMA = 2;
+  // 3: schema 2 full loads stored each symbol's years newest first.
+  const SCHEMA = 3;
   // Re-fetch this many days behind the last synced day so bars that were still
   // intraday/partial at the previous sync get replaced, not duplicated.
   const INCREMENTAL_OVERLAP_DAYS = 3;
@@ -72,6 +77,9 @@ const Randata = (() => {
   let lastResult = null;
   let syncInFlight = null;
   let legacyRemoved = false;
+  let lastStatusCheck = 0;
+  // Goes up whenever a sync changes the market data, so pages know to redraw.
+  let dataVersion = 0;
 
   async function getAdapter() {
     if (!adapter) adapter = await Storage.get();
@@ -174,25 +182,56 @@ const Randata = (() => {
     return grouped;
   }
 
+  // Range rows as { symbol: [bars...] }. Rows arrive sorted by symbol then
+  // date, so each symbol's array stays date-ascending.
   async function fetchHistoryRange(from, to) {
     const json = await apiJson(
       API_BASE + '/' + HISTORY_RANGE_API + '?from=' + from + '&to=' + to);
-    return (json && json.data) || [];
+    const bySymbol = {};
+    ((json && json.data) || []).forEach((row) => {
+      if (!row || !row.symbol || !row.date) return;
+      const { symbol, ...bar } = row;
+      (bySymbol[symbol] || (bySymbol[symbol] = [])).push(bar);
+    });
+    return bySymbol;
   }
 
-  // Full history, oldest-to-newest, assembled from contiguous one-year chunks
-  // (no overlap, so no duplicate dates at the seams). Stops at the first year
-  // that returns nothing, which also caps newer assets at their inception.
+  // One calendar year as { symbol: [bars...] }, from per-symbol date-ascending columns.
+  async function fetchHistoryYear(year) {
+    const json = await apiJson(API_BASE + '/' + HISTORY_YEAR_API + '/' + year);
+    const symbols = (json && json.symbols) || {};
+    const bySymbol = {};
+    Object.keys(symbols).forEach((symbol) => {
+      const c = symbols[symbol];
+      bySymbol[symbol] = c.date.map((date, i) => ({
+        date: date, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i], volume: c.volume[i]
+      }));
+    });
+    return bySymbol;
+  }
+
+  // Full history as { symbol: [bars...] }, oldest-to-newest: every year is
+  // fetched (a few requests at a time) and the years are joined oldest first.
   async function fetchHistoryFull(today) {
-    const chunks = [];
-    for (let i = 0; i < MAX_FULL_CHUNKS; i++) {
-      const to = dateAddDays(today, -CHUNK_DAYS * i);
-      const from = dateAddDays(to, -(CHUNK_DAYS - 1));
-      const bars = await fetchHistoryRange(from, to);
-      if (!bars.length) break;
-      chunks.push(bars);
-    }
-    return chunks.reduce((all, c) => all.concat(c), []);
+    const lastYear = Number(today.slice(0, 4));
+    const years = [];
+    for (let year = lastYear - MAX_HISTORY_YEARS + 1; year <= lastYear; year++) years.push(year);
+    const results = new Array(years.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < years.length) {
+        const index = next++;
+        results[index] = await fetchHistoryYear(years[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: PARALLEL_YEAR_REQUESTS }, worker));
+    const bySymbol = {};
+    results.forEach((yearBars) => {
+      Object.keys(yearBars).forEach((symbol) => {
+        bySymbol[symbol] = (bySymbol[symbol] || []).concat(yearBars[symbol]);
+      });
+    });
+    return bySymbol;
   }
 
   async function fetchFxData() {
@@ -233,17 +272,13 @@ const Randata = (() => {
     return map;
   }
 
-  // Split a flat bar list into { class: { symbol: [bars...] } }. Rows arrive
-  // sorted by symbol then date, so each symbol's array stays date-ascending.
-  function groupBarsByClass(bars, classBySymbol) {
+  // Split { symbol: [bars...] } into { class: { symbol: [bars...] } }.
+  function groupBarsByClass(barsBySymbol, classBySymbol) {
     const byClass = {};
     HISTORY_CLASSES.forEach((cls) => { byClass[cls] = {}; });
-    (bars || []).forEach((bar) => {
-      if (!bar || !bar.symbol || !bar.date) return;
-      const cls = classBySymbol[bar.symbol];
-      if (!cls) return;
-      const bucket = byClass[cls];
-      (bucket[bar.symbol] || (bucket[bar.symbol] = [])).push(bar);
+    Object.keys(barsBySymbol || {}).forEach((symbol) => {
+      const cls = classBySymbol[symbol];
+      if (cls) byClass[cls][symbol] = barsBySymbol[symbol];
     });
     return byClass;
   }
@@ -288,32 +323,41 @@ const Randata = (() => {
     return { status: status, synced_date: synced_date, symbols: symbols, rows: rows, classes: classes };
   }
 
-  async function doSync() {
+  async function doSync(force) {
     try {
-      metaCache = null;
       const today = todayStr();
       const now = new Date().toISOString();
       const a = await getAdapter();
       const classKeys = Object.keys(CLASSES);
 
+      // The meta and class files are parsed once per page (~40 MB); afterwards
+      // the in-memory copy is current, because every write goes through here.
       const meta = await readMeta();
       const states = {};
-      for (const cls of classKeys) states[cls] = assembleClass(cls, meta, await readClassFile(cls));
+      for (const cls of classKeys) states[cls] = cache[cls] || assembleClass(cls, meta, await readClassFile(cls));
       const syncedOn = (cls) => (meta.synced && meta.synced[cls] && meta.synced[cls].date) || null;
 
+      const stale = classKeys.filter((cls) => syncedOn(cls) !== today);
+
+      // A full reload is forced by a missing/invalid meta (first run or an
+      // older layout) or by a history class we never successfully loaded.
+      // Day-staleness alone only needs a small incremental range pull.
+      let fullNeeded = meta.schema !== SCHEMA ||
+        HISTORY_CLASSES.some((cls) => !meta.synced || !meta.synced[cls]);
+
+      // Everything is from today and the server was asked moments ago.
+      if (!force && !stale.length && !fullNeeded && Date.now() - lastStatusCheck < STATUS_CHECK_INTERVAL_MS) {
+        cache = states;
+        lastResult = summary('fresh', today);
+        return lastResult;
+      }
+
       const remoteBuiltAt = await fetchCacheBuiltAt();
+      lastStatusCheck = Date.now();
       // Randata rebuilt its cache after the build instant we last processed
       // (e.g. new data or a new asset landed since our last sync).
       const rebuildDetected = remoteBuiltAt !== null && meta.built_at != null &&
         remoteBuiltAt > new Date(meta.built_at).getTime();
-
-      const stale = classKeys.filter((cls) => syncedOn(cls) !== today);
-
-      // A full reload is forced by a missing/invalid meta (first run or a
-      // pre-v2 layout) or by a history class we never successfully loaded.
-      // Day-staleness alone only needs a small incremental range pull.
-      let fullNeeded = meta.schema !== SCHEMA ||
-        HISTORY_CLASSES.some((cls) => !meta.synced || !meta.synced[cls]);
 
       if (!stale.length && !fullNeeded && !rebuildDetected) {
         cache = states;
@@ -351,14 +395,16 @@ const Randata = (() => {
           if (allWritten) {
             meta.built_at = remoteBuiltAt != null ? new Date(remoteBuiltAt).toISOString() : now;
           }
-        } catch (e) { /* history/all failed: keep existing files; incremental below still covers stale classes */ }
+        } catch (e) { /* full load failed: keep existing files; the next sync retries it */ }
       }
 
       // Incremental: one tail-window pull, merged into every history class.
       // A rebuild also re-pulls the tail even for classes already synced today,
       // so corrected server bars land the same day. Classes that receive no new
-      // bars (e.g. equities on a weekend) keep their file untouched.
-      const pending = HISTORY_CLASSES.filter((cls) =>
+      // bars (e.g. equities on a weekend) keep their file untouched. Skipped
+      // when a full load was needed: a tail window would mark classes synced
+      // without their history, and the full load would never be retried.
+      const pending = fullNeeded ? [] : HISTORY_CLASSES.filter((cls) =>
         !loadedNow.has(cls) && (syncedOn(cls) !== today || rebuildDetected));
       if (pending.length) {
         try {
@@ -399,11 +445,15 @@ const Randata = (() => {
           await a.writeIn(RESOURCES_DIR, CLASSES.fx.file, JSON.stringify(payload));
           meta.synced.fx = { date: today, at: now };
           states.fx = assembleClass('fx', meta, payload);
+          loadedNow.add('fx');
         } catch (e) { /* keep the cached file; a failed class is not fatal */ }
       }
 
       await writeMeta(meta);
+      // Reused in-memory classes still carry the sync dates of when they were read.
+      classKeys.forEach((cls) => { states[cls] = assembleClass(cls, meta, states[cls]); });
       cache = states;
+      if (loadedNow.size) dataVersion++;
 
       // The old combined randata.json is orphaned by the Resources/ layout.
       if (!legacyRemoved) {
@@ -416,14 +466,18 @@ const Randata = (() => {
       lastResult = summary(anyClassCurrent ? 'synced' : 'offline', today);
       return lastResult;
     } catch (e) {
+      // The in-memory copy may be half updated: read the files again next time.
+      metaCache = null;
+      cache = {};
       lastResult = { status: 'offline', error: e.message || String(e) };
       return lastResult;
     }
   }
 
-  async function sync() {
+  // options.force: ask the server for news even if it was asked moments ago.
+  async function sync(options) {
     if (syncInFlight) return syncInFlight;
-    syncInFlight = doSync().finally(() => { syncInFlight = null; });
+    syncInFlight = doSync(!!(options && options.force)).finally(() => { syncInFlight = null; });
     return syncInFlight;
   }
 
@@ -455,6 +509,7 @@ const Randata = (() => {
     sync,
     readFile,
     readClass,
-    getLastResult: () => lastResult
+    getLastResult: () => lastResult,
+    dataVersion: () => dataVersion
   };
 })();
