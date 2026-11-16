@@ -82,7 +82,7 @@ Object.assign(Pages, {
     this._ratesDateHandler = () => loadRates(dateInput.value);
     dateInput.addEventListener('change', this._ratesDateHandler);
 
-    dateInput.value = todayStr();
+    dateInput.value = todayIsoDate();
     loadRates(dateInput.value);
     this._renderPriceHistory('rates', await DB.getAll('exchangeRates'), entry =>
       Object.keys(entry.rates || {}).sort().map(code => escapeHtml(code) + ' ' + escapeHtml(formatNumber(entry.rates[code]))), 'loadRatesFromHistory');
@@ -117,7 +117,7 @@ Object.assign(Pages, {
     const button = document.getElementById('metals-fetch-btn');
     const status = document.getElementById('metals-fetch-status');
 
-    const today = todayStr();
+    const today = todayIsoDate();
     const saved = await DB.getMetalPricesForDate(today);
     const existing = (saved && saved.prices) || {};
     const missingSymbols = METALS.map(metal => metal.symbol).filter(symbol => !(existing[symbol] && existing[symbol].chfPerGram != null));
@@ -197,7 +197,7 @@ Object.assign(Pages, {
     this._metalsDateHandler = () => loadMetals(dateInput.value);
     dateInput.addEventListener('change', this._metalsDateHandler);
 
-    dateInput.value = todayStr();
+    dateInput.value = todayIsoDate();
     loadMetals(dateInput.value);
     this._renderPriceHistory('metals', await DB.getAll('metalPrices'), entry =>
       METALS
@@ -220,7 +220,7 @@ Object.assign(Pages, {
   },
 
   async saveRates() {
-    const date = document.getElementById('rates-date').value || todayStr();
+    const date = document.getElementById('rates-date').value || todayIsoDate();
     // Merge into the stored rates: market.json is shared by every profile, so
     // currencies this page does not show must be kept. A cleared field removes its rate.
     const saved = await DB.getRatesForDate(date);
@@ -284,7 +284,7 @@ Object.assign(Pages, {
       });
 
       // Ensure a "latest" snapshot so current account balances convert
-      const today = todayStr();
+      const today = todayIsoDate();
       if (allNeededCurrencies.size > 0) {
         if (!currenciesByDate[today]) currenciesByDate[today] = new Set();
         allNeededCurrencies.forEach(code => currenciesByDate[today].add(code));
@@ -351,7 +351,7 @@ Object.assign(Pages, {
       });
       if (neededCurrencies.size === 0) return { filled: 0 };
 
-      const today = todayStr();
+      const today = todayIsoDate();
       const existing = await DB.getRatesForDate(today);
       const current = (existing && existing.rates) || {};
       const missing = [...neededCurrencies].sort().filter(code => current[code] == null);
@@ -385,7 +385,7 @@ Object.assign(Pages, {
         await this.exchangeRates();
       }
       return { filled };
-    } catch (e) {
+    } catch (error) {
       return { filled: 0 };
     }
   }

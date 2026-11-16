@@ -142,11 +142,35 @@ function costBasis(transactions) {
 function periodResult(startValue, endValue, capitalAdded) {
   const profitLoss = endValue - startValue - capitalAdded;
   const base = startValue + capitalAdded;
-  return { abs: profitLoss, pct: base !== 0 ? (profitLoss / base) * 100 : 0 };
+  return { profitLoss, percent: base !== 0 ? (profitLoss / base) * 100 : 0 };
+}
+
+// Splits a value chart's month-end `points` (oldest first) with monthlyReturns():
+// per point the money put in so far and the month's change, split into capital
+// added and investment gain; `summary` covers the whole range, from the value
+// before its first month to its last value.
+function valueBreakdown(points, monthlyResults) {
+  const noResult = { profitLoss: 0, percent: 0, capitalAdded: 0 };
+  const firstMonth = points.length ? points[0].month : '';
+  let moneyPutIn = Object.keys(monthlyResults)
+    .filter(month => month < firstMonth)
+    .reduce((sum, month) => sum + monthlyResults[month].capitalAdded, 0);
+  let capitalAdded = 0;
+  let gain = 0;
+  const months = points.map(point => {
+    const result = monthlyResults[point.month] || noResult;
+    moneyPutIn += result.capitalAdded;
+    capitalAdded += result.capitalAdded;
+    gain += result.profitLoss;
+    return { moneyPutIn, change: result.capitalAdded + result.profitLoss, capitalAdded: result.capitalAdded, gain: result.profitLoss, percent: result.percent };
+  });
+  const endValue = points.length ? points[points.length - 1].value : 0;
+  const startValue = endValue - capitalAdded - gain;
+  return { months, summary: { startValue, endValue, capitalAdded, ...periodResult(startValue, endValue, capitalAdded) } };
 }
 
 function createValuationContext({ accounts, transactions, assets, rateEntries, todaysMetalPrices, mainCurrency }) {
-  const today = todayStr();
+  const today = todayIsoDate();
   const accountsById = {};
   accounts.forEach(account => { accountsById[account.id] = account; });
   const accountCurrency = (accountId) => (accountsById[accountId] && accountsById[accountId].currency) || 'CHF';
@@ -277,7 +301,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     return toMain(capitalFlow(transaction, flowOptions), accountCurrency(transaction.accountId), transaction.date);
   }
 
-  // Investment result per month of `accountIds`: { 'YYYY-MM': { abs, pct } }, see periodResult()
+  // Investment result per month of `accountIds`: { 'YYYY-MM': { profitLoss, percent, capitalAdded } }, see periodResult()
   function monthlyReturns(accountIds, flowOptions) {
     const results = {};
     let month = null;
@@ -287,15 +311,63 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
       const transactionMonth = (transaction.date || '').substring(0, 7);
       if (!transactionMonth) return;
       if (transactionMonth !== month) {
-        if (month !== null) results[month] = periodResult(startTotal, totalBefore, capitalAdded);
+        if (month !== null) results[month] = { ...periodResult(startTotal, totalBefore, capitalAdded), capitalAdded };
         month = transactionMonth;
         startTotal = totalBefore;
         capitalAdded = 0;
       }
       capitalAdded += capitalInMain(transaction, flowOptions);
     });
-    if (month !== null) results[month] = periodResult(startTotal, finalTotal, capitalAdded);
+    if (month !== null) results[month] = { ...periodResult(startTotal, finalTotal, capitalAdded), capitalAdded };
     return results;
+  }
+
+  // Month-end value of `accountIds` in the main currency for every month from
+  // their first balance transaction to this month (this month: the current value), and each
+  // month's result: { totals: { 'YYYY-MM': value }, results: { 'YYYY-MM': { profitLoss, percent, capitalAdded } } }.
+  // Asset accounts are valued from their assets (owned share, net of the
+  // mortgage), so a new property valuation shows as gain and a mortgage
+  // repayment as capital put in, as in assetOwnedCost().
+  function monthlyValues(accountIds) {
+    const transactions = balanceTransactionsOf(accountIds).filter(transaction => transaction.date);
+    if (transactions.length === 0) return { totals: {}, results: {} };
+    const assetAccounts = [...accountIds].map(id => accountsById[id]).filter(account => account && isAssetAccount(account));
+    const otherAccountIds = new Set([...accountIds].filter(id => !assetAccounts.some(account => account.id === id)));
+    // No date: the current value, exactly as netWorth() counts it
+    const valueOn = date => (date
+      ? recordedTotal(otherAccountIds, date) + assetAccounts.reduce((sum, account) => sum + accountValueInMain(account, date), 0)
+      : [...accountIds].reduce((sum, id) => sum + (accountsById[id] ? accountValueInMain(accountsById[id]) : 0), 0));
+
+    const capitalByMonth = {};
+    const addCapital = (date, amount) => { capitalByMonth[date.substring(0, 7)] = (capitalByMonth[date.substring(0, 7)] || 0) + amount; };
+    transactions.forEach(transaction => addCapital(transaction.date, capitalInMain(transaction, { includeAssetEvents: true })));
+    // Mortgage repayments while the property is held; the purchase and the sale
+    // already count the mortgage owed on their own date
+    assetAccounts.forEach(account => (assetsByAccount[account.id] || []).filter(isRealEstateAsset).forEach(asset => {
+      let owed = parseFloat(asset.debt) || 0;
+      (asset.mortgageBalances || []).filter(entry => entry && entry.date).sort(compareByDate).forEach(entry => {
+        const amount = parseFloat(entry.amount) || 0;
+        const isHeld = (!asset.purchaseDate || entry.date > asset.purchaseDate) && !isAssetSoldOn(asset, entry.date);
+        if (isHeld) addCapital(entry.date, toMain((owed - amount) * assetOwnershipShare(asset), asset.currency, entry.date));
+        owed = amount;
+      });
+    }));
+
+    const totals = {};
+    const results = {};
+    const currentMonth = today.substring(0, 7);
+    let previousValue = 0;
+    for (let month = transactions[0].date.substring(0, 7); month <= currentMonth;) {
+      const [year, monthNumber] = month.split('-').map(Number);
+      const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+      const value = valueOn(month === currentMonth ? null : month + '-' + String(lastDay).padStart(2, '0'));
+      const capitalAdded = capitalByMonth[month] || 0;
+      totals[month] = value;
+      results[month] = { ...periodResult(previousValue, value, capitalAdded), capitalAdded };
+      previousValue = value;
+      month = new Date(Date.UTC(year, monthNumber, 1)).toISOString().substring(0, 7);
+    }
+    return { totals, results };
   }
 
   // Investment result of `accountIds` from `cutoffDate` until now, see periodResult()
@@ -354,6 +426,7 @@ function createValuationContext({ accounts, transactions, assets, rateEntries, t
     replayBalances,
     monthEndTotals,
     monthlyReturns,
+    monthlyValues,
     performanceSince,
     recordedTotal,
     capitalAddedBetween,
@@ -368,7 +441,7 @@ async function loadValuationContext() {
     transactions: await DB.getAll('transactions'),
     assets: await DB.getAll('assets'),
     rateEntries: await DB.getAll('exchangeRates'),
-    todaysMetalPrices: await DB.getMetalPricesForDate(todayStr()),
+    todaysMetalPrices: await DB.getMetalPricesForDate(todayIsoDate()),
     mainCurrency: settings.mainCurrency || 'CHF',
   });
 }

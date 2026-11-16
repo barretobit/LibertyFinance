@@ -8,23 +8,23 @@
 const DEFAULT_ACCENT = '#33ff33';
 
 function readAccent() {
-  const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-  return /^#[0-9a-fA-F]{6}$/.test(v) ? v : DEFAULT_ACCENT;
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : DEFAULT_ACCENT;
 }
 
 function hexToRgb(hex) {
-  const h = (hex || '').replace('#', '').trim();
-  const n = parseInt(h.match(/^[0-9a-fA-F]{6}$/) ? h : '33ff33', 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  const hexDigits = (hex || '').replace('#', '').trim();
+  const colorNumber = parseInt(hexDigits.match(/^[0-9a-fA-F]{6}$/) ? hexDigits : '33ff33', 16);
+  return { red: (colorNumber >> 16) & 255, green: (colorNumber >> 8) & 255, blue: colorNumber & 255 };
 }
 
 // Derived accent variants: darken by `factor` for --accent-dim, or keep the
 // color and add an alpha channel for --accent-glow / chart fills.
 function shadeAccent(hex, factor, alpha) {
-  const { r, g, b } = hexToRgb(hex);
-  if (alpha != null) return 'rgba(' + Math.round(r * factor) + ',' + Math.round(g * factor) + ',' + Math.round(b * factor) + ',' + alpha + ')';
-  const hx = (c) => Math.round(c * factor).toString(16).padStart(2, '0');
-  return '#' + hx(r) + hx(g) + hx(b);
+  const { red, green, blue } = hexToRgb(hex);
+  if (alpha != null) return 'rgba(' + Math.round(red * factor) + ',' + Math.round(green * factor) + ',' + Math.round(blue * factor) + ',' + alpha + ')';
+  const toHexPair = (channel) => Math.round(channel * factor).toString(16).padStart(2, '0');
+  return '#' + toHexPair(red) + toHexPair(green) + toHexPair(blue);
 }
 
 /* ===== Utility Functions ===== */
@@ -38,11 +38,11 @@ const CURRENCIES = [
 ];
 
 function formatCurrency(amount, currencyCode = 'CHF') {
-  const c = CURRENCIES.find(c => c.code === currencyCode) || CURRENCIES[0];
+  const currencyInfo = CURRENCIES.find(currency => currency.code === currencyCode) || CURRENCIES[0];
   if (currencyCode === 'JPY') {
-    return c.symbol + Math.round(amount).toLocaleString();
+    return currencyInfo.symbol + Math.round(amount).toLocaleString();
   }
-  return c.symbol + ' ' + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return currencyInfo.symbol + ' ' + amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /* ===== Exchange Rates =====
@@ -80,7 +80,7 @@ function currencyRateTo(rateEntries, fromCurrency, toCurrency, date) {
 
 // The given currencies that have no stored rate at all, sorted
 function currenciesWithoutRate(rateEntries, currencies) {
-  return [...new Set(currencies)].filter(currency => currency && chfPerUnit(rateEntries, currency, todayStr()) == null).sort();
+  return [...new Set(currencies)].filter(currency => currency && chfPerUnit(rateEntries, currency, todayIsoDate()) == null).sort();
 }
 
 // True for a calendar date in the app's storage format, YYYY-MM-DD
@@ -88,19 +88,19 @@ function isIsoDate(text) {
   return /^\d{4}-\d{2}-\d{2}$/.test(text || '');
 }
 
-function formatDate(dateStr) {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+function formatDate(dateText) {
+  if (!dateText) return '—';
+  const date = new Date(dateText);
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function formatDateShort(dateStr) {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+function formatDateShort(dateText) {
+  if (!dateText) return '—';
+  const date = new Date(dateText);
+  return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
 }
 
-function todayStr() {
+function todayIsoDate() {
   return new Date().toISOString().split('T')[0];
 }
 
@@ -114,7 +114,7 @@ function pluralize(count, word) {
   return count + ' ' + word + (word === word.toUpperCase() ? 'S' : 's');
 }
 
-function plClass(value) {
+function profitLossClass(value) {
   return value >= 0 ? 'pos' : 'neg';
 }
 
@@ -138,10 +138,10 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
-function formatNumber(val) {
-  const n = parseFloat(val);
-  if (isNaN(n)) return '—';
-  return n.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+function formatNumber(value) {
+  const number = parseFloat(value);
+  if (isNaN(number)) return '—';
+  return number.toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
 }
 
 /* ===== Tangible Assets & Real Estate ===== */
@@ -168,7 +168,7 @@ function latestEntryOnOrBefore(entries, date) {
 // entered at purchase (asset.debt).
 function assetMortgage(asset, date) {
   if (!isRealEstateAsset(asset)) return 0;
-  const balance = latestEntryOnOrBefore(asset.mortgageBalances, date || todayStr());
+  const balance = latestEntryOnOrBefore(asset.mortgageBalances, date || todayIsoDate());
   return parseFloat(balance ? balance.amount : asset.debt) || 0;
 }
 
@@ -192,7 +192,7 @@ function yearsBetween(startDate, endDate) {
 // is one; everything else (and Real Estate before its first valuation) starts
 // from the purchase value at the purchase date.
 function assetFullValue(asset, date) {
-  const onDate = date || todayStr();
+  const onDate = date || todayIsoDate();
   const valuation = isRealEstateAsset(asset) ? latestEntryOnOrBefore(asset.valuations, onDate) : null;
   const startValue = valuation ? parseFloat(valuation.value) || 0 : parseFloat(asset.purchaseValue) || 0;
   const startDate = valuation ? valuation.date : asset.purchaseDate;
@@ -220,7 +220,7 @@ function assetOwnedCost(asset, date) {
 }
 
 // Realized profit or loss on the owned share, once sold
-function assetRealizedPL(asset) {
+function assetRealizedProfitLoss(asset) {
   if (!asset || !asset.sold) return null;
   return ((parseFloat(asset.saleValue) || 0) - assetCostValue(asset)) * assetOwnershipShare(asset);
 }
@@ -235,7 +235,7 @@ function assetAccountMetrics(assets, date, rateFor) {
     const rate = rateFor ? rateFor(asset.currency || 'CHF', date) : 1;
     if (isAssetSoldOn(asset, date)) {
       soldCount++;
-      realized += (assetRealizedPL(asset) || 0) * rate;
+      realized += (assetRealizedProfitLoss(asset) || 0) * rate;
       return;
     }
     if (asset.purchaseDate && date && date < asset.purchaseDate) return;
@@ -243,7 +243,7 @@ function assetAccountMetrics(assets, date, rateFor) {
     value += assetCurrentValue(asset, date) * rate;
     cost += assetOwnedCost(asset, date) * rate;
   });
-  return { value, cost, count, soldCount, realized, pl: value - cost };
+  return { value, cost, count, soldCount, realized, profitLoss: value - cost };
 }
 
 /* ===== Precious Metals ===== */
@@ -253,10 +253,10 @@ const METAL_SYMBOLS = { Gold: 'XAU', Silver: 'XAG', Platinum: 'XPT', Palladium: 
 // Live spot price per gram for a metal type, expressed in `toCurrency`, or null when no snapshot / rate available
 function metalSpotPerGram(metalEntry, metalType, toCurrency, rateEntries, date) {
   const symbol = METAL_SYMBOLS[metalType];
-  const p = symbol && metalEntry && metalEntry.prices ? metalEntry.prices[symbol] : null;
-  if (!p || p.chfPerGram == null) return null;
-  const rate = currencyRateTo(rateEntries || [], 'CHF', toCurrency || 'CHF', date || todayStr());
-  return p.chfPerGram * rate;
+  const price = symbol && metalEntry && metalEntry.prices ? metalEntry.prices[symbol] : null;
+  if (!price || price.chfPerGram == null) return null;
+  const rate = currencyRateTo(rateEntries || [], 'CHF', toCurrency || 'CHF', date || todayIsoDate());
+  return price.chfPerGram * rate;
 }
 
 // Current value of a precious-metal account: quantity x live spot (market.json), fallback to last trade price

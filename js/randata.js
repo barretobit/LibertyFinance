@@ -1,7 +1,7 @@
 /* ===== Randata Market Data Layer =====
  *
  * Fetches 10-year historical financial data (indexes / stocks / ETFs / metals /
- * cryptos) plus latest FX closes from the Randata Finance API.
+ * cryptos / FX pairs) from the Randata Finance API.
  *
  * History comes from two endpoints; every symbol ends up as one date-ascending
  * array of bars { date, open, high, low, close, volume }:
@@ -34,12 +34,11 @@
  */
 
 const Randata = (() => {
-  const RESOURCES_DIR = 'Resources';
+  const RESOURCES_FOLDER = 'Resources';
   const API_BASE = 'https://randata.onrender.com';
   const CACHE_STATUS_API = 'finance/cache/status';
   const HISTORY_RANGE_API = 'finance/history/range';
   const HISTORY_YEAR_API = 'finance/history/year';
-  const FX_RATES_API = 'finance/fx/rates';
   const META_FILE = 'randata-meta.json';
 
   // The full set (~460k bars) is pulled one calendar year per request: a single
@@ -53,14 +52,16 @@ const Randata = (() => {
   // Bump when the Resources/ file layout changes: files written under a
   // different schema are ignored, forcing one full reload.
   // 3: schema 2 full loads stored each symbol's years newest first.
-  const SCHEMA = 3;
+  // 4: fx.json holds full history from the cache endpoints, not one latest bar per pair.
+  const SCHEMA = 4;
   // Re-fetch this many days behind the last synced day so bars that were still
   // intraday/partial at the previous sync get replaced, not duplicated.
   const INCREMENTAL_OVERLAP_DAYS = 3;
 
   // Per asset class: file name inside Resources/ + the key of that class inside
-  // the /finance/assets catalog payload. The five history classes are fed by
-  // the /finance/history/* endpoints; fx is live and uses /finance/fx/rates.
+  // the /finance/assets catalog payload. Every class is fed by the
+  // /finance/history/* endpoints, which Randata serves from its in-memory cache.
+  // (/finance/fx/rates reads Randata's database and fails when that is down.)
   const CLASSES = {
     index:  { file: 'indexes.json',  assetsKey: 'indexes' },
     stock:  { file: 'stocks.json',   assetsKey: 'stocks' },
@@ -69,7 +70,7 @@ const Randata = (() => {
     crypto: { file: 'cryptos.json',  assetsKey: 'crypto' },
     fx:     { file: 'fx.json',       assetsKey: 'fx_pairs' },
   };
-  const HISTORY_CLASSES = ['index', 'stock', 'etf', 'metal', 'crypto'];
+  const HISTORY_CLASSES = ['index', 'stock', 'etf', 'metal', 'crypto', 'fx'];
 
   let adapter = null;
   let cache = {};
@@ -86,14 +87,14 @@ const Randata = (() => {
     return adapter;
   }
 
-  function todayStr() {
+  function todayIsoDate() {
     return new Date().toISOString().split('T')[0];
   }
 
-  function dateAddDays(dateStr, days) {
-    const d = new Date(dateStr + 'T00:00:00Z');
-    d.setUTCDate(d.getUTCDate() + days);
-    return d.toISOString().split('T')[0];
+  function dateAddDays(dateText, days) {
+    const date = new Date(dateText + 'T00:00:00Z');
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().split('T')[0];
   }
 
   function emptyClass() {
@@ -106,11 +107,11 @@ const Randata = (() => {
 
   // Assemble the public per-class shape (synced_* bookkeeping + assets + bars)
   // from the meta file and the class file.
-  function assembleClass(cls, meta, file) {
-    const s = (meta && meta.synced && meta.synced[cls]) || null;
+  function assembleClass(assetClass, meta, file) {
+    const classSync = (meta && meta.synced && meta.synced[assetClass]) || null;
     return {
-      synced_date: s ? s.date : null,
-      synced_at: s ? s.at : null,
+      synced_date: classSync ? classSync.date : null,
+      synced_at: classSync ? classSync.at : null,
       assets: (file && file.assets) || [],
       data: (file && file.data) || {}
     };
@@ -118,9 +119,9 @@ const Randata = (() => {
 
   async function readMeta() {
     if (metaCache) return metaCache;
-    const a = await getAdapter();
+    const storageAdapter = await getAdapter();
     let content = null;
-    try { content = await a.readIn(RESOURCES_DIR, META_FILE); } catch (e) { content = null; }
+    try { content = await storageAdapter.readIn(RESOURCES_FOLDER, META_FILE); } catch (error) { content = null; }
     let meta = emptyMeta();
     if (content) {
       try {
@@ -128,45 +129,45 @@ const Randata = (() => {
         if (parsed && parsed.schema === SCHEMA && parsed.synced && typeof parsed.synced === 'object') {
           meta = parsed;
         }
-      } catch (e) { /* corrupted file */ }
+      } catch (error) { /* corrupted file */ }
     }
     metaCache = meta;
     return meta;
   }
 
   async function writeMeta(meta) {
-    const a = await getAdapter();
+    const storageAdapter = await getAdapter();
     meta.schema = SCHEMA;
-    await a.writeIn(RESOURCES_DIR, META_FILE, JSON.stringify(meta));
+    await storageAdapter.writeIn(RESOURCES_FOLDER, META_FILE, JSON.stringify(meta));
     metaCache = meta;
   }
 
-  async function readClassFile(cls) {
-    const cfg = CLASSES[cls];
-    if (!cfg) return null;
-    const a = await getAdapter();
+  async function readClassFile(assetClass) {
+    const classConfig = CLASSES[assetClass];
+    if (!classConfig) return null;
+    const storageAdapter = await getAdapter();
     let content = null;
-    try { content = await a.readIn(RESOURCES_DIR, cfg.file); } catch (e) { content = null; }
+    try { content = await storageAdapter.readIn(RESOURCES_FOLDER, classConfig.file); } catch (error) { content = null; }
     if (!content) return null;
     try {
       const parsed = JSON.parse(content);
       if (parsed && typeof parsed === 'object' && parsed.data && typeof parsed.data === 'object') {
         return { assets: parsed.assets || [], data: parsed.data || {} };
       }
-    } catch (e) { /* corrupted file */ }
+    } catch (error) { /* corrupted file */ }
     return null;
   }
 
   async function apiJson(url, timeoutMs) {
-    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs || REQUEST_TIMEOUT_MS) : null;
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = abortController ? setTimeout(() => abortController.abort(), timeoutMs || REQUEST_TIMEOUT_MS) : null;
     try {
-      const res = await fetch(url, {
+      const response = await fetch(url, {
         headers: { accept: 'application/json' },
-        signal: ctrl ? ctrl.signal : undefined
+        signal: abortController ? abortController.signal : undefined
       });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return await res.json();
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return await response.json();
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -175,9 +176,9 @@ const Randata = (() => {
   async function fetchAssets() {
     const json = await apiJson(API_BASE + '/finance/assets');
     const grouped = {};
-    Object.keys(CLASSES).forEach((cls) => {
-      const list = json[CLASSES[cls].assetsKey] || [];
-      grouped[cls] = list.map((item) => Object.assign({ class: cls }, item));
+    Object.keys(CLASSES).forEach((assetClass) => {
+      const list = json[CLASSES[assetClass].assetsKey] || [];
+      grouped[assetClass] = list.map((item) => Object.assign({ class: assetClass }, item));
     });
     return grouped;
   }
@@ -202,9 +203,9 @@ const Randata = (() => {
     const symbols = (json && json.symbols) || {};
     const bySymbol = {};
     Object.keys(symbols).forEach((symbol) => {
-      const c = symbols[symbol];
-      bySymbol[symbol] = c.date.map((date, i) => ({
-        date: date, open: c.open[i], high: c.high[i], low: c.low[i], close: c.close[i], volume: c.volume[i]
+      const columns = symbols[symbol];
+      bySymbol[symbol] = columns.date.map((date, index) => ({
+        date: date, open: columns.open[index], high: columns.high[index], low: columns.low[index], close: columns.close[index], volume: columns.volume[index]
       }));
     });
     return bySymbol;
@@ -234,17 +235,6 @@ const Randata = (() => {
     return bySymbol;
   }
 
-  async function fetchFxData() {
-    const json = await apiJson(API_BASE + '/' + FX_RATES_API);
-    const data = {};
-    (json || []).forEach((pair) => {
-      if (pair && pair.symbol && pair.latest && pair.latest.close != null) {
-        data[pair.symbol] = [pair.latest];
-      }
-    });
-    return data;
-  }
-
   // Full UTC instant (epoch ms) at which the Randata cache was last rebuilt,
   // or null when the status endpoint is unreachable. Drives the "new data
   // landed on the server" check regardless of the calendar day.
@@ -253,9 +243,9 @@ const Randata = (() => {
       const json = await apiJson(API_BASE + '/' + CACHE_STATUS_API);
       const raw = json && json.loaded_at;
       if (!raw) return null;
-      const t = new Date(raw).getTime();
-      return isNaN(t) ? null : t;
-    } catch (e) {
+      const builtAtTime = new Date(raw).getTime();
+      return isNaN(builtAtTime) ? null : builtAtTime;
+    } catch (error) {
       return null;
     }
   }
@@ -264,9 +254,9 @@ const Randata = (() => {
   // catalog (e.g. an asset removed server-side) have no class to file under.
   function buildClassBySymbol(groupedAssets) {
     const map = {};
-    HISTORY_CLASSES.forEach((cls) => {
-      ((groupedAssets || {})[cls] || []).forEach((asset) => {
-        if (asset && asset.symbol) map[asset.symbol] = cls;
+    HISTORY_CLASSES.forEach((assetClass) => {
+      ((groupedAssets || {})[assetClass] || []).forEach((asset) => {
+        if (asset && asset.symbol) map[asset.symbol] = assetClass;
       });
     });
     return map;
@@ -275,10 +265,10 @@ const Randata = (() => {
   // Split { symbol: [bars...] } into { class: { symbol: [bars...] } }.
   function groupBarsByClass(barsBySymbol, classBySymbol) {
     const byClass = {};
-    HISTORY_CLASSES.forEach((cls) => { byClass[cls] = {}; });
+    HISTORY_CLASSES.forEach((assetClass) => { byClass[assetClass] = {}; });
     Object.keys(barsBySymbol || {}).forEach((symbol) => {
-      const cls = classBySymbol[symbol];
-      if (cls) byClass[cls][symbol] = barsBySymbol[symbol];
+      const assetClass = classBySymbol[symbol];
+      if (assetClass) byClass[assetClass][symbol] = barsBySymbol[symbol];
     });
     return byClass;
   }
@@ -290,60 +280,60 @@ const Randata = (() => {
   // the series with repeated dates.
   function mergeSymbolBars(existing, incoming) {
     const byDate = {};
-    (incoming || []).forEach((b) => { if (b && b.date) byDate[b.date] = b; });
-    const kept = (existing || []).filter((b) => !(b && b.date && byDate[b.date]));
-    const added = Object.keys(byDate).map((d) => byDate[d]);
-    return kept.concat(added).sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+    (incoming || []).forEach((bar) => { if (bar && bar.date) byDate[bar.date] = bar; });
+    const kept = (existing || []).filter((bar) => !(bar && bar.date && byDate[bar.date]));
+    const added = Object.keys(byDate).map((date) => byDate[date]);
+    return kept.concat(added).sort((first, second) => (first.date < second.date ? -1 : first.date > second.date ? 1 : 0));
   }
 
   // True when the catalog lists a history symbol we have no local bars for —
   // typically a freshly onboarded asset whose backfilled history we are missing.
   function hasNewCatalogSymbols(groupedAssets, states) {
-    return HISTORY_CLASSES.some((cls) => {
-      const have = (states[cls] && states[cls].data) || {};
-      return ((groupedAssets || {})[cls] || []).some(
+    return HISTORY_CLASSES.some((assetClass) => {
+      const have = (states[assetClass] && states[assetClass].data) || {};
+      return ((groupedAssets || {})[assetClass] || []).some(
         (asset) => asset && asset.symbol && !have[asset.symbol]);
     });
   }
 
   function countRows(data) {
-    return Object.keys(data || {}).reduce((n, k) => n + (data[k] || []).length, 0);
+    return Object.keys(data || {}).reduce((total, symbol) => total + (data[symbol] || []).length, 0);
   }
 
   function summary(status, synced_date) {
     let symbols = 0;
     let rows = 0;
     const classes = {};
-    Object.keys(CLASSES).forEach((cls) => {
-      const f = cache[cls] || emptyClass();
-      classes[cls] = { synced_date: f.synced_date };
-      symbols += Object.keys(f.data || {}).length;
-      rows += countRows(f.data);
+    Object.keys(CLASSES).forEach((assetClass) => {
+      const classState = cache[assetClass] || emptyClass();
+      classes[assetClass] = { synced_date: classState.synced_date };
+      symbols += Object.keys(classState.data || {}).length;
+      rows += countRows(classState.data);
     });
     return { status: status, synced_date: synced_date, symbols: symbols, rows: rows, classes: classes };
   }
 
   async function doSync(force) {
     try {
-      const today = todayStr();
+      const today = todayIsoDate();
       const now = new Date().toISOString();
-      const a = await getAdapter();
+      const storageAdapter = await getAdapter();
       const classKeys = Object.keys(CLASSES);
 
       // The meta and class files are parsed once per page (~40 MB); afterwards
       // the in-memory copy is current, because every write goes through here.
       const meta = await readMeta();
       const states = {};
-      for (const cls of classKeys) states[cls] = cache[cls] || assembleClass(cls, meta, await readClassFile(cls));
-      const syncedOn = (cls) => (meta.synced && meta.synced[cls] && meta.synced[cls].date) || null;
+      for (const assetClass of classKeys) states[assetClass] = cache[assetClass] || assembleClass(assetClass, meta, await readClassFile(assetClass));
+      const syncedOn = (assetClass) => (meta.synced && meta.synced[assetClass] && meta.synced[assetClass].date) || null;
 
-      const stale = classKeys.filter((cls) => syncedOn(cls) !== today);
+      const stale = classKeys.filter((assetClass) => syncedOn(assetClass) !== today);
 
       // A full reload is forced by a missing/invalid meta (first run or an
       // older layout) or by a history class we never successfully loaded.
       // Day-staleness alone only needs a small incremental range pull.
       let fullNeeded = meta.schema !== SCHEMA ||
-        HISTORY_CLASSES.some((cls) => !meta.synced || !meta.synced[cls]);
+        HISTORY_CLASSES.some((assetClass) => !meta.synced || !meta.synced[assetClass]);
 
       // Everything is from today and the server was asked moments ago.
       if (!force && !stale.length && !fullNeeded && Date.now() - lastStatusCheck < STATUS_CHECK_INTERVAL_MS) {
@@ -383,19 +373,19 @@ const Randata = (() => {
           const bars = await fetchHistoryFull(today);
           const byClass = groupBarsByClass(bars, buildClassBySymbol(groupedAssets));
           let allWritten = true;
-          for (const cls of HISTORY_CLASSES) {
+          for (const assetClass of HISTORY_CLASSES) {
             try {
-              const payload = { assets: (groupedAssets && groupedAssets[cls]) || [], data: byClass[cls] || {} };
-              await a.writeIn(RESOURCES_DIR, CLASSES[cls].file, JSON.stringify(payload));
-              meta.synced[cls] = { date: today, at: now };
-              states[cls] = assembleClass(cls, meta, payload);
-              loadedNow.add(cls);
-            } catch (e) { allWritten = false; /* keep the cached file */ }
+              const payload = { assets: (groupedAssets && groupedAssets[assetClass]) || [], data: byClass[assetClass] || {} };
+              await storageAdapter.writeIn(RESOURCES_FOLDER, CLASSES[assetClass].file, JSON.stringify(payload));
+              meta.synced[assetClass] = { date: today, at: now };
+              states[assetClass] = assembleClass(assetClass, meta, payload);
+              loadedNow.add(assetClass);
+            } catch (error) { allWritten = false; /* keep the cached file */ }
           }
           if (allWritten) {
             meta.built_at = remoteBuiltAt != null ? new Date(remoteBuiltAt).toISOString() : now;
           }
-        } catch (e) { /* full load failed: keep existing files; the next sync retries it */ }
+        } catch (error) { /* full load failed: keep existing files; the next sync retries it */ }
       }
 
       // Incremental: one tail-window pull, merged into every history class.
@@ -404,72 +394,62 @@ const Randata = (() => {
       // bars (e.g. equities on a weekend) keep their file untouched. Skipped
       // when a full load was needed: a tail window would mark classes synced
       // without their history, and the full load would never be retried.
-      const pending = fullNeeded ? [] : HISTORY_CLASSES.filter((cls) =>
-        !loadedNow.has(cls) && (syncedOn(cls) !== today || rebuildDetected));
+      const pending = fullNeeded ? [] : HISTORY_CLASSES.filter((assetClass) =>
+        !loadedNow.has(assetClass) && (syncedOn(assetClass) !== today || rebuildDetected));
       if (pending.length) {
         try {
           const oldestPending = pending.map(syncedOn).filter(Boolean).sort()[0] || today;
           const bars = await fetchHistoryRange(
             dateAddDays(oldestPending, -INCREMENTAL_OVERLAP_DAYS), today);
           const byClass = groupBarsByClass(bars, buildClassBySymbol(groupedAssets));
-          for (const cls of HISTORY_CLASSES) {
-            const incoming = byClass[cls];
+          for (const assetClass of HISTORY_CLASSES) {
+            const incoming = byClass[assetClass];
             if (!incoming || !Object.keys(incoming).length) continue;
             try {
-              const cur = states[cls] || { assets: [], data: {} };
-              const data = Object.assign({}, cur.data);
-              Object.keys(incoming).forEach((sym) => {
-                data[sym] = mergeSymbolBars(data[sym] || [], incoming[sym]);
+              const current = states[assetClass] || { assets: [], data: {} };
+              const data = Object.assign({}, current.data);
+              Object.keys(incoming).forEach((symbol) => {
+                data[symbol] = mergeSymbolBars(data[symbol] || [], incoming[symbol]);
               });
               const payload = {
-                assets: (groupedAssets && groupedAssets[cls]) || cur.assets || [],
+                assets: (groupedAssets && groupedAssets[assetClass]) || current.assets || [],
                 data: data
               };
-              await a.writeIn(RESOURCES_DIR, CLASSES[cls].file, JSON.stringify(payload));
-              meta.synced[cls] = { date: today, at: now };
-              states[cls] = assembleClass(cls, meta, payload);
-              loadedNow.add(cls);
-            } catch (e) { /* keep the cached file */ }
+              await storageAdapter.writeIn(RESOURCES_FOLDER, CLASSES[assetClass].file, JSON.stringify(payload));
+              meta.synced[assetClass] = { date: today, at: now };
+              states[assetClass] = assembleClass(assetClass, meta, payload);
+              loadedNow.add(assetClass);
+            } catch (error) { /* keep the cached file */ }
           }
           // Stale classes that received no bars still count as synced for today.
-          pending.forEach((cls) => {
-            if (!loadedNow.has(cls)) meta.synced[cls] = { date: today, at: now };
+          pending.forEach((assetClass) => {
+            if (!loadedNow.has(assetClass)) meta.synced[assetClass] = { date: today, at: now };
           });
           if (remoteBuiltAt != null) meta.built_at = new Date(remoteBuiltAt).toISOString();
-        } catch (e) { /* range failed: keep the cached files; still stale tomorrow */ }
-      }
-
-      if (syncedOn('fx') !== today) {
-        try {
-          const payload = { assets: (groupedAssets && groupedAssets.fx) || [], data: await fetchFxData() };
-          await a.writeIn(RESOURCES_DIR, CLASSES.fx.file, JSON.stringify(payload));
-          meta.synced.fx = { date: today, at: now };
-          states.fx = assembleClass('fx', meta, payload);
-          loadedNow.add('fx');
-        } catch (e) { /* keep the cached file; a failed class is not fatal */ }
+        } catch (error) { /* range failed: keep the cached files; still stale tomorrow */ }
       }
 
       await writeMeta(meta);
       // Reused in-memory classes still carry the sync dates of when they were read.
-      classKeys.forEach((cls) => { states[cls] = assembleClass(cls, meta, states[cls]); });
+      classKeys.forEach((assetClass) => { states[assetClass] = assembleClass(assetClass, meta, states[assetClass]); });
       cache = states;
       if (loadedNow.size) dataVersion++;
 
       // The old combined randata.json is orphaned by the Resources/ layout.
       if (!legacyRemoved) {
         legacyRemoved = true;
-        try { await a.remove('randata.json'); } catch (e) { /* non-fatal */ }
+        try { await storageAdapter.remove('randata.json'); } catch (error) { /* non-fatal */ }
       }
 
       // Synced when at least one class is current for today, offline otherwise.
-      const anyClassCurrent = classKeys.some((cls) => syncedOn(cls) === today);
+      const anyClassCurrent = classKeys.some((assetClass) => syncedOn(assetClass) === today);
       lastResult = summary(anyClassCurrent ? 'synced' : 'offline', today);
       return lastResult;
-    } catch (e) {
+    } catch (error) {
       // The in-memory copy may be half updated: read the files again next time.
       metaCache = null;
       cache = {};
-      lastResult = { status: 'offline', error: e.message || String(e) };
+      lastResult = { status: 'offline', error: error.message || String(error) };
       return lastResult;
     }
   }
@@ -481,26 +461,26 @@ const Randata = (() => {
     return syncInFlight;
   }
 
-  async function readClass(cls) {
-    if (!CLASSES[cls]) return emptyClass();
-    if (!cache[cls]) {
+  async function readClass(assetClass) {
+    if (!CLASSES[assetClass]) return emptyClass();
+    if (!cache[assetClass]) {
       const meta = await readMeta();
-      cache[cls] = assembleClass(cls, meta, await readClassFile(cls));
+      cache[assetClass] = assembleClass(assetClass, meta, await readClassFile(assetClass));
     }
-    return cache[cls];
+    return cache[assetClass];
   }
 
   // Merged view of every class, for pages that genuinely need all of them.
   async function readFile() {
     const out = { synced_date: null, assets: [], data: {} };
-    for (const cls of Object.keys(CLASSES)) {
-      const f = await readClass(cls);
-      if (!f || !f.data) continue;
-      if (f.synced_date && (!out.synced_date || f.synced_date > out.synced_date)) {
-        out.synced_date = f.synced_date;
+    for (const assetClass of Object.keys(CLASSES)) {
+      const classData = await readClass(assetClass);
+      if (!classData || !classData.data) continue;
+      if (classData.synced_date && (!out.synced_date || classData.synced_date > out.synced_date)) {
+        out.synced_date = classData.synced_date;
       }
-      (f.assets || []).forEach((a) => { if (a && a.symbol) out.assets.push(a); });
-      Object.assign(out.data, f.data || {});
+      (classData.assets || []).forEach((asset) => { if (asset && asset.symbol) out.assets.push(asset); });
+      Object.assign(out.data, classData.data || {});
     }
     return out;
   }

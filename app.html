@@ -96,7 +96,15 @@
                     <span class="perf-btn" data-range="max">MAX</span>
                   </div>
                 </div>
-                <div class="card-gta-body"><canvas id="chart-performance" height="240"></canvas></div>
+                <div class="card-gta-body">
+                  <div class="d-flex gap-1 mb-3" id="chart-scope-selectors">
+                    <span class="perf-btn active" data-scope="performance" title="Accounts with Include in Performance">PERFORMANCE</span>
+                    <span class="perf-btn" data-scope="liquid" title="Accounts in liquid net worth">LIQUID</span>
+                    <span class="perf-btn" data-scope="netWorth" title="Accounts in net worth">NET WORTH</span>
+                  </div>
+                  <div class="perf-summary" id="perf-summary"></div>
+                  <div class="forecast-chart-wrap"><canvas id="chart-performance"></canvas></div>
+                </div>
               </div>
             </div>
             <div class="col-md-3 mb-3">
@@ -287,8 +295,8 @@
           <div class="d-flex justify-content-between align-items-center mb-4 mt-2">
             <h2 class="page-title" id="pf-detail-title">PORTFOLIO</h2>
             <div>
-              <button class="btn btn-gta me-2" onclick="App.showModal('portfolio', App.currentPfId)">EDIT</button>
-              <button class="btn btn-gta" onclick="App.showModal('account', App.currentPfId)">+ ADD ACCOUNT</button>
+              <button class="btn btn-gta me-2" onclick="App.showModal('portfolio', App.currentPortfolioId)">EDIT</button>
+              <button class="btn btn-gta" onclick="App.showModal('account', App.currentPortfolioId)">+ ADD ACCOUNT</button>
             </div>
           </div>
           <div class="row mb-4">
@@ -317,7 +325,7 @@
           <div class="d-flex justify-content-between align-items-center mb-4 mt-2">
             <h2 class="page-title" id="acc-detail-name">ACCOUNT</h2>
             <div>
-              <button class="btn btn-gta" onclick="App.showModal('account', App.currentPfId, App.currentAccId)">EDIT</button>
+              <button class="btn btn-gta" onclick="App.showModal('account', App.currentPortfolioId, App.currentAccountId)">EDIT</button>
             </div>
           </div>
           <div class="row mb-4">
@@ -394,19 +402,19 @@
             </div>
           </div>
           <div class="gap-2 mb-4 flex-wrap" id="std-actions" style="display:flex">
-            <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccId)">UPDATE VALUE</button>
-            <button class="btn btn-gta" onclick="App.showModal('deposit', App.currentAccId)">DEPOSIT</button>
-            <button class="btn btn-gta" onclick="App.showModal('withdrawal', App.currentAccId)">WITHDRAWAL</button>
-            <button class="btn btn-gta" onclick="App.showModal('opening', App.currentAccId)" title="RECORD PRE-EXISTING MONEY IN THIS ACCOUNT (NOT A NEW DEPOSIT)">OPENING VALUE</button>
-            <button class="btn btn-gta" onclick="App.recalcAccount()" title="RECOMPUTE BALANCES FROM TRANSACTION HISTORY">RECALC</button>
+            <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccountId)">UPDATE VALUE</button>
+            <button class="btn btn-gta" onclick="App.showModal('deposit', App.currentAccountId)">DEPOSIT</button>
+            <button class="btn btn-gta" onclick="App.showModal('withdrawal', App.currentAccountId)">WITHDRAWAL</button>
+            <button class="btn btn-gta" onclick="App.showModal('opening', App.currentAccountId)" title="RECORD PRE-EXISTING MONEY IN THIS ACCOUNT (NOT A NEW DEPOSIT)">OPENING VALUE</button>
+            <button class="btn btn-gta" onclick="App.recalculateAccount()" title="RECOMPUTE BALANCES FROM TRANSACTION HISTORY">RECALC</button>
           </div>
           <div class="gap-2 mb-4 flex-wrap" id="pm-actions" style="display:none">
-            <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccId)">UPDATE PRICE</button>
-            <button class="btn btn-gta" onclick="App.showModal('metal', 'buy', App.currentAccId)">BUY METAL</button>
-            <button class="btn btn-gta" onclick="App.showModal('metal', 'sell', App.currentAccId)">SELL METAL</button>
+            <button class="btn btn-gta" onclick="App.showModal('valuation', App.currentAccountId)">UPDATE PRICE</button>
+            <button class="btn btn-gta" onclick="App.showModal('metal', 'buy', App.currentAccountId)">BUY METAL</button>
+            <button class="btn btn-gta" onclick="App.showModal('metal', 'sell', App.currentAccountId)">SELL METAL</button>
           </div>
           <div class="gap-2 mb-4 flex-wrap" id="ta-actions" style="display:none">
-            <button class="btn btn-gta" onclick="App.showModal('asset', App.currentAccId)">ADD ASSET</button>
+            <button class="btn btn-gta" onclick="App.showModal('asset', App.currentAccountId)">ADD ASSET</button>
           </div>
           <div class="card-gta mb-4" id="ta-assets-card" style="display:none">
             <div class="card-gta-header">TANGIBLE ASSETS</div>
@@ -1500,19 +1508,19 @@
       Chart.defaults.plugins.tooltip.titleFont = { size: 12, family: "'Share Tech Mono', monospace" };
       Chart.defaults.plugins.tooltip.bodyFont = { size: 12, family: "'Share Tech Mono', monospace" };
     </script>
-    <script src="js/storage.js?v=6"></script>
-    <script src="js/randata.js?v=8"></script>
-    <script src="js/db.js?v=29"></script>
-    <script src="js/utils.js?v=33"></script>
-    <script src="js/valuation.js?v=4"></script>
-    <script src="js/app.js?v=36"></script>
+    <script src="js/storage.js?v=7"></script>
+    <script src="js/randata.js?v=10"></script>
+    <script src="js/db.js?v=30"></script>
+    <script src="js/utils.js?v=34"></script>
+    <script src="js/valuation.js?v=5"></script>
+    <script src="js/app.js?v=37"></script>
     <script src="js/pages-shared.js?v=28"></script>
-    <script src="js/pages-dashboard.js?v=34"></script>
-    <script src="js/pages-portfolios.js?v=32"></script>
-    <script src="js/pages-accounts.js?v=39"></script>
+    <script src="js/pages-dashboard.js?v=35"></script>
+    <script src="js/pages-portfolios.js?v=33"></script>
+    <script src="js/pages-accounts.js?v=40"></script>
     <script src="js/pages-money.js?v=30"></script>
     <script src="js/pages-goals.js?v=29"></script>
-    <script src="js/pages-market.js?v=29"></script>
-    <script src="js/pages-wallstreet.js?v=42"></script>
+    <script src="js/pages-market.js?v=30"></script>
+    <script src="js/pages-wallstreet.js?v=44"></script>
   </body>
 </html>

@@ -2,9 +2,9 @@
 const { loadScripts, assertNear, test, assert } = require('./helpers');
 
 const valuation = loadScripts(['js/utils.js', 'js/valuation.js'], [
-  'todayStr', 'capitalFlow', 'isCapitalFlow', 'netDeposit', 'savedAmount', 'latestBalance', 'costBasis', 'createValuationContext',
+  'todayIsoDate', 'capitalFlow', 'isCapitalFlow', 'netDeposit', 'savedAmount', 'latestBalance', 'costBasis', 'createValuationContext', 'valueBreakdown',
 ]);
-const today = valuation.todayStr();
+const today = valuation.todayIsoDate();
 
 const deposit = (accountId, date, amount, extra) => ({ accountId, type: 'deposit', date, amount, balanceAfter: 0, ...extra });
 
@@ -112,10 +112,58 @@ test('net worth leaves out excluded accounts; liquid net worth is a part of it',
 test('monthly returns remove the capital added during the month', () => {
   const context = sampleContext();
   const returns = context.monthlyReturns(new Set([2]));
-  assertNear(returns['2026-01'].abs, 0, 'January: 1000 EUR deposited, nothing earned');
+  assertNear(returns['2026-01'].profitLoss, 0, 'January: 1000 EUR deposited, nothing earned');
   // February: start 900 CHF (1000 EUR at 0.9), end 1100 CHF (1100 EUR at 1.0), no capital added
-  assertNear(returns['2026-02'].abs, 200, 'February result');
-  assertNear(returns['2026-02'].pct, (200 / 900) * 100, 'February percent');
+  assertNear(returns['2026-02'].profitLoss, 200, 'February result');
+  assertNear(returns['2026-02'].percent, (200 / 900) * 100, 'February percent');
+});
+
+test('value breakdown: money put in so far, and each change split into money added and gain', () => {
+  const context = sampleContext();
+  const accountIds = new Set([2]);
+  const monthTotals = context.monthEndTotals(accountIds);
+  const points = Object.keys(monthTotals).sort().map(month => ({ month, value: monthTotals[month] }));
+  const { months, summary } = valuation.valueBreakdown(points, context.monthlyReturns(accountIds));
+  // January: 1000 EUR deposited at 0.9 (900 CHF). February: worth 1100 CHF, nothing added.
+  assertNear(months[0].moneyPutIn, 900, 'January money put in');
+  assertNear(months[1].moneyPutIn, 900, 'February money put in');
+  assertNear(months[1].capitalAdded, 0, 'February money added');
+  assertNear(months[1].gain, 200, 'February gain');
+  assertNear(months[1].change, 200, 'February change');
+  assertNear(summary.startValue, 0, 'whole range starts before the first deposit');
+  assertNear(summary.capitalAdded, 900, 'whole range money added');
+  assertNear(summary.profitLoss, 200, 'whole range gain');
+
+  // A range starting in February counts January's deposit as already put in
+  const february = valuation.valueBreakdown(points.slice(1), context.monthlyReturns(accountIds));
+  assertNear(february.months[0].moneyPutIn, 900, 'money put in before the range');
+  assertNear(february.summary.startValue, 900, 'February starts at the January month-end value');
+  assertNear(february.summary.percent, (200 / 900) * 100, 'February return');
+});
+
+test('monthly values: a property counts its owned share net of the mortgage, repayments are capital', () => {
+  const context = valuation.createValuationContext({
+    accounts: [{ id: 7, name: 'House', accountType: 'Real Estate', currency: 'CHF' }],
+    transactions: [{ id: 1, accountId: 7, assetId: 4, type: 'asset-add', amount: 1000000, date: '2025-01-15', balanceAfter: 100000 }],
+    assets: [{
+      id: 4, accountId: 7, purchaseValue: 1000000, debt: 800000, ownershipPct: 50, purchaseDate: '2025-01-15', currency: 'CHF', accountType: 'Real Estate',
+      mortgageBalances: [{ date: '2025-03-10', amount: 700000 }],
+      valuations: [{ date: '2025-05-20', value: 1100000 }],
+    }],
+    rateEntries: [],
+    todaysMetalPrices: null,
+    mainCurrency: 'CHF',
+  });
+  const { totals, results } = context.monthlyValues(new Set([7]));
+  assertNear(totals['2025-01'], 100000, '1M house, 800k mortgage, 50% owned: 100k');
+  assertNear(results['2025-01'].capitalAdded, 100000, 'the purchase puts in the owned equity');
+  assertNear(results['2025-01'].profitLoss, 0, 'no gain on the purchase');
+  assertNear(totals['2025-03'], 150000, 'mortgage down to 700k: (1M - 700k) x 50%');
+  assertNear(results['2025-03'].capitalAdded, 50000, 'the 100k repayment puts in 50k');
+  assertNear(results['2025-03'].profitLoss, 0, 'a repayment is no gain');
+  assertNear(totals['2025-05'], 200000, 'valued at 1.1M: (1.1M - 700k) x 50%');
+  assertNear(results['2025-05'].profitLoss, 50000, 'the new valuation is gain');
+  assertNear(totals[today.substring(0, 7)], context.netWorth().netWorth, 'this month matches net worth');
 });
 
 test('performance since a date and recorded totals', () => {
@@ -123,7 +171,7 @@ test('performance since a date and recorded totals', () => {
   const accountIds = new Set([1]);
   const result = context.performanceSince(accountIds, '2026-02-01', 200);
   // At the cutoff: 150. Capital since: 50 deposited. End: 200. Result: 0.
-  assertNear(result.abs, 0, 'performance');
+  assertNear(result.profitLoss, 0, 'performance');
   assertNear(context.recordedTotal(accountIds, '2026-01-05'), 150, 'on the day');
   assertNear(context.recordedTotal(accountIds, '2026-01-05', true), 0, 'strictly before the day');
   assertNear(context.capitalAddedBetween(accountIds, '2026-01-01', '2026-12-31'), 150, 'deposits of 100 and 50');
@@ -145,8 +193,8 @@ test('buying or selling a property moves only the owned equity as capital', () =
     mainCurrency: 'CHF',
   });
   const returns = context.monthlyReturns(new Set([6]), { includeAssetEvents: true });
-  assertNear(returns['2024-06'].abs, 0, 'a 900k flat with a 600k mortgage at 50% brings in 150k, not 900k');
-  assertNear(returns['2024-07'].abs, 0, 'a 100k EUR studio counts at its own currency rate (90k CHF)');
+  assertNear(returns['2024-06'].profitLoss, 0, 'a 900k flat with a 600k mortgage at 50% brings in 150k, not 900k');
+  assertNear(returns['2024-07'].profitLoss, 0, 'a 100k EUR studio counts at its own currency rate (90k CHF)');
   assertNear(context.capitalInMain({ accountId: 6, assetId: 2, type: 'asset-sell', amount: 1100000 }, { includeAssetEvents: true }), -250000, 'sold for 1.1M: (1.1M - 600k) x 50% leaves');
 });
 

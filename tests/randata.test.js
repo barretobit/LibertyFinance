@@ -22,7 +22,6 @@ function loadRandata({ failYears = false } = {}) {
   const answers = {
     'finance/cache/status': { loaded_at: '2026-11-13T00:00:00Z' },
     'finance/assets': { indexes: [{ symbol: '^GSPC', name: 'S&P 500' }], stocks: [], etfs: [], precious_metals: [], crypto: [], fx_pairs: [{ symbol: 'CHFUSD=X' }] },
-    'finance/fx/rates': [{ symbol: 'CHFUSD=X', latest: { date: thisYear + '-01-03', close: 1.2 } }],
   };
   const fakeFetch = async (url) => {
     const path = url.replace('https://randata.onrender.com/', '');
@@ -36,6 +35,7 @@ function loadRandata({ failYears = false } = {}) {
       const symbols = {};
       if (yearNumber === thisYear - 1) symbols['^GSPC'] = yearColumns(yearNumber, [10, 11]);
       if (yearNumber === thisYear) symbols['^GSPC'] = yearColumns(yearNumber, [12, 13]);
+      if (yearNumber === thisYear) symbols['CHFUSD=X'] = yearColumns(yearNumber, [1.1, 1.2]);
       return { ok: true, status: 200, json: async () => ({ year: yearNumber, symbols }) };
     }
     if (path.startsWith('finance/history/range')) return { ok: true, status: 200, json: async () => ({ data: [] }) };
@@ -86,4 +86,13 @@ test('a failed full load leaves the history classes unsynced, so the next sync r
   const requestsBefore = requests.length;
   await Randata.sync();
   assert.ok(requests.slice(requestsBefore).some((path) => path.startsWith('finance/history/year/')));
+});
+
+test('fx pairs come from the cached history, not from the database-backed /finance/fx/rates', async () => {
+  const { Randata, requests } = loadRandata();
+  await Randata.sync();
+  const fx = await Randata.readClass('fx');
+  assert.deepStrictEqual(fx.data['CHFUSD=X'].map((bar) => bar.close), [1.1, 1.2]);
+  assert.strictEqual(fx.synced_date, new Date().toISOString().split('T')[0]);
+  assert.ok(!requests.some((path) => path.startsWith('finance/fx/')), 'no request to the fx endpoints');
 });

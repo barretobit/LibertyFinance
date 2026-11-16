@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = 8765;
-const PUBLIC_DIR = __dirname;
+const PUBLIC_FOLDER = __dirname;
 
 const MIME = {
   '.html': 'text/html',
@@ -27,29 +27,29 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const server = http.createServer((req, res) => {
-  const parsedUrl = new URL(req.url, 'http://localhost');
+const server = http.createServer((request, response) => {
+  const parsedUrl = new URL(request.url, 'http://localhost');
   let filePath = parsedUrl.pathname === '/' ? '/index.html' : decodeURIComponent(parsedUrl.pathname);
   filePath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
-  const fullPath = path.join(PUBLIC_DIR, filePath);
+  const fullPath = path.join(PUBLIC_FOLDER, filePath);
 
   // Prevent directory traversal
-  if (!fullPath.startsWith(PUBLIC_DIR)) {
-    res.writeHead(403);
-    res.end('Forbidden');
+  if (!fullPath.startsWith(PUBLIC_FOLDER)) {
+    response.writeHead(403);
+    response.end('Forbidden');
     return;
   }
 
-  const ext = path.extname(fullPath);
+  const extension = path.extname(fullPath);
 
-  fs.readFile(fullPath, (err, content) => {
-    if (err) {
-      res.writeHead(404);
-      res.end('Not found');
+  fs.readFile(fullPath, (error, content) => {
+    if (error) {
+      response.writeHead(404);
+      response.end('Not found');
       return;
     }
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(content);
+    response.writeHead(200, { 'Content-Type': MIME[extension] || 'application/octet-stream' });
+    response.end(content);
   });
 });
 

@@ -14,11 +14,11 @@
  */
 
 const Storage = (() => {
-  const IDB_NAME = 'liberty-finance-storage';
-  const IDB_STORE = 'kv';
+  const INDEXED_DB_NAME = 'liberty-finance-storage';
+  const INDEXED_DB_STORE = 'kv';
 
   const MODE_KEY = 'liberty-finance-mode';
-  const DIR_HANDLE_KEY = 'dir-handle';
+  const DIRECTORY_HANDLE_KEY = 'dir-handle';
   const LAST_FILE_KEY = 'liberty-finance-last-file';
   const CLASSIC_FILES_KEY = 'classic-files';
   const CLASSIC_FILE_PREFIX = 'classic-file:';
@@ -35,66 +35,66 @@ const Storage = (() => {
 
   // ==================== IndexedDB helpers ====================
 
-  function idb() {
+  function openIndexedDb() {
     return new Promise((resolve, reject) => {
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+      const request = indexedDB.open(INDEXED_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(INDEXED_DB_STORE)) database.createObjectStore(INDEXED_DB_STORE);
       };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
     });
   }
 
-  async function idbGet(key) {
-    const db = await idb();
+  async function indexedDbGet(key) {
+    const database = await openIndexedDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const req = tx.objectStore(IDB_STORE).get(key);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      const transaction = database.transaction(INDEXED_DB_STORE, 'readonly');
+      const request = transaction.objectStore(INDEXED_DB_STORE).get(key);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
     });
   }
 
-  async function idbSet(key, value) {
-    const db = await idb();
+  async function indexedDbSet(key, value) {
+    const database = await openIndexedDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).put(value, key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite');
+      transaction.objectStore(INDEXED_DB_STORE).put(value, key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
     });
   }
 
-  async function idbDel(key) {
-    const db = await idb();
+  async function indexedDbDelete(key) {
+    const database = await openIndexedDb();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).delete(key);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+      const transaction = database.transaction(INDEXED_DB_STORE, 'readwrite');
+      transaction.objectStore(INDEXED_DB_STORE).delete(key);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
     });
   }
 
   // ==================== Shared helpers ====================
 
   function timestamp() {
-    const d = new Date();
-    const p = n => String(n).padStart(2, '0');
-    return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) +
-      '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+    const now = new Date();
+    const padTwoDigits = number => String(number).padStart(2, '0');
+    return '' + now.getFullYear() + padTwoDigits(now.getMonth() + 1) + padTwoDigits(now.getDate()) +
+      '-' + padTwoDigits(now.getHours()) + padTwoDigits(now.getMinutes()) + padTwoDigits(now.getSeconds());
   }
 
   function download(name, content) {
     const blob = new Blob([content], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   }
 
@@ -117,11 +117,11 @@ const Storage = (() => {
   }
 
   function normalizeFileName(name) {
-    let n = String(name || '').trim();
-    n = n.replace(/\.json$/i, '');
-    n = n.toLowerCase().replace(/[^a-z0-9 ._-]/g, '').trim();
-    if (!n) return null;
-    return n + '.json';
+    let normalized = String(name || '').trim();
+    normalized = normalized.replace(/\.json$/i, '');
+    normalized = normalized.toLowerCase().replace(/[^a-z0-9 ._-]/g, '').trim();
+    if (!normalized) return null;
+    return normalized + '.json';
   }
 
   // ==================== Folder mode (File System Access API) ====================
@@ -133,31 +133,31 @@ const Storage = (() => {
     async connect() {
       if (this.handle) return this.handle;
 
-      const saved = await idbGet(DIR_HANDLE_KEY);
+      const saved = await indexedDbGet(DIRECTORY_HANDLE_KEY);
       if (saved) {
         try {
-          let perm = await saved.queryPermission({ mode: 'readwrite' });
-          if (perm === 'prompt') {
-            try { perm = await saved.requestPermission({ mode: 'readwrite' }); } catch (e) { /* ignored */ }
+          let permission = await saved.queryPermission({ mode: 'readwrite' });
+          if (permission === 'prompt') {
+            try { permission = await saved.requestPermission({ mode: 'readwrite' }); } catch (error) { /* ignored */ }
           }
-          if (perm === 'granted') { this.handle = saved; return saved; }
-        } catch (e) { /* fall through to a fresh pick */ }
+          if (permission === 'granted') { this.handle = saved; return saved; }
+        } catch (error) { /* fall through to a fresh pick */ }
       }
 
       if (!window.showDirectoryPicker) throw new Error('FOLDER MODE NOT SUPPORTED IN THIS BROWSER');
       const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      await idbSet(DIR_HANDLE_KEY, handle);
+      await indexedDbSet(DIRECTORY_HANDLE_KEY, handle);
       this.handle = handle;
       return handle;
     },
 
     async _fileHandle(name, create) {
-      const dir = await this.connect();
+      const directory = await this.connect();
       try {
-        return await dir.getFileHandle(name, create ? { create: true } : undefined);
-      } catch (e) {
-        if (e && e.name === 'NotFoundError') return null;
-        throw e;
+        return await directory.getFileHandle(name, create ? { create: true } : undefined);
+      } catch (error) {
+        if (error && error.name === 'NotFoundError') return null;
+        throw error;
       }
     },
 
@@ -167,77 +167,77 @@ const Storage = (() => {
     async pickNew() {
       if (!window.showDirectoryPicker) throw new Error('FOLDER MODE NOT SUPPORTED IN THIS BROWSER');
       const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-      await idbSet(DIR_HANDLE_KEY, handle);
+      await indexedDbSet(DIRECTORY_HANDLE_KEY, handle);
       this.handle = handle;
       return handle;
     },
 
     async list() {
-      const dir = await this.connect();
+      const directory = await this.connect();
       const files = [];
-      for await (const [name, handle] of dir.entries()) {
+      for await (const [name, handle] of directory.entries()) {
         if (handle.kind !== 'file') continue;
         const lower = name.toLowerCase();
         if (!lower.endsWith('.json')) continue;
         if (SharedFiles.has(lower)) continue;
-        const fh = await handle.getFile();
-        files.push({ name, size: fh.size, modified: fh.lastModified });
+        const file = await handle.getFile();
+        files.push({ name, size: file.size, modified: file.lastModified });
       }
       files.sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
       return files;
     },
 
-    async _subHandle(folder, name, create) {
-      const dir = await this.connect();
-      const sub = await dir.getDirectoryHandle(folder, create ? { create: true } : undefined);
-      return sub.getFileHandle(name, create ? { create: true } : undefined);
+    async _subfolderFileHandle(folder, name, create) {
+      const directory = await this.connect();
+      const subfolder = await directory.getDirectoryHandle(folder, create ? { create: true } : undefined);
+      return subfolder.getFileHandle(name, create ? { create: true } : undefined);
     },
 
     async read(name) {
-      const fh = await this._fileHandle(name, false);
-      if (!fh) return null;
-      const file = await fh.getFile();
+      const fileHandle = await this._fileHandle(name, false);
+      if (!fileHandle) return null;
+      const file = await fileHandle.getFile();
       return await file.text();
     },
 
     async write(name, json) {
-      const fh = await this._fileHandle(name, true);
-      const w = await fh.createWritable();
-      await w.write(json);
-      await w.close();
+      const fileHandle = await this._fileHandle(name, true);
+      const writable = await fileHandle.createWritable();
+      await writable.write(json);
+      await writable.close();
     },
 
     async remove(name) {
-      const dir = await this.connect();
-      await dir.removeEntry(name);
+      const directory = await this.connect();
+      await directory.removeEntry(name);
     },
 
     async readIn(folder, name) {
       try {
-        const fh = await this._subHandle(folder, name, false);
-        if (!fh) return null;
-        const file = await fh.getFile();
+        const fileHandle = await this._subfolderFileHandle(folder, name, false);
+        if (!fileHandle) return null;
+        const file = await fileHandle.getFile();
         return await file.text();
-      } catch (e) {
-        if (e && e.name === 'NotFoundError') return null;
-        throw e;
+      } catch (error) {
+        if (error && error.name === 'NotFoundError') return null;
+        throw error;
       }
     },
 
     async writeIn(folder, name, json) {
-      const fh = await this._subHandle(folder, name, true);
-      const w = await fh.createWritable();
-      await w.write(json);
-      await w.close();
+      const fileHandle = await this._subfolderFileHandle(folder, name, true);
+      const writable = await fileHandle.createWritable();
+      await writable.write(json);
+      await writable.close();
     },
 
     async removeIn(folder, name) {
-      const dir = await this.connect();
-      let sub = dir;
+      const directory = await this.connect();
+      let subfolder = directory;
       try {
-        sub = await dir.getDirectoryHandle(folder);
-        await sub.removeEntry(name);
-      } catch (e) { /* already gone */ }
+        subfolder = await directory.getDirectoryHandle(folder);
+        await subfolder.removeEntry(name);
+      } catch (error) { /* already gone */ }
     },
 
     async backup(name, json) {
@@ -267,12 +267,12 @@ const Storage = (() => {
     async connect() { return true; },
 
     async list() {
-      const names = (await idbGet(CLASSIC_FILES_KEY)) || [];
+      const names = (await indexedDbGet(CLASSIC_FILES_KEY)) || [];
       const files = [];
       for (const name of names) {
         if (SharedFiles.has(name.toLowerCase())) continue;
         if (name.indexOf('/') !== -1) continue; // never show files inside folders
-        const meta = await idbGet(CLASSIC_FILE_PREFIX + 'meta:' + name);
+        const meta = await indexedDbGet(CLASSIC_FILE_PREFIX + 'meta:' + name);
         files.push({ name, size: meta ? meta.size : 0, modified: meta ? meta.modified : 0 });
       }
       files.sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
@@ -280,45 +280,45 @@ const Storage = (() => {
     },
 
     async read(name) {
-      return (await idbGet(CLASSIC_FILE_PREFIX + name)) || null;
+      return (await indexedDbGet(CLASSIC_FILE_PREFIX + name)) || null;
     },
 
     async write(name, json) {
-      await idbSet(CLASSIC_FILE_PREFIX + name, json);
-      await idbSet(CLASSIC_FILE_PREFIX + 'meta:' + name, { size: (json || '').length, modified: Date.now() });
-      const names = (await idbGet(CLASSIC_FILES_KEY)) || [];
+      await indexedDbSet(CLASSIC_FILE_PREFIX + name, json);
+      await indexedDbSet(CLASSIC_FILE_PREFIX + 'meta:' + name, { size: (json || '').length, modified: Date.now() });
+      const names = (await indexedDbGet(CLASSIC_FILES_KEY)) || [];
       if (!names.includes(name)) {
         names.push(name);
-        await idbSet(CLASSIC_FILES_KEY, names);
+        await indexedDbSet(CLASSIC_FILES_KEY, names);
       }
     },
 
     async remove(name) {
-      await idbDel(CLASSIC_FILE_PREFIX + name);
-      await idbDel(CLASSIC_FILE_PREFIX + 'meta:' + name);
-      const names = ((await idbGet(CLASSIC_FILES_KEY)) || []).filter(n => n !== name);
-      await idbSet(CLASSIC_FILES_KEY, names);
+      await indexedDbDelete(CLASSIC_FILE_PREFIX + name);
+      await indexedDbDelete(CLASSIC_FILE_PREFIX + 'meta:' + name);
+      const names = ((await indexedDbGet(CLASSIC_FILES_KEY)) || []).filter(fileName => fileName !== name);
+      await indexedDbSet(CLASSIC_FILES_KEY, names);
     },
 
     async readIn(folder, name) {
-      return (await idbGet(CLASSIC_FILE_PREFIX + folder + '/' + name)) || null;
+      return (await indexedDbGet(CLASSIC_FILE_PREFIX + folder + '/' + name)) || null;
     },
 
     async writeIn(folder, name, json) {
       // Files inside folders live outside the profile picker, so they are stored
       // with a path-mirroring key and never registered in the profile list.
-      await idbSet(CLASSIC_FILE_PREFIX + folder + '/' + name, json);
+      await indexedDbSet(CLASSIC_FILE_PREFIX + folder + '/' + name, json);
     },
 
     async removeIn(folder, name) {
-      await idbDel(CLASSIC_FILE_PREFIX + folder + '/' + name);
+      await indexedDbDelete(CLASSIC_FILE_PREFIX + folder + '/' + name);
     },
 
     async backup(name, json) {
-      const list = (await idbGet(CLASSIC_BACKUPS_PREFIX + name)) || [];
+      const list = (await indexedDbGet(CLASSIC_BACKUPS_PREFIX + name)) || [];
       list.push({ at: timestamp(), json });
       while (list.length > MAX_BACKUPS) list.shift();
-      await idbSet(CLASSIC_BACKUPS_PREFIX + name, list);
+      await indexedDbSet(CLASSIC_BACKUPS_PREFIX + name, list);
     }
   };
 
@@ -351,7 +351,7 @@ const Storage = (() => {
 
   // Pass an opened file through navigation (classic mode: index -> app)
   function setPendingOpen(entry) {
-    try { sessionStorage.setItem(PENDING_OPEN_KEY, JSON.stringify(entry)); } catch (e) { /* ignored */ }
+    try { sessionStorage.setItem(PENDING_OPEN_KEY, JSON.stringify(entry)); } catch (error) { /* ignored */ }
   }
 
   function consumePendingOpen() {
@@ -359,7 +359,7 @@ const Storage = (() => {
       const raw = sessionStorage.getItem(PENDING_OPEN_KEY);
       sessionStorage.removeItem(PENDING_OPEN_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch (e) { return null; }
+    } catch (error) { return null; }
   }
 
   // Carry the reason a profile could not be opened back to the picker page (app -> index)
@@ -378,8 +378,8 @@ const Storage = (() => {
   async function pickNewFolder() {
     // Opening a folder is always a deliberate, gesture-driven act: force the
     // picker even if a handle from a previous session exists.
-    const a = await setMode('dir');
-    return a.pickNew();
+    const folderAdapter = await setMode('dir');
+    return folderAdapter.pickNew();
   }
 
   return {

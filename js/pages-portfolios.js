@@ -215,7 +215,7 @@ Object.assign(Pages, {
         </div>
         <div class="acc-meta"><span class="type-badge type-${escapeHtml(accountType.replace(/\s+/g, '-').toLowerCase())}">${escapeHtml(accountType)}</span> &middot; ${escapeHtml(custodianNames[account.custodianId] || '—')} &middot; ${escapeHtml(account.currency || 'CHF')}${metaExtra}</div>
         <div class="acc-value">${formatCurrency(value, account.currency)}</div>
-        <div class="acc-pl ${plClass(profitLoss)}">${signedCurrency(profitLoss, account.currency)}<span class="acc-pl-pct">${profitLossPercent != null ? signedPercent(profitLossPercent, 2) : '&mdash;'}</span></div>
+        <div class="acc-pl ${profitLossClass(profitLoss)}">${signedCurrency(profitLoss, account.currency)}<span class="acc-pl-pct">${profitLossPercent != null ? signedPercent(profitLossPercent, 2) : '&mdash;'}</span></div>
       </div>`;
       list.appendChild(column);
     });

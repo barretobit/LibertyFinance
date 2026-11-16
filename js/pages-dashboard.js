@@ -192,8 +192,8 @@ Object.assign(Pages, {
 
     const valueElement = document.getElementById('dash-perf-value');
     const show = (result) => {
-      valueElement.innerHTML = signedCurrency(result.abs, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(result.pct, 2) + ')</span>';
-      valueElement.style.color = profitLossColor(result.abs);
+      valueElement.innerHTML = signedCurrency(result.profitLoss, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(result.percent, 2) + ')</span>';
+      valueElement.style.color = profitLossColor(result.profitLoss);
     };
     const activeButton = document.querySelector('#perf-selectors .perf-btn.active');
     show(resultBySelector[activeButton ? activeButton.dataset.perf : 'ytd']);
@@ -207,14 +207,16 @@ Object.assign(Pages, {
     });
   },
 
-  // The chart range selector re-renders the whole dashboard
+  // The chart range and account scope selectors re-render the whole dashboard
   _bindDashboardChartRange() {
-    document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(button => {
-      button.onclick = function () {
-        document.querySelectorAll('#chart-range-selectors .perf-btn').forEach(other => other.classList.remove('active'));
-        this.classList.add('active');
-        Pages.dashboard();
-      };
+    ['#chart-range-selectors', '#chart-scope-selectors'].forEach(group => {
+      document.querySelectorAll(group + ' .perf-btn').forEach(button => {
+        button.onclick = function () {
+          document.querySelectorAll(group + ' .perf-btn').forEach(other => other.classList.remove('active'));
+          this.classList.add('active');
+          Pages.dashboard();
+        };
+      });
     });
   },
 
@@ -246,7 +248,7 @@ Object.assign(Pages, {
 
       const result = monthlyResults[month];
       const resultHtml = result
-        ? cardValueHtml(formatCurrency(result.abs, mainCurrency) + ' (' + (result.abs >= 0 ? '+' : '') + result.pct.toFixed(2) + '%)', profitLossColor(result.abs))
+        ? cardValueHtml(formatCurrency(result.profitLoss, mainCurrency) + ' (' + (result.profitLoss >= 0 ? '+' : '') + result.percent.toFixed(2) + '%)', profitLossColor(result.profitLoss))
         : cardValueHtml('N/A', MISSING_VALUE_COLOR);
       const savingsRate = income > 0 ? (netIncome / income) * 100 : null;
       const savingsRateHtml = savingsRate === null
@@ -322,7 +324,7 @@ Object.assign(Pages, {
     const returns = context.monthlyReturns(liquidAccountIds, { includeAssetEvents: true });
     let returnMonths = Object.keys(returns).filter(month => month < currentMonth).sort();
     if (returnMonths.length === 0) returnMonths = Object.keys(returns).sort();
-    const rates = returnMonths.slice(-12).map(month => returns[month].pct / 100);
+    const rates = returnMonths.slice(-12).map(month => returns[month].percent / 100);
 
     const hasData = rates.length > 0 && liquidCurrentTotal > 0;
     emptyMessage.style.display = hasData ? 'none' : 'block';
@@ -390,12 +392,12 @@ Object.assign(Pages, {
     const growthElement = document.getElementById('forecast-growth');
     if (growthElement) {
       growthElement.innerHTML = signedCurrency(growthAmount, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(growthPercent, 2) + ')</span>';
-      growthElement.className = 'stat-value forecast-stat ' + plClass(growthAmount);
+      growthElement.className = 'stat-value forecast-stat ' + profitLossClass(growthAmount);
     }
     const returnElement = document.getElementById('forecast-roi');
     if (returnElement) {
       returnElement.innerHTML = signedPercent(meanMonthlyReturn * 100, 2) + ' <span class="perf-pct">+/&minus;' + (standardDeviation * 100).toFixed(2) + '%</span>';
-      returnElement.className = 'stat-value forecast-stat ' + plClass(meanMonthlyReturn);
+      returnElement.className = 'stat-value forecast-stat ' + profitLossClass(meanMonthlyReturn);
     }
 
     const projectionDataset = (label, data, color) => ({
@@ -591,7 +593,7 @@ Object.assign(Pages, {
         cardLineHtml('TOTAL SAVED' + infoIconHtml('Deposits minus withdrawals made into all accounts during the year'), cardValueHtml(formatCurrency(stats.totalSaved, mainCurrency))) +
         cardLineHtml('CAPITAL DEPLOYMENT' + infoIconHtml(CAPITAL_DEPLOYMENT_INFO), cardValueHtml(stats.capitalDeployment === null ? 'N/A' : stats.capitalDeployment.toFixed(1) + '%', POSITIVE_COLOR)) +
         cardLineHtml('INVESTMENTS PERFORMANCE' + infoIconHtml('Gain in investment accounts relative to capital deployed. Formula: (value EoY - value BoY - net flows) ÷ (value BoY + net flows) × 100'),
-          cardValueHtml(signedCurrency(result.abs, mainCurrency) + ' (' + signedPercent(result.pct, 2) + ')', profitLossColor(result.abs))) +
+          cardValueHtml(signedCurrency(result.profitLoss, mainCurrency) + ' (' + signedPercent(result.percent, 2) + ')', profitLossColor(result.profitLoss))) +
         cardLineHtml('TWR' + infoIconHtml('Time-weighted return: isolates market performance by removing the effect of cash flow timing. Best measure to compare against an index.'), returnHtml(stats.timeWeightedReturn)) +
         cardLineHtml('MWR' + infoIconHtml('Money-weighted return (IRR): accounts for the size and timing of every deposit/withdrawal, weighted by how long money was invested. Best measure of your personal experience.'), returnHtml(stats.moneyWeightedReturn)) +
         cardLineHtml('NET WORTH EoY', cardValueHtml(formatCurrency(stats.netWorth, mainCurrency))) +
@@ -667,16 +669,28 @@ Object.assign(Pages, {
   _renderDashboardValueCharts({ context, mainCurrency, performanceAccountIds }) {
     const activeRange = document.querySelector('#chart-range-selectors .perf-btn.active');
     const range = activeRange ? activeRange.dataset.range : '1y';
+    // "Performance over time" shows the accounts of the chosen scope
+    const activeScope = document.querySelector('#chart-scope-selectors .perf-btn.active');
+    const accountIdsWhere = isIncluded => new Set(context.accounts.filter(isIncluded).map(account => account.id));
+    const scopeAccountIds = {
+      performance: () => performanceAccountIds,
+      liquid: () => accountIdsWhere(context.isLiquidAccount),
+      netWorth: () => accountIdsWhere(account => account.includeInNetWorth !== false),
+    }[activeScope ? activeScope.dataset.scope : 'performance']();
     const performanceCanvas = document.getElementById('chart-performance');
-    if (performanceCanvas) this._renderDashboardRangeChart(context, mainCurrency, performanceCanvas, 'performance', performanceAccountIds, range, readAccent(), {});
+    if (performanceCanvas) this._renderDashboardRangeChart(context, mainCurrency, performanceCanvas, 'performance', scopeAccountIds, range, readAccent(), { breakdown: true });
     const investmentCanvas = document.getElementById('chart-investment');
     if (investmentCanvas) this._renderDashboardRangeChart(context, mainCurrency, investmentCanvas, 'investment', performanceAccountIds, range, '#33ccff', { percent: true, average: true });
   },
 
   // One point per month: the end-of-month total value, or with `percent` the
   // month's investment result in %. `average` adds a dashed average line.
-  _renderDashboardRangeChart(context, mainCurrency, canvas, chartKey, accountIds, range, color, { percent = false, average = false }) {
-    const monthTotals = context.monthEndTotals(accountIds);
+  // `breakdown` adds a money-put-in line, the range summary and the month's
+  // change split into money added and gain in the tooltip.
+  _renderDashboardRangeChart(context, mainCurrency, canvas, chartKey, accountIds, range, color, { percent = false, average = false, breakdown = false }) {
+    // The breakdown values every month, asset accounts from their assets (valuations and mortgage included)
+    const series = breakdown ? context.monthlyValues(accountIds) : null;
+    const monthTotals = series ? series.totals : context.monthEndTotals(accountIds);
     const currentTotal = context.replayBalances(accountIds, () => {});
     let points = Object.entries(monthTotals).map(([month, value]) => ({ month, value }));
 
@@ -700,13 +714,12 @@ Object.assign(Pages, {
     if (points.length === 0) points.push({ month: currentMonth, value: currentTotal || 0 });
 
     const labels = points.map(point => shortMonthLabel(point.month));
-    let values;
-    if (percent) {
-      const monthlyResults = context.monthlyReturns(accountIds);
-      values = points.map(point => (monthlyResults[point.month] != null ? monthlyResults[point.month].pct : 0));
-    } else {
-      values = points.map(point => point.value);
-    }
+    const monthlyResults = series ? series.results : percent ? context.monthlyReturns(accountIds) : {};
+    const values = percent
+      ? points.map(point => (monthlyResults[point.month] != null ? monthlyResults[point.month].percent : 0))
+      : points.map(point => point.value);
+    const valueSplit = breakdown ? valueBreakdown(points, monthlyResults) : null;
+    if (valueSplit) this._renderDashboardRangeSummary(valueSplit.summary, mainCurrency);
 
     const datasets = [{
       label: percent ? 'MONTHLY P/L %' : 'TOTAL VALUE',
@@ -724,8 +737,22 @@ Object.assign(Pages, {
       const averageValue = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
       datasets.push({ label: 'AVG', data: values.map(() => averageValue), borderColor: '#ffaa00', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, pointHitRadius: 12, fill: false, tension: 0 });
     }
+    if (valueSplit) {
+      datasets.push({ label: 'MONEY PUT IN', data: valueSplit.months.map(month => month.moneyPutIn), borderColor: '#aaaaaa', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, fill: false, tension: 0 });
+    }
 
     const formatValue = percent ? value => value.toFixed(2) + '%' : value => formatCurrency(value, mainCurrency);
+    // The month's change in value, split into money added and investment gain
+    const changeLines = items => {
+      if (!valueSplit || !items.length) return [];
+      const month = valueSplit.months[items[0].dataIndex];
+      return [
+        '',
+        'CHANGE: ' + signedCurrency(month.change, mainCurrency),
+        '  MONEY ADDED: ' + signedCurrency(month.capitalAdded, mainCurrency),
+        '  GAIN: ' + signedCurrency(month.gain, mainCurrency) + ' (' + signedPercent(month.percent, 2) + ')',
+      ];
+    };
     App._charts[chartKey] = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: { labels, datasets },
@@ -733,12 +760,15 @@ Object.assign(Pages, {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        // One tooltip for both lines of a month, wherever the mouse is on its column
+        interaction: breakdown ? { mode: 'index', intersect: false } : undefined,
         plugins: {
-          legend: { display: average, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: CHART_FONT } } },
+          legend: { display: average || breakdown, labels: { color: '#aaa', boxWidth: 14, font: { size: 11, family: CHART_FONT } } },
           tooltip: {
             callbacks: {
               title: items => (items.length ? labels[items[0].dataIndex] : ''),
-              label: item => (item.datasetIndex === 1 && average ? 'AVG: ' : item.dataset.label + ': ') + formatValue(item.parsed.y),
+              label: item => item.dataset.label + ': ' + formatValue(item.parsed.y),
+              afterBody: changeLines,
             },
           },
         },
@@ -748,6 +778,20 @@ Object.assign(Pages, {
         },
       },
     });
+  },
+
+  // Start and end value of the chart range, and the change split into money added and gain
+  _renderDashboardRangeSummary(summary, mainCurrency) {
+    const element = document.getElementById('perf-summary');
+    if (!element) return;
+    const item = (label, valueHtml, color) =>
+      '<div class="perf-summary-item"><span class="perf-summary-label">' + label + '</span>' +
+      '<span class="perf-summary-value"' + (color ? ' style="color:' + color + '"' : '') + '>' + valueHtml + '</span></div>';
+    element.innerHTML =
+      item('START', formatCurrency(summary.startValue, mainCurrency)) +
+      item('END', formatCurrency(summary.endValue, mainCurrency)) +
+      item('MONEY ADDED', signedCurrency(summary.capitalAdded, mainCurrency)) +
+      item('GAIN', signedCurrency(summary.profitLoss, mainCurrency) + ' <span class="perf-pct">(' + signedPercent(summary.percent, 2) + ')</span>', profitLossColor(summary.profitLoss));
   },
 
   // Chart.js plugin: fills the area between the line and zero, green above and red below
@@ -821,7 +865,7 @@ Object.assign(Pages, {
       monthData.push({ key: month, label: shortMonthLabel(month), netIncome: income - monthExpenses(expenses, month, context.rateToMain), totalSaved });
     });
     // Months left out by the user, kept for the session
-    const excludedMonths = (App._srExcludedMonths = App._srExcludedMonths || new Set());
+    const excludedMonths = (App._savingsRateExcludedMonths = App._savingsRateExcludedMonths || new Set());
 
     const render = (animate = true) => {
       if (App._charts.savingsRate) { try { App._charts.savingsRate.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.savingsRate; }

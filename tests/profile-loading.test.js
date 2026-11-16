@@ -74,7 +74,7 @@ test('a batch writes the profile once, however many records change', async () =>
   const { DB, files, writes } = await openProfile({ browserCopy: profile('Old') });
   await DB.batch(async () => {
     for (let number = 0; number < 50; number++) await DB.add('custodians', { name: 'Custodian ' + number });
-    await DB.batch(async () => DB.del('custodians', 1)); // nested batches write with the outer one
+    await DB.batch(async () => DB.remove('custodians', 1)); // nested batches write with the outer one
   });
   assert.deepStrictEqual(writes, ['profile.json']);
   assert.strictEqual(JSON.parse(files['profile.json']).custodians.length, 50);

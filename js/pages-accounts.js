@@ -195,7 +195,7 @@ Object.assign(Pages, {
       const result = periodResult(atStart.value, atEnd.value + realizedInPeriod, capitalAdded);
       // Percent of the equity held over the period: a sale's capital leaving does not shrink the base
       const base = atStart.value + Math.max(0, capitalAdded);
-      return { abs: result.abs, pct: base > 0 ? (result.abs / base) * 100 : 0, startValue: atStart.value, deposited: capitalAdded };
+      return { profitLoss: result.profitLoss, percent: base > 0 ? (result.profitLoss / base) * 100 : 0, startValue: atStart.value, deposited: capitalAdded };
     }
     let startValue = 0;
     let capitalAdded = 0;
@@ -220,10 +220,10 @@ Object.assign(Pages, {
     initialElement.textContent = formatCurrency(result.startValue, currency);
     actualElement.textContent = formatCurrency(page.currentValue, currency);
     inputElement.textContent = formatCurrency(result.deposited, currency);
-    profitLossElement.textContent = signedCurrency(result.abs, currency);
-    profitLossElement.style.color = profitLossColor(result.abs);
-    percentElement.textContent = signedPercent(result.pct, 2);
-    percentElement.style.color = profitLossColor(result.abs);
+    profitLossElement.textContent = signedCurrency(result.profitLoss, currency);
+    profitLossElement.style.color = profitLossColor(result.profitLoss);
+    percentElement.textContent = signedPercent(result.percent, 2);
+    percentElement.style.color = profitLossColor(result.profitLoss);
   },
 
   // Month-end values of the account from the period start. Recorded accounts also
@@ -264,7 +264,7 @@ Object.assign(Pages, {
     const canvas = document.getElementById('acc-perf-chart');
     const emptyMessage = document.getElementById('acc-perf-chart-empty');
     if (!wrap || !canvas || !emptyMessage) return;
-    if (App._charts.accPerfChart) { try { App._charts.accPerfChart.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.accPerfChart; }
+    if (App._charts.accountPerformanceChart) { try { App._charts.accountPerformanceChart.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.accountPerformanceChart; }
 
     const points = this._accountMonthlyPoints(page, page.periodStarts[period] || page.periodStarts.ytd);
     wrap.style.display = points.length < 2 ? 'none' : '';
@@ -272,7 +272,7 @@ Object.assign(Pages, {
     if (points.length < 2) return;
 
     const currency = page.account.currency;
-    App._charts.accPerfChart = new Chart(canvas.getContext('2d'), {
+    App._charts.accountPerformanceChart = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
         labels: points.map(point => shortMonthLabel(point.month)),
@@ -317,7 +317,7 @@ Object.assign(Pages, {
     const canvas = document.getElementById('acc-index-chart');
     const emptyMessage = document.getElementById('acc-index-chart-empty');
     if (!section || !wrap || !canvas || !emptyMessage) return;
-    if (App._charts.accIndexChart) { try { App._charts.accIndexChart.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.accIndexChart; }
+    if (App._charts.accountIndexChart) { try { App._charts.accountIndexChart.destroy(); } catch (error) { /* already destroyed */ } delete App._charts.accountIndexChart; }
 
     const startDate = page.periodStarts[period] || page.periodStarts.ytd;
     const points = this._accountMonthlyPoints(page, startDate);
@@ -364,7 +364,7 @@ Object.assign(Pages, {
     section.style.display = '';
     wrap.style.display = '';
     emptyMessage.style.display = 'none';
-    App._charts.accIndexChart = new Chart(canvas.getContext('2d'), {
+    App._charts.accountIndexChart = new Chart(canvas.getContext('2d'), {
       type: 'line',
       data: {
         labels: months.map(shortMonthLabel),
@@ -493,13 +493,13 @@ Object.assign(Pages, {
     sorted.forEach(asset => {
       const assetCurrency = asset.currency || 'CHF';
       const assetId = Number(asset.id);
-      const realized = assetRealizedPL(asset);
+      const realized = assetRealizedProfitLoss(asset);
       const valueHtml = asset.sold
         ? '<span class="text-muted">—</span>'
-        : formatCurrency(assetCurrentValue(asset, todayStr()), assetCurrency);
+        : formatCurrency(assetCurrentValue(asset, todayIsoDate()), assetCurrency);
       const profitLossHtml = realized == null
         ? '<span class="text-muted">—</span>'
-        : '<span class="ta-pl ' + plClass(realized) + '">' + signedCurrency(realized, assetCurrency) + '</span>';
+        : '<span class="ta-pl ' + profitLossClass(realized) + '">' + signedCurrency(realized, assetCurrency) + '</span>';
       const editLink = '<a class="tx-link me-2" onclick="App.showModal(\'asset\', ' + Number(asset.accountId) + ', ' + assetId + ')">EDIT</a>';
       const deleteLink = '<a class="tx-link" onclick="App.deleteAsset(' + assetId + ')">DELETE</a>';
       const sellLink = '<a class="tx-link me-2" onclick="App.showModal(\'sellAsset\', ' + assetId + ')">SELL</a>';
@@ -516,7 +516,7 @@ Object.assign(Pages, {
         <td>${escapeHtml(assetCurrency)}</td>
         <td>${escapeHtml(asset.depreciationPct || 0)}%</td>
         <td>${valueHtml}</td>
-        ${isRealEstate ? '<td>' + (asset.sold ? '<span class="text-muted">—</span>' : formatCurrency(assetMortgage(asset, todayStr()), assetCurrency)) + '</td>' : ''}
+        ${isRealEstate ? '<td>' + (asset.sold ? '<span class="text-muted">—</span>' : formatCurrency(assetMortgage(asset, todayIsoDate()), assetCurrency)) + '</td>' : ''}
         <td>${asset.sold ? '<span class="tx-badge withdrawal">SOLD</span>' : '<span class="tx-badge deposit">HELD</span>'}</td>
         <td>${profitLossHtml}</td>
         <td>${actionsHtml}</td>`;

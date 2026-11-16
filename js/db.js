@@ -135,9 +135,9 @@ const DB = (() => {
   // On failure the guard resets so a later call can retry.
   function load() {
     if (!loadPromise) {
-      loadPromise = doLoad().catch(err => {
+      loadPromise = doLoad().catch(error => {
         loadPromise = null;
-        throw err;
+        throw error;
       });
     }
     return loadPromise;
@@ -200,26 +200,26 @@ const DB = (() => {
 
   async function add(store, item) {
     if (!loaded) await load();
-    const arr = getStore(store);
-    const maxId = arr.reduce((max, i) => Math.max(max, Number(i.id) || 0), 0);
+    const records = getStore(store);
+    const maxId = records.reduce((max, record) => Math.max(max, Number(record.id) || 0), 0);
     item.id = maxId + 1;
-    arr.push(item);
+    records.push(item);
     await persist();
     return item.id;
   }
 
   async function put(store, item) {
     if (!loaded) await load();
-    const arr = getStore(store);
-    const idx = arr.findIndex(i => Number(i.id) === Number(item.id));
-    if (idx >= 0) arr[idx] = item;
+    const records = getStore(store);
+    const index = records.findIndex(record => Number(record.id) === Number(item.id));
+    if (index >= 0) records[index] = item;
     await persist();
     return item.id;
   }
 
-  async function del(store, id) {
+  async function remove(store, id) {
     if (!loaded) await load();
-    data[store] = getStore(store).filter(i => Number(i.id) !== Number(id));
+    data[store] = getStore(store).filter(record => Number(record.id) !== Number(id));
     await persist();
   }
 
@@ -236,26 +236,26 @@ const DB = (() => {
 
   async function getRatesForDate(date) {
     if (!loaded) await load();
-    return market.exchangeRates.find(r => r.date === date) || null;
+    return market.exchangeRates.find(entry => entry.date === date) || null;
   }
 
   async function saveRatesForDate(date, rates) {
     if (!loaded) await load();
-    const idx = market.exchangeRates.findIndex(r => r.date === date);
-    if (idx >= 0) market.exchangeRates[idx] = { date, rates };
+    const index = market.exchangeRates.findIndex(entry => entry.date === date);
+    if (index >= 0) market.exchangeRates[index] = { date, rates };
     else market.exchangeRates.push({ date, rates });
     await saveMarket();
   }
 
   async function getMetalPricesForDate(date) {
     if (!loaded) await load();
-    return market.metalPrices.find(r => r.date === date) || null;
+    return market.metalPrices.find(entry => entry.date === date) || null;
   }
 
   async function saveMetalPricesForDate(date, prices) {
     if (!loaded) await load();
-    const idx = market.metalPrices.findIndex(r => r.date === date);
-    if (idx >= 0) market.metalPrices[idx] = { date, prices };
+    const index = market.metalPrices.findIndex(entry => entry.date === date);
+    if (index >= 0) market.metalPrices[index] = { date, prices };
     else market.metalPrices.push({ date, prices });
     await saveMarket();
   }
@@ -293,5 +293,5 @@ const DB = (() => {
     return 'dir';
   }
 
-  return { open, batch, getAll, getById, getByIndex, add, put, del, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, saveFile, get currentFile() { return DATA_FILE || ''; } };
+  return { open, batch, getAll, getById, getByIndex, add, put, remove, exportAll, importAll, getSettings, saveSettings, getRatesForDate, saveRatesForDate, getMetalPricesForDate, saveMetalPricesForDate, saveFile, get currentFile() { return DATA_FILE || ''; } };
 })();

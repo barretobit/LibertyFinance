@@ -132,18 +132,18 @@
       </div>
     </div>
 
-    <script src="js/storage.js?v=6"></script>
-    <script src="js/utils.js?v=33"></script>
+    <script src="js/storage.js?v=7"></script>
+    <script src="js/utils.js?v=34"></script>
     <script>
       const LAST_FILE_KEY = Storage.LAST_FILE_KEY;
       const EMPTY_DATA = { custodians: [], portfolios: [], accounts: [], transactions: [], assets: [], incomes: [], expenses: [], debts: [], goals: [], settings: { mainCurrency: 'CHF', borderRadius: 10, accentColor: '#33ff33' } };
       let selected = localStorage.getItem(LAST_FILE_KEY);
       let folderConnected = false;
 
-      const statusEl = () => document.getElementById("landing-status");
-      const listEl = () => document.getElementById("file-list");
-      const modeNoteEl = () => document.getElementById("landing-mode-note");
-      const actionsEl = () => document.getElementById("landing-actions");
+      const statusElement = () => document.getElementById("landing-status");
+      const fileListElement = () => document.getElementById("file-list");
+      const modeNoteElement = () => document.getElementById("landing-mode-note");
+      const actionsElement = () => document.getElementById("landing-actions");
 
       function formatSize(bytes) {
         if (bytes < 1024) return bytes + " B";
@@ -151,16 +151,16 @@
         return (bytes / 1048576).toFixed(1) + " MB";
       }
 
-      function formatModified(ts) {
-        if (!ts) return "—";
-        const d = new Date(ts);
-        return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+      function formatModified(timestamp) {
+        if (!timestamp) return "—";
+        const date = new Date(timestamp);
+        return date.toLocaleString(undefined, { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
       }
 
       function selectFile(name) {
         selected = name;
-        document.querySelectorAll(".file-row").forEach((r) => {
-          r.classList.toggle("selected", r.dataset.file === name);
+        document.querySelectorAll(".file-row").forEach((row) => {
+          row.classList.toggle("selected", row.dataset.file === name);
         });
       }
 
@@ -171,16 +171,16 @@
       }
 
       function addAction(label, id) {
-        const btn = document.createElement("button");
-        btn.className = "btn-enter sm";
-        btn.id = id;
-        btn.textContent = label;
-        actionsEl().appendChild(btn);
-        return btn;
+        const button = document.createElement("button");
+        button.className = "btn-enter sm";
+        button.id = id;
+        button.textContent = label;
+        actionsElement().appendChild(button);
+        return button;
       }
 
       function renderActions(mode) {
-        const actions = actionsEl();
+        const actions = actionsElement();
         actions.innerHTML = "";
 
         if (Storage.supportsDirectory()) {
@@ -221,8 +221,8 @@
         document.body.style.overflow = "";
       }
 
-      document.getElementById("tutorial-overlay").addEventListener("click", (e) => {
-        if (e.target === e.currentTarget) closeTutorial();
+      document.getElementById("tutorial-overlay").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) closeTutorial();
       });
 
       function openVersions() {
@@ -236,8 +236,8 @@
         document.body.style.overflow = "";
       }
 
-      document.getElementById("versions-overlay").addEventListener("click", (e) => {
-        if (e.target === e.currentTarget) closeVersions();
+      document.getElementById("versions-overlay").addEventListener("click", (event) => {
+        if (event.target === event.currentTarget) closeVersions();
       });
 
 
@@ -247,9 +247,9 @@
         text.split(/\r?\n/).forEach((line) => {
           const trimmed = line.trim();
           if (!trimmed) return;
-          const m = trimmed.match(/^v(\d+(?:\.\d+)*)(?:\s*[—-]\s*(.*))?$/i);
-          if (m) {
-            current = { version: "v" + m[1], date: (m[2] || "").trim(), changes: [] };
+          const versionMatch = trimmed.match(/^v(\d+(?:\.\d+)*)(?:\s*[—-]\s*(.*))?$/i);
+          if (versionMatch) {
+            current = { version: "v" + versionMatch[1], date: (versionMatch[2] || "").trim(), changes: [] };
             entries.push(current);
             return;
           }
@@ -263,33 +263,33 @@
       async function loadVersions() {
         const body = document.getElementById("versions-body");
         try {
-          const res = await fetch("version.txt");
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          const entries = parseVersions(await res.text());
+          const response = await fetch("version.txt");
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          const entries = parseVersions(await response.text());
           if (entries.length === 0) {
             body.innerHTML = '<div class="versions-loading">NO VERSION INFO</div>';
             return;
           }
           body.innerHTML = entries
             .map(
-              (e) =>
+              (entry) =>
                 '<div class="versions-entry"><div class="versions-ver">' +
-                escapeHtml(e.version) +
-                (e.date ? ' <span class="versions-date">' + escapeHtml(e.date) + "</span>" : "") +
+                escapeHtml(entry.version) +
+                (entry.date ? ' <span class="versions-date">' + escapeHtml(entry.date) + "</span>" : "") +
                 "</div>" +
-                (e.changes.length
-                  ? '<ul class="versions-list">' + e.changes.map((c) => "<li>" + escapeHtml(c) + "</li>").join("") + "</ul>"
+                (entry.changes.length
+                  ? '<ul class="versions-list">' + entry.changes.map((change) => "<li>" + escapeHtml(change) + "</li>").join("") + "</ul>"
                   : '<div class="versions-loading">NO CHANGES</div>') +
                 "</div>"
             )
             .join("");
-        } catch (e) {
+        } catch (error) {
           body.innerHTML = '<div class="versions-loading">COULD NOT LOAD VERSION.TXT</div>';
         }
       }
 
-      document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
           closeTutorial();
           closeVersions();
         }
@@ -297,11 +297,11 @@
 
       function setModeNote(mode) {
         if (mode === "classic") {
-          statusEl().textContent = "FILE MODE — OPEN A PROFILE FILE OR CREATE ONE";
-          modeNoteEl().textContent = 'FILE MODE: EDITS ARE SAVED IN THIS BROWSER. USE "SAVE FILE" INSIDE THE APP TO DOWNLOAD YOUR PROFILE.';
+          statusElement().textContent = "FILE MODE — OPEN A PROFILE FILE OR CREATE ONE";
+          modeNoteElement().textContent = 'FILE MODE: EDITS ARE SAVED IN THIS BROWSER. USE "SAVE FILE" INSIDE THE APP TO DOWNLOAD YOUR PROFILE.';
         } else {
-          statusEl().textContent = "FOLDER MODE — YOUR DATA LIVES IN YOUR MACHINE";
-          modeNoteEl().textContent = "FOLDER MODE: FILES ARE READ/WRITTEN DIRECTLY IN THE FOLDER YOU CHOSE.";
+          statusElement().textContent = "FOLDER MODE — YOUR DATA LIVES IN YOUR MACHINE";
+          modeNoteElement().textContent = "FOLDER MODE: FILES ARE READ/WRITTEN DIRECTLY IN THE FOLDER YOU CHOSE.";
         }
       }
 
@@ -309,14 +309,14 @@
         try {
           // Always open the picker on click — never silently reconnect to a
           // previously chosen folder. Auto-reconnect only happens on page load.
-          const dir = await Storage.pickNewFolder();
+          const folder = await Storage.pickNewFolder();
           folderConnected = true;
           selected = null;
           renderActions("dir");
-          statusEl().textContent = "CONNECTED — " + (dir.name || "DATA FOLDER");
+          statusElement().textContent = "CONNECTED — " + (folder.name || "DATA FOLDER");
           await loadFiles("dir");
-        } catch (e) {
-          statusEl().textContent = "FOLDER CONNECT FAILED: " + (e.message || "CANCELLED");
+        } catch (error) {
+          statusElement().textContent = "FOLDER CONNECT FAILED: " + (error.message || "CANCELLED");
         }
       }
 
@@ -326,23 +326,23 @@
           if (!picked) return;
           const name = Storage.normalizeFileName(picked.name);
           if (!name) {
-            statusEl().textContent = "INVALID FILE NAME";
+            statusElement().textContent = "INVALID FILE NAME";
             return;
           }
           await Storage.setMode("classic");
           Storage.setPendingOpen({ name, content: picked.content });
           await enterFile(name);
-        } catch (e) {
-          statusEl().textContent = "OPEN FAILED: " + e.message;
+        } catch (error) {
+          statusElement().textContent = "OPEN FAILED: " + error.message;
         }
       }
 
       async function loadFiles(mode) {
         try {
-          const a = await Storage.get();
-          const files = await a.list();
+          const storageAdapter = await Storage.get();
+          const files = await storageAdapter.list();
           const empty = document.getElementById("file-empty");
-          const list = listEl();
+          const list = fileListElement();
           list.innerHTML = "";
 
           if (!files || files.length === 0) {
@@ -361,16 +361,16 @@
           });
 
           if (files.length > 0 && !selected) selectFile(files[0].name);
-        } catch (e) {
-          statusEl().textContent = "ERROR LOADING FILES: " + e.message;
+        } catch (error) {
+          statusElement().textContent = "ERROR LOADING FILES: " + error.message;
         }
       }
 
-      listEl().addEventListener("click", (e) => {
-        const row = e.target.closest(".file-row");
+      fileListElement().addEventListener("click", (event) => {
+        const row = event.target.closest(".file-row");
         if (!row) return;
         const name = row.dataset.file;
-        if (e.target.closest(".file-enter")) return enterFile(name);
+        if (event.target.closest(".file-enter")) return enterFile(name);
         selectFile(name);
       });
 
@@ -378,71 +378,71 @@
         const input = document.getElementById("new-file-name");
         const raw = input.value.trim();
         if (!raw) {
-          statusEl().textContent = "ENTER A PROFILE NAME";
+          statusElement().textContent = "ENTER A PROFILE NAME";
           return;
         }
         const fileName = Storage.normalizeFileName(raw);
         if (!fileName) {
-          statusEl().textContent = "INVALID NAME — USE LETTERS, NUMBERS, SPACES, - OR _";
+          statusElement().textContent = "INVALID NAME — USE LETTERS, NUMBERS, SPACES, - OR _";
           return;
         }
         try {
-          const a = await Storage.get();
-          const exists = (await a.read(fileName)) != null;
+          const storageAdapter = await Storage.get();
+          const exists = (await storageAdapter.read(fileName)) != null;
           if (exists) {
-            statusEl().textContent = "PROFILE ALREADY EXISTS";
+            statusElement().textContent = "PROFILE ALREADY EXISTS";
             return;
           }
-          await a.write(fileName, JSON.stringify(EMPTY_DATA));
+          await storageAdapter.write(fileName, JSON.stringify(EMPTY_DATA));
           input.value = "";
-          statusEl().textContent = "PROFILE CREATED";
-          if (a.kind === "classic") {
+          statusElement().textContent = "PROFILE CREATED";
+          if (storageAdapter.kind === "classic") {
             Storage.download(fileName, JSON.stringify(EMPTY_DATA));
-            statusEl().textContent = "PROFILE CREATED — FILE DOWNLOADED";
+            statusElement().textContent = "PROFILE CREATED — FILE DOWNLOADED";
           }
-          await loadFiles(a.kind);
+          await loadFiles(storageAdapter.kind);
           selectFile(fileName);
-        } catch (e) {
-          statusEl().textContent = "CREATE FAILED: " + e.message;
+        } catch (error) {
+          statusElement().textContent = "CREATE FAILED: " + error.message;
         }
       }
 
-      document.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
         if (document.activeElement && document.activeElement.id === "new-file-name") return;
         if (selected) enterFile(selected);
       });
 
       async function loadVersion() {
         try {
-          const res = await fetch("version.txt");
-          if (res.ok) {
-            const text = (await res.text()).trim();
+          const response = await fetch("version.txt");
+          if (response.ok) {
+            const text = (await response.text()).trim();
             const first = text.split(/\r?\n/)[0].trim();
-            const m = first.match(/^v(\d+(?:\.\d+)*)/i);
-            if (m) {
-              const el = document.getElementById("app-version");
-              if (el) el.textContent = "v" + m[1];
+            const versionMatch = first.match(/^v(\d+(?:\.\d+)*)/i);
+            if (versionMatch) {
+              const versionElement = document.getElementById("app-version");
+              if (versionElement) versionElement.textContent = "v" + versionMatch[1];
             }
           }
-        } catch (e) {
+        } catch (error) {
           // fallback to v1.0
         }
       }
 
-      async function init() {
+      async function initialize() {
         let mode = "classic";
         let connected = false;
         try {
-          const a = await Storage.get();
-          mode = a.kind;
+          const storageAdapter = await Storage.get();
+          mode = storageAdapter.kind;
           if (mode === "dir") {
             // Auto-reconnect to the previously chosen folder when permission is still granted.
-            const dir = await a.connect();
+            const folder = await storageAdapter.connect();
             connected = true;
-            statusEl().textContent = "CONNECTED — " + (dir.name || "DATA FOLDER");
+            statusElement().textContent = "CONNECTED — " + (folder.name || "DATA FOLDER");
           }
-        } catch (e) {
+        } catch (error) {
           mode = "dir";
         }
         folderConnected = connected;
@@ -452,14 +452,14 @@
         } else if (connected) {
           await loadFiles("dir");
         } else {
-          statusEl().textContent = "FOLDER MODE — PICK YOUR DATA FOLDER";
+          statusElement().textContent = "FOLDER MODE — PICK YOUR DATA FOLDER";
         }
         // Shown last so the connection status above does not hide it.
         const openError = Storage.consumeOpenError();
-        if (openError) statusEl().textContent = openError;
+        if (openError) statusElement().textContent = openError;
       }
 
-      init();
+      initialize();
       loadVersion();
     </script>
   </body>

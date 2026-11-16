@@ -1,13 +1,13 @@
 /* ===== Application Core: Router & CRUD ===== */
 
 const App = {
-  currentPfId: null,
-  currentAccId: null,
+  currentPortfolioId: null,
+  currentAccountId: null,
   _modals: {},
   _charts: {},
   _saveInProgress: false,
 
-  async init() {
+  async initialize() {
     const file = new URLSearchParams(window.location.search).get("file");
     if (!file) {
       const lastFile = localStorage.getItem(Storage.LAST_FILE_KEY);
@@ -66,7 +66,7 @@ const App = {
       portfolio: new bootstrap.Modal(document.getElementById("modal-portfolio")),
       account: new bootstrap.Modal(document.getElementById("modal-account")),
       transaction: new bootstrap.Modal(document.getElementById("modal-transaction")),
-      txEdit: new bootstrap.Modal(document.getElementById("modal-tx-edit")),
+      transactionEdit: new bootstrap.Modal(document.getElementById("modal-tx-edit")),
       valuation: new bootstrap.Modal(document.getElementById("modal-valuation")),
       metal: new bootstrap.Modal(document.getElementById("modal-metal")),
       asset: new bootstrap.Modal(document.getElementById("modal-asset")),
@@ -113,13 +113,13 @@ const App = {
           Pages.portfolios();
           break;
         case "portfolio-detail":
-          this.currentPfId = parseInt(params.get("id"));
-          Pages.portfolioDetail(this.currentPfId);
+          this.currentPortfolioId = parseInt(params.get("id"));
+          Pages.portfolioDetail(this.currentPortfolioId);
           break;
         case "account-detail":
-          this.currentAccId = parseInt(params.get("id"));
-          this.currentPfId = parseInt(params.get("pfid"));
-          Pages.accountDetail(this.currentAccId);
+          this.currentAccountId = parseInt(params.get("id"));
+          this.currentPortfolioId = parseInt(params.get("pfid"));
+          Pages.accountDetail(this.currentAccountId);
           break;
         case "custodians":
           Pages.custodians();
@@ -168,7 +168,7 @@ const App = {
         break;
       case "deposit":
       case "withdrawal":
-        this._showTxModal(type, args[0]);
+        this._showTransactionModal(type, args[0]);
         break;
       case "valuation":
         this._showValuationModal(args[0]);
@@ -204,31 +204,31 @@ const App = {
     const settings = await DB.getSettings();
     const current = settings.mainCurrency || "CHF";
     const select = document.getElementById("settings-currency");
-    select.innerHTML = CURRENCIES.map((c) => `<option value="${c.code}" ${c.code === current ? "selected" : ""}>${c.code} - ${c.name}</option>`).join("");
-    const colorEl = document.getElementById("settings-accent");
-    colorEl.value = /^#[0-9a-fA-F]{6}$/.test(settings.accentColor || "") ? settings.accentColor : DEFAULT_ACCENT;
-    colorEl.oninput = () => this.applyAccent(colorEl.value);
+    select.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}" ${currency.code === current ? "selected" : ""}>${currency.code} - ${currency.name}</option>`).join("");
+    const accentInput = document.getElementById("settings-accent");
+    accentInput.value = /^#[0-9a-fA-F]{6}$/.test(settings.accentColor || "") ? settings.accentColor : DEFAULT_ACCENT;
+    accentInput.oninput = () => this.applyAccent(accentInput.value);
     const slider = document.getElementById("settings-radius");
     const label = document.getElementById("settings-radius-label");
     const radius = settings.borderRadius != null ? settings.borderRadius : 10;
     slider.value = radius;
     label.textContent = radius + "px";
     const preview = () => {
-      const v = slider.value;
-      label.textContent = v + "px";
-      document.documentElement.style.setProperty("--radius", v + "px");
+      const radiusValue = slider.value;
+      label.textContent = radiusValue + "px";
+      document.documentElement.style.setProperty("--radius", radiusValue + "px");
     };
     slider.oninput = preview;
     this._modals.settings.show();
   },
 
   applyAccent(hex) {
-    const c = /^#[0-9a-fA-F]{6}$/.test(hex || "") ? hex : DEFAULT_ACCENT;
+    const color = /^#[0-9a-fA-F]{6}$/.test(hex || "") ? hex : DEFAULT_ACCENT;
     const root = document.documentElement;
-    root.style.setProperty("--accent", c);
-    root.style.setProperty("--border-accent", c);
-    root.style.setProperty("--accent-dim", shadeAccent(c, 0.5));
-    root.style.setProperty("--accent-glow", shadeAccent(c, 1, 0.15));
+    root.style.setProperty("--accent", color);
+    root.style.setProperty("--border-accent", color);
+    root.style.setProperty("--accent-dim", shadeAccent(color, 0.5));
+    root.style.setProperty("--accent-glow", shadeAccent(color, 1, 0.15));
   },
 
   async _applyAccent() {
@@ -263,11 +263,11 @@ const App = {
     const notesField = document.getElementById("custodian-notes");
     if (editId) {
       title.textContent = "EDIT CUSTODIAN";
-      DB.getById("custodians", editId).then((c) => {
-        if (!c) return;
-        idField.value = c.id;
-        nameField.value = c.name || "";
-        notesField.value = c.notes || "";
+      DB.getById("custodians", editId).then((custodian) => {
+        if (!custodian) return;
+        idField.value = custodian.id;
+        nameField.value = custodian.name || "";
+        notesField.value = custodian.notes || "";
         this._modals.custodian.show();
       });
     } else {
@@ -392,13 +392,13 @@ const App = {
       toggleAccountTypeFields();
       startingValueField.value = "";
       startingContributionField.value = "";
-      startingDateField.value = todayStr();
+      startingDateField.value = todayIsoDate();
       updateStartingSymbol();
       this._modals.account.show();
     }
   },
 
-  _showTxModal(type, accountId) {
+  _showTransactionModal(type, accountId) {
     const title = document.getElementById("modal-tx-title");
     const typeField = document.getElementById("tx-type");
     const accountIdField = document.getElementById("tx-account-id");
@@ -411,7 +411,7 @@ const App = {
     accountIdField.value = accountId;
     amountField.value = "";
     notesField.value = "";
-    dateField.value = todayStr();
+    dateField.value = todayIsoDate();
     title.textContent = type === "deposit" ? "DEPOSIT" : "WITHDRAWAL";
 
     DB.getById("accounts", accountId).then((account) => {
@@ -436,9 +436,9 @@ const App = {
     amountField.value = "";
     pricePerGramField.value = "";
     notesField.value = "";
-    dateField.value = todayStr();
+    dateField.value = todayIsoDate();
     if (titleElement) titleElement.textContent = isOpening ? "OPENING VALUE" : "UPDATE VALUE";
-    this._valOpening = !!isOpening;
+    this._isOpeningValuation = !!isOpening;
 
     DB.getById("accounts", accountId).then(async (account) => {
       const currency = account ? account.currency || "CHF" : "CHF";
@@ -454,9 +454,9 @@ const App = {
         pricePerGramGroup.style.display = "block";
         const quantity = account.quantity || 0;
         if (account.pricePerGram) pricePerGramField.value = account.pricePerGram;
-        const todaysMetalPrices = await DB.getMetalPricesForDate(todayStr());
+        const todaysMetalPrices = await DB.getMetalPricesForDate(todayIsoDate());
         const rateEntries = await DB.getAll("exchangeRates");
-        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, currency, rateEntries, todayStr());
+        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, currency, rateEntries, todayIsoDate());
         if (spotPrice != null) pricePerGramField.value = spotPrice;
         if (quantity > 0 && parseFloat(pricePerGramField.value) > 0) {
           amountField.value = (quantity * parseFloat(pricePerGramField.value)).toFixed(2);
@@ -501,7 +501,7 @@ const App = {
     quantityField.value = "";
     priceField.value = "";
     notesField.value = "";
-    dateField.value = todayStr();
+    dateField.value = todayIsoDate();
     totalElement.textContent = "—";
     title.textContent = direction === "sell" ? "SELL METAL" : "BUY METAL";
 
@@ -516,9 +516,9 @@ const App = {
       if (account.pricePerGram) priceField.value = account.pricePerGram;
       if (direction === "sell") quantityField.value = account.quantity || 0;
       if (!priceField.value && account.metalType) {
-        const todaysMetalPrices = await DB.getMetalPricesForDate(todayStr());
+        const todaysMetalPrices = await DB.getMetalPricesForDate(todayIsoDate());
         const rateEntries = await DB.getAll("exchangeRates");
-        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, this._metalCurrency, rateEntries, todayStr());
+        const spotPrice = metalSpotPerGram(todaysMetalPrices, account.metalType, this._metalCurrency, rateEntries, todayIsoDate());
         if (spotPrice != null) priceField.value = spotPrice;
       }
       this._updateMetalTotal();
@@ -543,7 +543,7 @@ const App = {
     const direction = document.getElementById("metal-direction").value;
     const quantity = parseFloat(document.getElementById("metal-qty").value);
     const pricePerGram = parseFloat(document.getElementById("metal-price").value);
-    const date = document.getElementById("metal-date").value || todayStr();
+    const date = document.getElementById("metal-date").value || todayIsoDate();
     const notes = document.getElementById("metal-notes").value.trim();
 
     if (!quantity || quantity <= 0) {
@@ -631,7 +631,7 @@ const App = {
         document.getElementById("asset-depreciation").value = asset.depreciationPct != null ? asset.depreciationPct : "";
         document.getElementById("asset-ownership").value = asset.ownershipPct != null ? asset.ownershipPct : 100;
         document.getElementById("asset-debt").value = asset.debt != null ? asset.debt : "";
-        document.getElementById("asset-date").value = asset.purchaseDate || todayStr();
+        document.getElementById("asset-date").value = asset.purchaseDate || todayIsoDate();
         currencyField.value = asset.currency || (account && account.currency) || mainCurrency;
       }
     } else {
@@ -640,7 +640,7 @@ const App = {
       document.getElementById("asset-depreciation").value = "";
       document.getElementById("asset-ownership").value = 100;
       document.getElementById("asset-debt").value = "";
-      document.getElementById("asset-date").value = todayStr();
+      document.getElementById("asset-date").value = todayIsoDate();
       currencyField.value = (account && account.currency) || mainCurrency;
     }
     this._modals.asset.show();
@@ -655,7 +655,7 @@ const App = {
     const depreciationPercent = parseFloat(document.getElementById("asset-depreciation").value) || 0;
     const ownershipInput = parseFloat(document.getElementById("asset-ownership").value);
     const ownershipPercent = isNaN(ownershipInput) ? 100 : ownershipInput;
-    const purchaseDate = document.getElementById("asset-date").value || todayStr();
+    const purchaseDate = document.getElementById("asset-date").value || todayIsoDate();
     const currency = document.getElementById("asset-currency").value || "CHF";
 
     if (!name) {
@@ -763,7 +763,7 @@ const App = {
     document.getElementById("sell-asset-id").value = assetId;
     document.getElementById("sell-asset-name").textContent = asset.name || "—";
     document.getElementById("sell-asset-value").value = asset.sold ? asset.saleValue || "" : "";
-    document.getElementById("sell-asset-date").value = asset.saleDate || todayStr();
+    document.getElementById("sell-asset-date").value = asset.saleDate || todayIsoDate();
     document.getElementById("sell-asset-currency").textContent = asset.currency || "CHF";
     this._modals.sellAsset.show();
   },
@@ -771,7 +771,7 @@ const App = {
   async saveSellAsset() {
     const assetId = parseInt(document.getElementById("sell-asset-id").value);
     const saleValue = parseFloat(document.getElementById("sell-asset-value").value);
-    const saleDate = document.getElementById("sell-asset-date").value || todayStr();
+    const saleDate = document.getElementById("sell-asset-date").value || todayIsoDate();
 
     if (!saleValue || saleValue < 0) {
       this.toast("ENTER A VALID SALE VALUE");
@@ -831,9 +831,9 @@ const App = {
   // Removes an asset with its ADD/SELL transactions, then revalues its account
   async _deleteAssetWithHistory(asset) {
     for (const transaction of await DB.getByIndex("transactions", "assetId", asset.id)) {
-      await DB.del("transactions", transaction.id);
+      await DB.remove("transactions", transaction.id);
     }
-    await DB.del("assets", asset.id);
+    await DB.remove("assets", asset.id);
     await this._refreshAssetAccountValue(asset.accountId);
   },
 
@@ -844,7 +844,7 @@ const App = {
     const accountAssets = await DB.getByIndex("assets", "accountId", accountId);
     const rateEntries = await DB.getAll("exchangeRates");
     const rateToAccountCurrency = (assetCurrency, date) => currencyRateTo(rateEntries, assetCurrency || "CHF", account.currency || "CHF", date);
-    account.currentValue = assetAccountMetrics(accountAssets, todayStr(), rateToAccountCurrency).value;
+    account.currentValue = assetAccountMetrics(accountAssets, todayIsoDate(), rateToAccountCurrency).value;
     await DB.put("accounts", account);
   },
 
@@ -890,7 +890,7 @@ const App = {
     document.getElementById("asset-valuation-name").textContent = asset.name || "—";
     document.getElementById("asset-valuation-currency").textContent = asset.currency || "CHF";
     document.getElementById("asset-valuation-value").value = "";
-    document.getElementById("asset-valuation-date").value = todayStr();
+    document.getElementById("asset-valuation-date").value = todayIsoDate();
     this._renderAssetHistoryList(asset);
     this._modals.assetValuation.show();
   },
@@ -1001,11 +1001,11 @@ const App = {
     } else {
       title.textContent = "NEW INCOME";
       idField.value = "";
-      monthField.value = todayStr().substring(0, 7);
+      monthField.value = todayIsoDate().substring(0, 7);
       sourceField.value = "";
       amountField.value = "";
       currencyField.value = mainCurrency;
-      dateField.value = todayStr();
+      dateField.value = todayIsoDate();
       notesField.value = "";
       this._modals.income.show();
     }
@@ -1091,7 +1091,7 @@ const App = {
         personField.value = debt.person || "";
         directionField.value = debt.direction || "out";
         amountField.value = debt.amount || "";
-        dateField.value = debt.date || todayStr();
+        dateField.value = debt.date || todayIsoDate();
         notesField.value = debt.notes || "";
         this._modals.debt.show();
       });
@@ -1102,7 +1102,7 @@ const App = {
       personField.value = "";
       directionField.value = "out";
       amountField.value = "";
-      dateField.value = todayStr();
+      dateField.value = todayIsoDate();
       notesField.value = "";
       this._modals.debt.show();
     }
@@ -1254,7 +1254,7 @@ const App = {
     const hasStartingValue = isNew && accountType !== "Tangible Asset" && accountType !== "Real Estate";
     const startingValue = hasStartingValue ? parseFloat(document.getElementById("account-starting-value").value) || 0 : 0;
     const startingContribution = hasStartingValue ? parseFloat(document.getElementById("account-starting-contrib").value) || 0 : 0;
-    const startingDate = isNew ? document.getElementById("account-starting-date").value || todayStr() : todayStr();
+    const startingDate = isNew ? document.getElementById("account-starting-date").value || todayIsoDate() : todayIsoDate();
 
     if (id) {
       data.id = parseInt(id);
@@ -1328,7 +1328,7 @@ const App = {
     const type = document.getElementById("tx-type").value;
     const amount = parseFloat(document.getElementById("tx-amount").value);
     const notes = document.getElementById("tx-notes").value.trim();
-    const date = document.getElementById("tx-date").value || todayStr();
+    const date = document.getElementById("tx-date").value || todayIsoDate();
 
     if (!amount || amount <= 0) {
       this.toast("ENTER A VALID AMOUNT");
@@ -1367,8 +1367,8 @@ const App = {
     const accountId = parseInt(document.getElementById("val-account-id").value);
     const amount = parseFloat(document.getElementById("val-amount").value);
     const notes = document.getElementById("val-notes").value.trim();
-    const date = document.getElementById("val-date").value || todayStr();
-    const isOpening = !!this._valOpening;
+    const date = document.getElementById("val-date").value || todayIsoDate();
+    const isOpening = !!this._isOpeningValuation;
 
     if (isNaN(amount) || amount < 0) {
       this.toast("ENTER A VALID VALUE");
@@ -1406,7 +1406,7 @@ const App = {
       transactionData.pricePerGram = pricePerGram;
     }
     await DB.add("transactions", transactionData);
-    this._valOpening = false;
+    this._isOpeningValuation = false;
 
     account.currentValue = amount;
     await DB.put("accounts", account);
@@ -1481,7 +1481,7 @@ const App = {
   async deleteExpense(id) {
     const confirmed = await this.confirm("DELETE EXPENSE?", "Remove this expense entry?");
     if (!confirmed) return;
-    await DB.del("expenses", id);
+    await DB.remove("expenses", id);
     this.toast("EXPENSE DELETED");
     this.route();
   },
@@ -1489,7 +1489,7 @@ const App = {
   async deleteIncome(id) {
     const confirmed = await this.confirm("DELETE INCOME?", "Remove this income entry?");
     if (!confirmed) return;
-    await DB.del("incomes", id);
+    await DB.remove("incomes", id);
     this.toast("INCOME DELETED");
     this.route();
   },
@@ -1500,7 +1500,7 @@ const App = {
     const person = document.getElementById("debt-person").value.trim();
     const direction = document.getElementById("debt-direction").value;
     const amount = parseFloat(document.getElementById("debt-amount").value);
-    const date = document.getElementById("debt-date").value || todayStr();
+    const date = document.getElementById("debt-date").value || todayIsoDate();
     const notes = document.getElementById("debt-notes").value.trim();
 
     if (!description) {
@@ -1528,7 +1528,7 @@ const App = {
   async deleteDebt(id) {
     const confirmed = await this.confirm("DELETE DEBT?", "Remove this debt entry?");
     if (!confirmed) return;
-    await DB.del("debts", id);
+    await DB.remove("debts", id);
     this.toast("DEBT DELETED");
     this.route();
   },
@@ -1549,10 +1549,10 @@ const App = {
     }
 
     const allocations = [];
-    document.querySelectorAll("#goal-allocations .goal-alloc-account").forEach((sel) => {
-      const row = sel.closest("div");
-      const pct = parseFloat(row.querySelector(".goal-alloc-pct").value);
-      allocations.push({ accountId: parseInt(sel.value), pct: isNaN(pct) ? 100 : pct });
+    document.querySelectorAll("#goal-allocations .goal-alloc-account").forEach((accountSelect) => {
+      const row = accountSelect.closest("div");
+      const percent = parseFloat(row.querySelector(".goal-alloc-pct").value);
+      allocations.push({ accountId: parseInt(accountSelect.value), pct: isNaN(percent) ? 100 : percent });
     });
 
     const data = { name, target, allocations, order: isNaN(order) ? 1 : order };
@@ -1571,7 +1571,7 @@ const App = {
   async deleteGoal(id) {
     const confirmed = await this.confirm("DELETE GOAL?", "Remove this goal?");
     if (!confirmed) return;
-    await DB.del("goals", id);
+    await DB.remove("goals", id);
     this.toast("GOAL DELETED");
     this.route();
   },
@@ -1602,10 +1602,10 @@ const App = {
   // (a later account may get the same id and must not inherit those allocations)
   async _deleteAccountWithHistory(accountId) {
     for (const transaction of await DB.getByIndex("transactions", "accountId", accountId)) {
-      await DB.del("transactions", transaction.id);
+      await DB.remove("transactions", transaction.id);
     }
     for (const asset of await DB.getByIndex("assets", "accountId", accountId)) {
-      await DB.del("assets", asset.id);
+      await DB.remove("assets", asset.id);
     }
     for (const goal of await DB.getAll("goals")) {
       const allocations = (goal.allocations || []).filter((allocation) => Number(allocation.accountId) !== Number(accountId));
@@ -1613,7 +1613,7 @@ const App = {
       goal.allocations = allocations;
       await DB.put("goals", goal);
     }
-    await DB.del("accounts", accountId);
+    await DB.remove("accounts", accountId);
   },
 
   async deleteAccount(id) {
@@ -1624,7 +1624,7 @@ const App = {
     this._modals.account.hide();
     await this._deleteAccountWithHistory(id);
     this.toast("ACCOUNT DELETED");
-    this.navigate(this.currentPfId ? "portfolio-detail?id=" + this.currentPfId : "portfolios");
+    this.navigate(this.currentPortfolioId ? "portfolio-detail?id=" + this.currentPortfolioId : "portfolios");
   },
 
   async deletePortfolio(id) {
@@ -1638,7 +1638,7 @@ const App = {
     for (const account of accounts) {
       await this._deleteAccountWithHistory(account.id);
     }
-    await DB.del("portfolios", id);
+    await DB.remove("portfolios", id);
     this.toast("PORTFOLIO DELETED");
     this.navigate("portfolios");
   },
@@ -1671,9 +1671,9 @@ const App = {
       document.getElementById("txedit-amount").value = Math.abs(transaction.amount || 0);
     }
     document.getElementById("txedit-notes").value = transaction.notes || "";
-    document.getElementById("txedit-date").value = transaction.date || todayStr();
+    document.getElementById("txedit-date").value = transaction.date || todayIsoDate();
 
-    this._modals.txEdit.show();
+    this._modals.transactionEdit.show();
   },
 
   async saveTransactionEdit() {
@@ -1686,7 +1686,7 @@ const App = {
       return;
     }
 
-    const date = document.getElementById("txedit-date").value || todayStr();
+    const date = document.getElementById("txedit-date").value || todayIsoDate();
     const notes = document.getElementById("txedit-notes").value.trim();
     const isMetalTrade = transaction.type === "buy" || transaction.type === "sell";
 
@@ -1725,7 +1725,7 @@ const App = {
     // consistent (precious metals replay their quantities there too)
     await this._recomputeAllBalances();
 
-    this._modals.txEdit.hide();
+    this._modals.transactionEdit.hide();
     this.toast("TRANSACTION UPDATED");
     this.route();
   },
@@ -1755,7 +1755,7 @@ const App = {
       asset.saleValue = null;
       asset.saleDate = null;
       await DB.put("assets", asset);
-      await DB.del("transactions", id);
+      await DB.remove("transactions", id);
       await this._refreshAssetAccountValue(asset.accountId);
       this.toast("SALE DELETED");
       this.route();
@@ -1771,7 +1771,7 @@ const App = {
       account.currentValue = (account.currentValue || 0) - transaction.amount;
       await DB.put("accounts", account);
     }
-    await DB.del("transactions", id);
+    await DB.remove("transactions", id);
     await this._recomputeAccountBalances(transaction.accountId);
     this.toast("TRANSACTION DELETED");
     this.route();
@@ -1818,7 +1818,7 @@ const App = {
   async exportData() {
     const data = await DB.exportAll();
     const baseName = (DB.currentFile || "liberty-finance").replace(/\.json$/i, "");
-    Storage.download(baseName + "-backup-" + todayStr() + ".json", JSON.stringify(data, null, 2));
+    Storage.download(baseName + "-backup-" + todayIsoDate() + ".json", JSON.stringify(data, null, 2));
     this.toast("DATA EXPORTED");
   },
 
@@ -1961,8 +1961,8 @@ const App = {
     });
   },
 
-  async recalcAccount() {
-    const id = this.currentAccId;
+  async recalculateAccount() {
+    const id = this.currentAccountId;
     if (!id) {
       this.toast("NO ACCOUNT SELECTED");
       return;
@@ -2014,7 +2014,7 @@ const OTHER_CHANGING_HANDLERS = [
   "deleteDebt",
   "deleteGoal",
   "moveGoal",
-  "recalcAccount",
+  "recalculateAccount",
 ];
 
 // A double-click on SAVE must not store the same record twice: while one save
@@ -2036,4 +2036,4 @@ OTHER_CHANGING_HANDLERS.forEach((handlerName) => {
   App[handlerName] = (...handlerArguments) => DB.batch(() => handler.apply(App, handlerArguments));
 });
 
-document.addEventListener("DOMContentLoaded", () => App.init());
+document.addEventListener("DOMContentLoaded", () => App.initialize());

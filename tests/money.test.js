@@ -3,7 +3,7 @@ const { loadScripts, assertNear, test, assert } = require('./helpers');
 
 const utils = loadScripts(['js/utils.js'], [
   'chfPerUnit', 'currencyRateTo', 'currenciesWithoutRate', 'assetFullValue', 'assetCurrentValue', 'assetOwnedCost',
-  'assetRealizedPL', 'assetAccountMetrics', 'isIsoDate', 'escapeHtml', 'signedCurrency', 'signedPercent', 'pluralize',
+  'assetRealizedProfitLoss', 'assetAccountMetrics', 'isIsoDate', 'escapeHtml', 'signedCurrency', 'signedPercent', 'pluralize',
 ]);
 
 // Rates are stored as "1 unit = rate CHF"
@@ -37,10 +37,10 @@ const car = { purchaseValue: 20000, purchaseDate: '2026-01-01', depreciationPct:
 test('ownership share applies to value, cost and realized P&L', () => {
   assertNear(utils.assetCurrentValue(car, '2026-06-01'), 10000, 'value of the owned half');
   assertNear(utils.assetOwnedCost(car), 10000, 'cost of the owned half; debt only counts for Real Estate');
-  assertNear(utils.assetAccountMetrics([car], '2026-06-01').pl, 0, 'no loss on day one');
+  assertNear(utils.assetAccountMetrics([car], '2026-06-01').profitLoss, 0, 'no loss on day one');
   assertNear(utils.assetCurrentValue({ ...car, ownershipPct: 0 }, '2026-06-01'), 0, '0% stays 0%');
   assertNear(utils.assetCurrentValue({ ...car, ownershipPct: undefined }, '2026-06-01'), 20000, 'missing means 100%');
-  assertNear(utils.assetRealizedPL({ ...car, sold: true, saleValue: 16000, saleDate: '2026-09-01' }), -2000, 'realized on the owned half');
+  assertNear(utils.assetRealizedProfitLoss({ ...car, sold: true, saleValue: 16000, saleDate: '2026-09-01' }), -2000, 'realized on the owned half');
 });
 
 test('an asset counts from its purchase date until its sale date', () => {
@@ -82,9 +82,9 @@ test('Real Estate mortgage balances apply from their date on', () => {
   assertNear(utils.assetCurrentValue(repaidFlat, '2023-06-01'), 160000, 'after the 2022 balance: (800k - 480k) x 50%');
   assertNear(utils.assetCurrentValue(repaidFlat, '2026-06-01'), 175000, 'after the 2024 balance: (800k - 450k) x 50%');
   // Repaying the mortgage is capital put in, not a gain: P&L stays the change in property value
-  assertNear(utils.assetAccountMetrics([repaidFlat], '2026-06-01').pl, 0, 'no value change, no P&L');
+  assertNear(utils.assetAccountMetrics([repaidFlat], '2026-06-01').profitLoss, 0, 'no value change, no P&L');
   const appreciatedFlat = { ...repaidFlat, valuations: [{ date: '2025-01-01', value: 900000 }] };
-  assertNear(utils.assetAccountMetrics([appreciatedFlat], '2026-06-01').pl, 50000, '(900k - 800k) x 50%');
+  assertNear(utils.assetAccountMetrics([appreciatedFlat], '2026-06-01').profitLoss, 50000, '(900k - 800k) x 50%');
 });
 
 test('small helpers', () => {

@@ -251,22 +251,22 @@
     </script>
 
     <!-- ===== APP (shared renderers only, no profile data) ===== -->
-    <script src="js/storage.js?v=6"></script>
-    <script src="js/randata.js?v=8"></script>
-    <script src="js/utils.js?v=33"></script>
+    <script src="js/storage.js?v=7"></script>
+    <script src="js/randata.js?v=10"></script>
+    <script src="js/utils.js?v=34"></script>
     <script src="js/pages-shared.js?v=28"></script>
-    <script src="js/pages-wallstreet.js?v=42"></script>
+    <script src="js/pages-wallstreet.js?v=44"></script>
 
     <script>
       /* ===== Market view bootstrap: no profile, no data folder, no writes ===== */
       const App = {
         _charts: {},
-        toast(msg) {
-          const el = document.getElementById("toast-body");
-          if (el) {
-            el.textContent = msg;
-            const t = bootstrap.Toast.getOrCreateInstance(document.getElementById("toast-msg"));
-            t.show();
+        toast(message) {
+          const toastBody = document.getElementById("toast-body");
+          if (toastBody) {
+            toastBody.textContent = message;
+            const toast = bootstrap.Toast.getOrCreateInstance(document.getElementById("toast-msg"));
+            toast.show();
           }
         },
       };
@@ -290,15 +290,15 @@
         // storage-mode preference.
         await Storage.setSessionMode("classic");
 
-        const syncEl = document.getElementById("ws-sync-label");
-        if (syncEl) syncEl.textContent = "SYNCING MARKET DATA...";
+        const syncLabel = document.getElementById("ws-sync-label");
+        if (syncLabel) syncLabel.textContent = "SYNCING MARKET DATA...";
 
         await Pages.wallStreet();
 
-        const r = Randata.getLastResult();
-        if (r && r.status === "offline") App.toast("MARKET DATA OFFLINE");
-        else if (r && r.status === "fresh") App.toast("MARKET DATA AVAILABLE");
-        else if (r && r.status === "synced") App.toast("MARKET DATA SYNCED (" + r.symbols + " SYMBOLS, " + r.rows + " ROWS)");
+        const lastResult = Randata.getLastResult();
+        if (lastResult && lastResult.status === "offline") App.toast("MARKET DATA OFFLINE");
+        else if (lastResult && lastResult.status === "fresh") App.toast("MARKET DATA AVAILABLE");
+        else if (lastResult && lastResult.status === "synced") App.toast("MARKET DATA SYNCED (" + lastResult.symbols + " SYMBOLS, " + lastResult.rows + " ROWS)");
       })();
     </script>
   </body>
