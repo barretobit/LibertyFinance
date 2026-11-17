@@ -836,25 +836,50 @@ body {
 }
 
 /* ===== PORTFOLIO ALLOCATION (DASHBOARD) ===== */
+/* A dashboard card whose chart grows to the height of the tallest card in its row */
+.dash-fill-card {
+  display: flex;
+  flex-direction: column;
+}
+.dash-fill-card .card-gta-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+}
+.dash-fill-chart {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 240px;
+}
+/* Absolute, so the canvas Chart.js sizes never pushes the row taller */
+.dash-fill-chart canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.dash-fill-card .alloc-body {
+  justify-content: center;
+}
 .alloc-body {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 30px;
+  gap: 26px;
+  padding: 24px 40px;
 }
 .alloc-chart-wrap {
   position: relative;
   flex: 0 0 auto;
-  width: 150px;
-  max-width: 100%;
-  height: 210px;
+  width: 100%;
+  height: 190px;
 }
 .alloc-legend {
   flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
 }
 .alloc-legend-row {
   display: flex;
@@ -877,9 +902,16 @@ body {
   flex-shrink: 0;
 }
 .alloc-legend-name {
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alloc-legend-value {
+  flex-shrink: 0;
+  color: var(--text-primary);
   white-space: nowrap;
 }
 .earning-month {

@@ -1027,10 +1027,10 @@ const App = {
     const mainCurrency = settings.mainCurrency || "CHF";
     currencyField.innerHTML = CURRENCIES.map((currency) => `<option value="${currency.code}">${currency.code} - ${currency.symbol}</option>`).join("");
 
-    // This year and the 10 before it
+    // Next year (to plan expected expenses), this year and the 10 before it
     const currentYear = new Date().getFullYear();
     yearField.innerHTML = "";
-    for (let year = currentYear; year >= currentYear - 10; year--) {
+    for (let year = currentYear + 1; year >= currentYear - 10; year--) {
       const option = document.createElement("option");
       option.value = String(year);
       option.textContent = String(year);

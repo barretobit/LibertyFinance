@@ -615,7 +615,7 @@ Object.assign(Pages, {
   },
 
   // Doughnut of net worth per portfolio
-  _renderDashboardAllocation({ context, portfolios }) {
+  _renderDashboardAllocation({ context, mainCurrency, portfolios }) {
     const canvas = document.getElementById('chart-allocation');
     if (!canvas) return;
 
@@ -659,7 +659,8 @@ Object.assign(Pages, {
             '<div class="alloc-legend-row">' +
               '<span class="alloc-legend-swatch" style="background:' + row.color + '"></span>' +
               '<span class="alloc-legend-pct">' + row.percent + '%</span>' +
-              '<span class="alloc-legend-name">' + escapeHtml(row.name) + '</span>' +
+              '<span class="alloc-legend-name" title="' + escapeHtml(row.name) + '">' + escapeHtml(row.name) + '</span>' +
+              '<span class="alloc-legend-value">' + formatCurrency(row.value, mainCurrency) + '</span>' +
             '</div>').join('')
         : '<div class="alloc-legend-row"><span class="alloc-legend-name">NO DATA</span></div>';
     }
