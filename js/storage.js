@@ -116,6 +116,13 @@ const Storage = (() => {
     });
   }
 
+  const PERMISSION_TIMEOUT_MS = 3000;
+
+  // Resolve with the promise's value, or with fallback if it has not settled in time.
+  function settleWithin(promise, milliseconds, fallback) {
+    return Promise.race([promise, new Promise(resolve => setTimeout(() => resolve(fallback), milliseconds))]);
+  }
+
   function normalizeFileName(name) {
     let normalized = String(name || '').trim();
     normalized = normalized.replace(/\.json$/i, '');
@@ -136,9 +143,11 @@ const Storage = (() => {
       const saved = await indexedDbGet(DIRECTORY_HANDLE_KEY);
       if (saved) {
         try {
-          let permission = await saved.queryPermission({ mode: 'readwrite' });
+          // Chrome can leave permission checks on a saved handle pending forever,
+          // which would block the landing page from ever showing its buttons.
+          let permission = await settleWithin(saved.queryPermission({ mode: 'readwrite' }), PERMISSION_TIMEOUT_MS, 'denied');
           if (permission === 'prompt') {
-            try { permission = await saved.requestPermission({ mode: 'readwrite' }); } catch (error) { /* ignored */ }
+            try { permission = await settleWithin(saved.requestPermission({ mode: 'readwrite' }), PERMISSION_TIMEOUT_MS, 'denied'); } catch (error) { /* ignored */ }
           }
           if (permission === 'granted') { this.handle = saved; return saved; }
         } catch (error) { /* fall through to a fresh pick */ }
