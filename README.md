@@ -45,6 +45,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - Manage your **custodians** (banks, brokers, vaults) on a dedicated page 🏦
 - Granular toggles: include in **performance chart**, **net worth** and **liquid net worth** ⚙️
 - Track **deposits, withdrawals and valuations** with a full **transaction history** (including running balance) 🧮
+- **Copy** a deposit or withdrawal to a new date: same amount, sign and notes, only the date to pick 📋
 - **Realized & unrealized P&L** and **cost basis** per account
 
 ### 🥇 Precious Metals

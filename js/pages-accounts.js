@@ -462,7 +462,9 @@ Object.assign(Pages, {
         }
 
         const deleteLink = '<a class="tx-link" onclick="App.deleteTransaction(' + transactionId + ')">DELETE</a>';
-        const actionsHtml = isAssetEvent ? deleteLink : '<a class="tx-link me-2" onclick="App.showEditTransaction(' + transactionId + ')">EDIT</a>' + deleteLink;
+        const isCashFlow = transaction.type === 'deposit' || transaction.type === 'withdrawal';
+        const copyLink = isCashFlow ? '<a class="tx-link me-2" onclick="App.showCopyTransaction(' + transactionId + ')">COPY</a>' : '';
+        const actionsHtml = isAssetEvent ? deleteLink : copyLink + '<a class="tx-link me-2" onclick="App.showEditTransaction(' + transactionId + ')">EDIT</a>' + deleteLink;
         const row = document.createElement('tr');
         row.innerHTML = `<td>${formatDate(transaction.date)}</td>
           <td><span class="tx-badge ${transactionBadgeClass(transaction)}">${transactionTypeLabel(transaction)}</span></td>

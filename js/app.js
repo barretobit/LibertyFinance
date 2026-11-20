@@ -68,6 +68,7 @@ const App = {
       account: new bootstrap.Modal(document.getElementById("modal-account")),
       transaction: new bootstrap.Modal(document.getElementById("modal-transaction")),
       transactionEdit: new bootstrap.Modal(document.getElementById("modal-tx-edit")),
+      transactionCopy: new bootstrap.Modal(document.getElementById("modal-tx-copy")),
       valuation: new bootstrap.Modal(document.getElementById("modal-valuation")),
       metal: new bootstrap.Modal(document.getElementById("modal-metal")),
       asset: new bootstrap.Modal(document.getElementById("modal-asset")),
@@ -1388,11 +1389,20 @@ const App = {
       return;
     }
 
+    await this._addCashTransaction(account, type, amount, date, notes);
+
+    this._modals.transaction.hide();
+    this.toast((type === "deposit" ? "DEPOSIT" : "WITHDRAWAL") + " RECORDED");
+    this.route();
+  },
+
+  // Records a deposit or withdrawal of a positive amount and moves the account balance with it
+  async _addCashTransaction(account, type, amount, date, notes) {
     const signedAmount = type === "withdrawal" ? -amount : amount;
     const balanceAfter = (account.currentValue || 0) + signedAmount;
 
     await DB.add("transactions", {
-      accountId,
+      accountId: account.id,
       type,
       amount: signedAmount,
       date,
@@ -1403,11 +1413,7 @@ const App = {
 
     account.currentValue = balanceAfter;
     await DB.put("accounts", account);
-    await this._recomputeAccountBalances(accountId);
-
-    this._modals.transaction.hide();
-    this.toast((type === "deposit" ? "DEPOSIT" : "WITHDRAWAL") + " RECORDED");
-    this.route();
+    await this._recomputeAccountBalances(account.id);
   },
 
   async saveValuation() {
@@ -1741,6 +1747,41 @@ const App = {
     this._modals.transactionEdit.show();
   },
 
+  // A copy keeps the type, amount and notes of a deposit or withdrawal; only the date is asked
+  async showCopyTransaction(id) {
+    const transaction = await DB.getById("transactions", id);
+    if (!transaction || (transaction.type !== "deposit" && transaction.type !== "withdrawal")) return;
+    const account = await DB.getById("accounts", transaction.accountId);
+    const typeLabel = transaction.type === "deposit" ? "DEPOSIT" : "WITHDRAWAL";
+    const amountText = formatCurrency(Math.abs(transaction.amount || 0), account ? account.currency || "CHF" : "CHF");
+    document.getElementById("txcopy-id").value = transaction.id;
+    document.getElementById("txcopy-title").textContent = "COPY " + typeLabel;
+    document.getElementById("txcopy-summary").textContent = typeLabel + ": " + amountText + (transaction.notes ? " · " + transaction.notes : "");
+    document.getElementById("txcopy-date").value = todayIsoDate();
+    this._modals.transactionCopy.show();
+  },
+
+  async saveTransactionCopy() {
+    const transaction = await DB.getById("transactions", parseInt(document.getElementById("txcopy-id").value));
+    if (!transaction) return;
+    const date = document.getElementById("txcopy-date").value;
+    if (!date) {
+      this.toast("ENTER A DATE");
+      return;
+    }
+    const account = await DB.getById("accounts", transaction.accountId);
+    if (!account) {
+      this.toast("ACCOUNT NOT FOUND");
+      return;
+    }
+
+    await this._addCashTransaction(account, transaction.type, Math.abs(transaction.amount || 0), date, transaction.notes || "");
+
+    this._modals.transactionCopy.hide();
+    this.toast((transaction.type === "deposit" ? "DEPOSIT" : "WITHDRAWAL") + " COPIED");
+    this.route();
+  },
+
   async saveTransactionEdit() {
     const id = parseInt(document.getElementById("txedit-id").value);
     const transaction = await DB.getById("transactions", id);
@@ -2056,6 +2097,7 @@ const SAVE_HANDLERS = [
   "saveAccount",
   "saveTransaction",
   "saveTransactionEdit",
+  "saveTransactionCopy",
   "saveValuation",
   "saveMetal",
   "saveAsset",
