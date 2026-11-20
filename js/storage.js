@@ -67,6 +67,15 @@ const Storage = (() => {
     });
   }
 
+  async function indexedDbKeys() {
+    const database = await openIndexedDb();
+    return new Promise((resolve, reject) => {
+      const request = database.transaction(INDEXED_DB_STORE, 'readonly').objectStore(INDEXED_DB_STORE).getAllKeys();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   async function indexedDbDelete(key) {
     const database = await openIndexedDb();
     return new Promise((resolve, reject) => {
@@ -233,6 +242,23 @@ const Storage = (() => {
       }
     },
 
+    // Names of the .json files inside a subfolder; none when it does not exist yet.
+    async listIn(folder) {
+      const directory = await this.connect();
+      let subfolder;
+      try {
+        subfolder = await directory.getDirectoryHandle(folder);
+      } catch (error) {
+        if (error && error.name === 'NotFoundError') return [];
+        throw error;
+      }
+      const names = [];
+      for await (const [name, handle] of subfolder.entries()) {
+        if (handle.kind === 'file' && name.toLowerCase().endsWith('.json')) names.push(name);
+      }
+      return names.sort();
+    },
+
     async writeIn(folder, name, json) {
       const fileHandle = await this._subfolderFileHandle(folder, name, true);
       const writable = await fileHandle.createWritable();
@@ -311,6 +337,15 @@ const Storage = (() => {
 
     async readIn(folder, name) {
       return (await indexedDbGet(CLASSIC_FILE_PREFIX + folder + '/' + name)) || null;
+    },
+
+    async listIn(folder) {
+      const prefix = CLASSIC_FILE_PREFIX + folder + '/';
+      return (await indexedDbKeys())
+        .filter((key) => typeof key === 'string' && key.startsWith(prefix) && key.toLowerCase().endsWith('.json'))
+        .map((key) => key.slice(prefix.length))
+        .filter((name) => name.indexOf('/') === -1)
+        .sort();
     },
 
     async writeIn(folder, name, json) {

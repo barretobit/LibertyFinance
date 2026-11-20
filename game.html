@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Liberty Finance: Zuri Vault</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css?v=48" />
+    <link rel="stylesheet" href="game/game.css?v=3" />
+  </head>
+  <body>
+    <!-- ===== TOP NAV ===== -->
+    <nav class="gtanav">
+      <div class="nav-brand" onclick="window.location.href='index.html'">LIBERTY FINANCE <span class="nav-profile">ZURI VAULT</span></div>
+      <div class="nav-links">
+        <a class="nav-link" href="market.html">WALL STREET</a>
+        <span class="nav-sep">|</span>
+        <a class="nav-link" href="index.html">YOUR PROFILES</a>
+      </div>
+    </nav>
+
+    <div id="app">
+      <div class="page active">
+        <div class="container-fluid py-4">
+          <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+            <div>
+              <h2 class="page-title mb-1">ZURI VAULT</h2>
+              <div class="game-player" id="game-player"></div>
+            </div>
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+              <span class="rate-main-label" id="game-sync-label">MARKET DATA: —</span>
+              <label class="ws-pref-label" for="game-currency">CURRENCY</label>
+              <select id="game-currency" class="ws-pref-select"></select>
+              <span class="game-save-controls" id="game-save-controls" style="display: none">
+                <label class="ws-pref-label" for="game-save">SAVE</label>
+                <select id="game-save" class="ws-pref-select"></select>
+                <button class="btn btn-gta" id="game-new-btn">NEW GAME</button>
+                <button class="btn btn-gta btn-danger-del" id="game-reset-btn">RESET</button>
+              </span>
+            </div>
+          </div>
+
+          <div id="game-loading" class="empty-state">LOADING...</div>
+
+          <!-- ===== DATA FOLDER ===== -->
+          <div id="game-connect" class="card-gta mb-4" style="display: none">
+            <div class="card-gta-header">OPEN YOUR DATA FOLDER</div>
+            <div class="card-gta-body">
+              <p class="game-rules">
+                Zuri Vault keeps every game as a file in a <strong>Game</strong> folder inside your Liberty Finance data folder, next to
+                <strong>Resources</strong>, where the market data is kept. Pick the same folder you use for your profiles, or any folder you like.
+              </p>
+              <button class="btn btn-gta" id="game-connect-btn">CHOOSE DATA FOLDER</button>
+            </div>
+          </div>
+
+          <!-- ===== NEW GAME ===== -->
+          <div id="game-start" class="card-gta mb-4" style="display: none">
+            <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <span>NEW GAME</span>
+              <button class="btn btn-gta btn-sm" id="game-start-back" style="display: none">BACK TO MY GAME</button>
+            </div>
+            <div class="card-gta-body">
+              <p class="game-rules">
+                You start with cash in Swiss francs, a job and today's real market prices. Every month your salary comes in and your rent and
+                bills go out. Buy and sell stocks, ETFs, crypto, metals, cars, watches, art and homes, then come back every day to see how your
+                decisions did. Swiss rules apply: capital gains are tax free, stock and ETF trades pay stamp duty, and wealth tax is due on
+                31 December with your city's tariff.
+              </p>
+              <div class="row mb-3">
+                <div class="col-12 col-md-6 mb-2">
+                  <label class="form-label" for="game-name">YOUR NAME</label>
+                  <input id="game-name" class="form-control form-gta" type="text" maxlength="40" placeholder="PLAYER" autocomplete="off" />
+                </div>
+                <div class="col-12 col-md-6 mb-2">
+                  <label class="form-label" for="game-location">WHERE YOU LIVE</label>
+                  <select id="game-location" class="form-select form-gta"></select>
+                </div>
+              </div>
+              <div class="form-label">CHOOSE YOUR DIFFICULTY</div>
+              <div class="row" id="game-difficulty-grid"></div>
+            </div>
+          </div>
+
+          <!-- ===== RUNNING GAME ===== -->
+          <div id="game-board" style="display: none">
+            <div class="row" id="game-stats"></div>
+
+            <div class="card-gta mb-4">
+              <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>NET WORTH</span>
+                <span class="ws-header-note">DASHED: THE SAME MONEY IN THE SMI · DOTTED: MONEY PUT IN</span>
+              </div>
+              <div class="card-gta-body"><div class="game-chart-wrap"><canvas id="game-chart"></canvas></div></div>
+            </div>
+
+            <div class="row">
+              <div class="col-12 col-xl-4 mb-4">
+                <div class="card-gta h-100 mb-0">
+                  <div class="card-gta-header">BUY</div>
+                  <div class="card-gta-body">
+                    <div class="game-toggle mb-3" role="group" aria-label="Asset type">
+                      <button class="game-toggle-btn" data-buy-tab="market">STOCK MARKET</button>
+                      <button class="game-toggle-btn" data-buy-tab="tangible">TANGIBLE ASSETS</button>
+                    </div>
+                    <label class="form-label" for="game-asset">ASSET</label>
+                    <select id="game-asset" class="form-select form-gta mb-3"></select>
+                    <div class="game-quote mb-2" id="game-quote"></div>
+                    <div class="game-details mb-3" id="game-details"></div>
+                    <div class="game-toggle mb-2" role="group" aria-label="Buy by" id="game-mode-toggle">
+                      <button class="game-toggle-btn" data-buy-mode="amount">AMOUNT</button>
+                      <button class="game-toggle-btn" data-buy-mode="quantity">QUANTITY</button>
+                    </div>
+                    <label class="form-label" for="game-amount" id="game-amount-label">AMOUNT (CHF)</label>
+                    <div class="d-flex gap-2 mb-2">
+                      <input id="game-amount" class="form-control form-gta" type="number" min="0" step="any" inputmode="decimal" />
+                      <select id="game-unit" class="form-select form-gta game-unit" aria-label="Metal unit" style="display: none">
+                        <option value="g">GRAMS</option>
+                        <option value="kg">KILOS</option>
+                      </select>
+                    </div>
+                    <div id="game-down-wrap" style="display: none">
+                      <label class="form-label" for="game-down">DOWN PAYMENT (%, AT LEAST 20)</label>
+                      <input id="game-down" class="form-control form-gta mb-2" type="number" min="20" max="100" step="1" value="20" inputmode="numeric" />
+                    </div>
+                    <div class="game-preview mb-3" id="game-preview"></div>
+                    <button class="btn btn-gta w-100" id="game-buy-btn">BUY</button>
+                  </div>
+                </div>
+              </div>
+              <div class="col-12 col-xl-8 mb-4">
+                <div class="card-gta h-100 mb-0">
+                  <div class="card-gta-header">HOLDINGS</div>
+                  <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-12 col-xl-4 mb-4">
+                <div class="card-gta h-100 mb-0">
+                  <div class="card-gta-header" id="game-budget-title">MONTHLY BUDGET</div>
+                  <div class="card-gta-body"><div id="game-budget"></div></div>
+                </div>
+              </div>
+              <div class="col-12 col-xl-8 mb-4">
+                <div class="card-gta h-100 mb-0">
+                  <div class="card-gta-header">HISTORY</div>
+                  <div class="card-gta-body game-table-scroll"><div id="game-history"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <p class="game-note">
+              Game only, not tax advice. Salaries, income and wealth tax, rents and living costs are rough averages for each city (single
+              person, no church tax). Market prices are real daily closes from Randata, split adjusted, without dividends, converted to CHF
+              with that day's exchange rate. Car, watch, art and house prices are simulated around real prices, the same for every player.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== TOAST ===== -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+      <div id="toast-msg" class="toast toast-gta" role="alert"><div class="toast-body" id="toast-body"></div></div>
+    </div>
+
+    <!-- ===== LIBS ===== -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
+    <script>
+      Chart.defaults.font.family = "'Share Tech Mono', monospace";
+      Chart.defaults.font.size = 12;
+    </script>
+
+    <!-- ===== SHARED APP CODE (storage, market data and its currency rules) ===== -->
+    <script src="js/storage.js?v=9"></script>
+    <script src="js/randata.js?v=10"></script>
+    <script src="js/utils.js?v=34"></script>
+    <script src="js/pages-shared.js?v=28"></script>
+    <script src="js/pages-wallstreet.js?v=44"></script>
+
+    <!-- ===== GAME ===== -->
+    <script src="game/engine.js?v=4"></script>
+    <script src="game/tangibles.js?v=4"></script>
+    <script src="game/saves.js?v=1"></script>
+    <script src="game/page.js?v=4"></script>
+  </body>
+</html>

@@ -297,6 +297,7 @@ body {
 .landing-market {
   display: flex;
   justify-content: center;
+  gap: 12px;
   width: 460px;
   max-width: 92vw;
   margin: 24px auto 0;
