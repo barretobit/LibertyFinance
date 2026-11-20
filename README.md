@@ -74,6 +74,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
 - **Incomes**: source, amount, currency and date, with **average monthly** and **total net income** per year
 - **Expenses**: monthly or yearly, per year breakdown with **annual cost** calculations 🧾
+- **Copy to year**: replicate a full year's expense list to another year in one click, then adjust what changed 📋
 
 ### 🧾 Debts
 

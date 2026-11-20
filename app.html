@@ -527,6 +527,7 @@
             <h2 class="page-title">EXPENSES</h2>
             <div class="d-flex align-items-center gap-2">
               <select class="form-select form-gta" id="expense-year-select" style="width: 120px" onchange="Pages.expenses()"></select>
+              <button class="btn btn-gta" onclick="App.showModal('expenseCopy')">COPY TO YEAR</button>
               <button class="btn btn-gta" onclick="App.showModal('expense')">+ ADD EXPENSE</button>
             </div>
           </div>
@@ -1374,6 +1375,27 @@
       </div>
     </div>
 
+    <!-- Copy Expenses Modal -->
+    <div class="modal fade" id="modal-expense-copy" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title">COPY EXPENSES</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p id="expense-copy-summary"></p>
+            <div class="mb-3">
+              <label class="form-label">TO YEAR</label>
+              <select class="form-select form-gta" id="expense-copy-year"></select>
+            </div>
+            <p id="expense-copy-warning" class="mb-0" style="display: none"></p>
+          </div>
+          <div class="modal-footer"><button class="btn btn-gta" onclick="App.saveExpenseCopy()">COPY</button></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Debt Modal -->
     <div class="modal fade" id="modal-debt" tabindex="-1">
       <div class="modal-dialog">
@@ -1515,7 +1537,7 @@
     <script src="js/db.js?v=30"></script>
     <script src="js/utils.js?v=34"></script>
     <script src="js/valuation.js?v=5"></script>
-    <script src="js/app.js?v=37"></script>
+    <script src="js/app.js?v=38"></script>
     <script src="js/pages-shared.js?v=28"></script>
     <script src="js/pages-dashboard.js?v=35"></script>
     <script src="js/pages-portfolios.js?v=33"></script>

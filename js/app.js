@@ -28,14 +28,15 @@ const App = {
       return;
     }
 
+    // Theme first, so a reload does not show the default green while balances recompute.
+    this._applyRadius();
+    this._applyAccent();
+
     try {
       await this._recomputeAllBalances();
     } catch (error) {
       /* non-fatal */
     }
-
-    this._applyRadius();
-    this._applyAccent();
 
     (async () => {
       await Pages.fetchMetalPrices(true).catch(() => {});
@@ -74,12 +75,20 @@ const App = {
       assetValuation: new bootstrap.Modal(document.getElementById("modal-asset-valuation")),
       income: new bootstrap.Modal(document.getElementById("modal-income")),
       expense: new bootstrap.Modal(document.getElementById("modal-expense")),
+      expenseCopy: new bootstrap.Modal(document.getElementById("modal-expense-copy")),
       debt: new bootstrap.Modal(document.getElementById("modal-debt")),
       goal: new bootstrap.Modal(document.getElementById("modal-goal")),
       settings: new bootstrap.Modal(document.getElementById("modal-settings")),
       importModal: new bootstrap.Modal(document.getElementById("modal-import")),
       confirm: new bootstrap.Modal(document.getElementById("modal-confirm")),
     };
+
+    // The settings modal previews accent and corners live. Closing it without SAVE
+    // (X, Esc, backdrop) must drop that preview, or it looks saved until the next reload.
+    document.getElementById("modal-settings").addEventListener("hidden.bs.modal", () => {
+      this._applyAccent();
+      this._applyRadius();
+    });
 
     window.addEventListener("hashchange", () => this.route());
     this.route();
@@ -190,6 +199,9 @@ const App = {
         break;
       case "expense":
         this._showExpenseModal(args[0]);
+        break;
+      case "expenseCopy":
+        this._showExpenseCopyModal();
         break;
       case "debt":
         this._showDebtModal(args[0]);
@@ -1072,6 +1084,41 @@ const App = {
     }
   },
 
+  // Copies every expense of the year selected on the Expenses page to another year
+  async _showExpenseCopyModal() {
+    const sourceYear = document.getElementById("expense-year-select").value;
+    const allExpenses = await DB.getAll("expenses");
+    const countOfYear = (year) => allExpenses.filter((expense) => expense.year === year).length;
+    const expensesText = (count) => count + (count === 1 ? " expense" : " expenses");
+    const sourceCount = countOfYear(sourceYear);
+    if (sourceCount === 0) {
+      this.toast("NO EXPENSES IN " + sourceYear + " TO COPY");
+      return;
+    }
+
+    // Same years the expense modal offers: next year, this year and the 10 before it
+    const currentYear = new Date().getFullYear();
+    const years = [];
+    for (let year = currentYear + 1; year >= currentYear - 10; year--) {
+      if (String(year) !== sourceYear) years.push(String(year));
+    }
+    const yearField = document.getElementById("expense-copy-year");
+    yearField.innerHTML = years.map((year) => `<option value="${year}">${year}</option>`).join("");
+    const followingYear = String(Number(sourceYear) + 1);
+    yearField.value = years.includes(followingYear) ? followingYear : years[0];
+
+    document.getElementById("expense-copy-summary").textContent = `Copy all ${expensesText(sourceCount)} of ${sourceYear} to:`;
+    const warning = document.getElementById("expense-copy-warning");
+    const showWarning = () => {
+      const targetCount = countOfYear(yearField.value);
+      warning.style.display = targetCount > 0 ? "" : "none";
+      warning.textContent = `${yearField.value} already has ${expensesText(targetCount)}. The copies are added next to them.`;
+    };
+    yearField.onchange = showWarning;
+    showWarning();
+    this._modals.expenseCopy.show();
+  },
+
   _showDebtModal(editId) {
     const title = document.getElementById("modal-debt-title");
     const idField = document.getElementById("debt-id");
@@ -1475,6 +1522,24 @@ const App = {
 
     this._modals.expense.hide();
     this.toast("EXPENSE SAVED");
+    this.route();
+  },
+
+  async saveExpenseCopy() {
+    const yearSelect = document.getElementById("expense-year-select");
+    const sourceYear = yearSelect.value;
+    const targetYear = document.getElementById("expense-copy-year").value;
+    if (!targetYear || targetYear === sourceYear) return;
+    const sourceExpenses = (await DB.getAll("expenses")).filter((expense) => expense.year === sourceYear);
+    // A stored date would keep the exchange rate of the source year, so the copy drops it
+    for (const { id, date, ...expense } of sourceExpenses) {
+      await DB.add("expenses", { ...expense, year: targetYear });
+    }
+
+    this._modals.expenseCopy.hide();
+    this.toast(sourceExpenses.length + " EXPENSES COPIED TO " + targetYear);
+    // Show the target year; the option may not exist yet when that year had no expenses
+    yearSelect.add(new Option(targetYear, targetYear, true, true));
     this.route();
   },
 
@@ -1998,6 +2063,7 @@ const SAVE_HANDLERS = [
   "saveAssetHistoryEntry",
   "saveIncome",
   "saveExpense",
+  "saveExpenseCopy",
   "saveDebt",
   "saveGoal",
   "saveSettings",
