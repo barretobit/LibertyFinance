@@ -9,8 +9,8 @@ function yearColumns(year, closes) {
   return { date: dates, open: closes, high: closes, low: closes, close: closes, volume: closes.map(() => 100) };
 }
 
-// Loads js/randata.js with in-memory files and a fake API; `failYears` makes the year endpoint answer HTTP 500
-function loadRandata({ failYears = false } = {}) {
+// Loads js/randata.js with in-memory files and a fake API; `options.failYears` makes the year endpoint answer HTTP 500 (read on every request, so a test can flip it)
+function loadRandata(options = {}) {
   const files = {};
   const requests = [];
   let fileReads = 0;
@@ -28,7 +28,7 @@ function loadRandata({ failYears = false } = {}) {
     requests.push(path);
     const year = /^finance\/history\/year\/(\d+)$/.exec(path);
     if (year) {
-      if (failYears) return { ok: false, status: 500 };
+      if (options.failYears) return { ok: false, status: 500 };
       const yearNumber = Number(year[1]);
       // Newer years answer first, as a warm server would.
       await new Promise((resolve) => setTimeout(resolve, (thisYear - yearNumber) * 2));
@@ -86,6 +86,31 @@ test('a failed full load leaves the history classes unsynced, so the next sync r
   const requestsBefore = requests.length;
   await Randata.sync();
   assert.ok(requests.slice(requestsBefore).some((path) => path.startsWith('finance/history/year/')));
+});
+
+test('after forgetSync the next sync reloads the full history', async () => {
+  const { Randata, requests } = loadRandata();
+  await Randata.sync();
+  await Randata.forgetSync();
+  const requestsBefore = requests.length;
+
+  const result = await Randata.sync({ force: true });
+
+  assert.strictEqual(result.status, 'synced');
+  assert.ok(requests.slice(requestsBefore).some((path) => path.startsWith('finance/history/year/')), 'full load requested again');
+  assert.deepStrictEqual((await Randata.readClass('index')).data['^GSPC'].map((bar) => bar.close), [10, 11, 12, 13]);
+});
+
+test('a failed reload after forgetSync keeps the old market data', async () => {
+  const options = {};
+  const { Randata } = loadRandata(options);
+  await Randata.sync();
+  await Randata.forgetSync();
+  options.failYears = true;
+
+  await Randata.sync({ force: true });
+
+  assert.deepStrictEqual((await Randata.readClass('index')).data['^GSPC'].map((bar) => bar.close), [10, 11, 12, 13]);
 });
 
 test('fx pairs come from the cached history, not from the database-backed /finance/fx/rates', async () => {

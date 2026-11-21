@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Liberty Finance: Randata Console</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+
+    <!-- Stylesheets only: this page holds the Randata admin key, so it runs no third-party scripts. -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css?v=48" />
+    <style>
+      :root { --radius: 10px; --warning: #ffb000; }
+      .rd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+      .rd-stat { border: 1px solid var(--border-color); border-radius: var(--radius); padding: 10px 12px; background: #0d0d0d; }
+      .rd-stat-label { font-family: var(--font-title); font-size: 11px; letter-spacing: 1px; color: var(--text-secondary); }
+      .rd-stat-value { font-size: 16px; color: var(--text-primary); word-break: break-word; }
+      .rd-ok { color: var(--accent); }
+      .rd-warn { color: var(--warning); }
+      .rd-bad { color: var(--danger); }
+      .rd-note { font-size: 12px; color: var(--text-secondary); }
+      .rd-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      .rd-row .form-control, .rd-row .form-select { width: auto; flex: 1 1 180px; }
+      .rd-row label { font-size: 12px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+      /* Header filters stay on one line: the select keeps its natural width instead of growing. */
+      .card-gta-header .rd-row { flex-wrap: nowrap; }
+      .card-gta-header .rd-row .form-select { flex: 0 1 auto; }
+      .rd-message { margin-top: 12px; white-space: pre-wrap; font-size: 13px; }
+      .rd-table-wrap { max-height: 70vh; overflow: auto; }
+      .rd-table-wrap th { position: sticky; top: 0; z-index: 1; }
+      .rd-table-wrap td, .rd-table-wrap th { white-space: nowrap; }
+      .rd-table-wrap td.rd-wrap { white-space: normal; min-width: 220px; }
+      .btn-gta.btn-sm { padding: 3px 10px; font-size: 11px; }
+      .btn-gta:disabled { opacity: 0.4; pointer-events: none; }
+      .rd-dialog { width: min(560px, calc(100vw - 32px)); padding: 0; border: none; background: transparent; color: var(--text-primary); }
+      .rd-dialog::backdrop { background: rgba(0, 0, 0, 0.75); }
+      @media (max-width: 575px) { .page .container-fluid { padding-left: 16px; padding-right: 16px; } }
+    </style>
+  </head>
+  <body>
+    <nav class="gtanav">
+      <div class="nav-brand" onclick="window.location.href='index.html'">LIBERTY FINANCE <span class="nav-profile">RANDATA CONSOLE</span></div>
+      <div class="nav-links">
+        <a class="nav-link" href="market.html">MARKET VIEW</a>
+        <span class="nav-sep">|</span>
+        <a class="nav-link" href="index.html">YOUR PROFILES</a>
+      </div>
+    </nav>
+
+    <div id="app">
+      <div class="page active">
+        <div class="container-fluid py-4">
+          <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+            <h2 class="page-title">RANDATA</h2>
+            <div class="d-flex gap-2">
+              <button class="btn btn-gta" id="admin-button">ADMIN</button>
+              <button class="btn btn-gta" id="refresh-button">REFRESH</button>
+            </div>
+          </div>
+
+          <!-- SERVER + LOCAL STATUS -->
+          <div class="card-gta mb-4">
+            <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <span>STATUS</span>
+              <button class="btn btn-gta btn-sm" id="rebuild-button" disabled title="Needs the admin key">REBUILD CACHE</button>
+            </div>
+            <div class="card-gta-body">
+              <div class="rd-grid" id="status-grid"></div>
+              <div class="rd-note mt-2" id="status-note"></div>
+            </div>
+          </div>
+
+          <!-- ADMIN KEY (dialog, opened by the ADMIN button) -->
+          <dialog class="rd-dialog" id="admin-dialog">
+          <div class="card-gta">
+            <div class="card-gta-header d-flex justify-content-between align-items-center">
+              <span>ADMIN KEY</span>
+              <button type="button" class="btn btn-gta btn-sm" id="admin-close">CLOSE</button>
+            </div>
+            <div class="card-gta-body">
+              <form class="rd-row" id="key-form" autocomplete="off">
+                <input type="password" class="form-control form-gta" id="key-input" placeholder="X-ADMIN-KEY" autocomplete="off" spellcheck="false" />
+                <label><input type="checkbox" id="key-remember" /> KEEP FOR THIS TAB</label>
+                <button type="submit" class="btn btn-gta">UNLOCK</button>
+                <button type="button" class="btn btn-gta" id="key-lock">LOCK</button>
+              </form>
+              <div class="rd-message" id="key-message"></div>
+              <div class="rd-note mt-2">The key is checked by Randata itself. It is held in this tab's memory only (or this tab's session storage with KEEP FOR THIS TAB) and is gone when the tab closes.</div>
+            </div>
+          </div>
+          </dialog>
+
+          <!-- FIND OR REGISTER -->
+          <div class="card-gta mb-4">
+            <div class="card-gta-header">FIND OR REGISTER A SYMBOL</div>
+            <div class="card-gta-body">
+              <form class="rd-row" id="find-form" autocomplete="off">
+                <input type="text" class="form-control form-gta" id="find-input" placeholder="YAHOO SYMBOL OR NAME (E.G. NVDA, VWCE.DE, ^VIX)" spellcheck="false" />
+                <button type="submit" class="btn btn-gta">FIND</button>
+              </form>
+              <div class="rd-message" id="find-result"></div>
+              <div id="register-panel" class="mt-3" style="display:none">
+                <div class="rd-row">
+                  <select class="form-select form-gta" id="register-type">
+                    <option value="">TYPE: FROM YAHOO</option>
+                    <option value="stock">STOCK</option>
+                    <option value="etf">ETF</option>
+                    <option value="index">INDEX</option>
+                    <option value="crypto">CRYPTO</option>
+                    <option value="metal">METAL</option>
+                    <option value="fx">FX</option>
+                  </select>
+                  <button class="btn btn-gta" id="check-button">CHECK ON YAHOO</button>
+                  <button class="btn btn-gta" id="register-button" disabled>REGISTER + BACKFILL</button>
+                </div>
+                <div class="rd-message" id="register-result"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- COVERAGE -->
+          <div class="card-gta mb-4">
+            <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <span>10-YEAR COVERAGE</span>
+              <div class="rd-row">
+                <select class="form-select form-gta" id="coverage-class">
+                  <option value="">ALL CLASSES</option>
+                  <option value="stock">STOCKS</option>
+                  <option value="etf">ETFS</option>
+                  <option value="index">INDEXES</option>
+                  <option value="crypto">CRYPTOS</option>
+                  <option value="metal">METALS</option>
+                  <option value="fx">FX</option>
+                </select>
+                <label><input type="checkbox" id="coverage-problems" /> PROBLEMS ONLY</label>
+              </div>
+            </div>
+            <div class="card-gta-body">
+              <input type="search" class="form-control form-gta mb-2" id="coverage-search" placeholder="SEARCH NAME OR SYMBOL" autocomplete="off" spellcheck="false" />
+              <div class="rd-note mb-2" id="coverage-note"></div>
+              <div class="rd-table-wrap">
+                <table class="table table-gta">
+                  <thead>
+                    <tr><th>SYMBOL</th><th>NAME</th><th>CLASS</th><th>FIRST</th><th>LAST (LOCAL)</th><th>LAST (SERVER)</th><th>ROWS</th><th>YEARS</th><th>MAX GAP</th><th>INCEPTION</th><th>STATUS</th><th></th></tr>
+                  </thead>
+                  <tbody id="coverage-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- LOGS -->
+          <div class="card-gta mb-4">
+            <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <span>INGESTION LOGS (7 DAYS)</span>
+              <div class="rd-row">
+                <label><input type="checkbox" id="logs-failures" checked /> FAILURES ONLY</label>
+                <button class="btn btn-gta btn-sm" id="logs-button" disabled>LOAD</button>
+              </div>
+            </div>
+            <div class="card-gta-body">
+              <div class="rd-note mb-2" id="logs-note">Unlock with the admin key to read the logs.</div>
+              <div class="rd-table-wrap">
+                <table class="table table-gta">
+                  <thead><tr><th>WHEN (UTC)</th><th>LEVEL</th><th>SYMBOL</th><th>MESSAGE</th></tr></thead>
+                  <tbody id="logs-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/storage.js?v=8"></script>
+    <script src="js/randata.js?v=11"></script>
+    <script src="js/randata-health.js?v=1"></script>
+    <script src="js/utils.js?v=34"></script>
+
+    <script>
+      /* ===== Randata console: status, catalog search, 10-year coverage, admin actions =====
+       * Read-only views use public endpoints and the local Resources/ copy.
+       * Writes and logs need X-Admin-Key, which Randata verifies server side. */
+      const API_BASE = "https://randata.onrender.com";
+      const DEFAULT_TIMEOUT_MS = 90000;
+      // Onboarding downloads 10 years from Yahoo (~1 min) and Render may need a cold start first.
+      const ONBOARD_TIMEOUT_MS = 240000;
+      const KEY_STORAGE_NAME = "randata-admin-key";
+      const CLASS_NAMES = ["stock", "etf", "index", "crypto", "metal", "fx"];
+      const LOGS_SHOWN = 200;
+
+      let adminKey = null;
+      let inceptionBySymbol = {};
+      let serverLastBySymbol = {};
+      let coverageRows = [];
+      let checkedSymbol = null;
+      let checkedName = null;
+
+      const element = (id) => document.getElementById(id);
+
+      function readStoredKey() {
+        try { return sessionStorage.getItem(KEY_STORAGE_NAME); } catch (error) { return null; }
+      }
+      function writeStoredKey(value) {
+        try {
+          if (value) sessionStorage.setItem(KEY_STORAGE_NAME, value);
+          else sessionStorage.removeItem(KEY_STORAGE_NAME);
+        } catch (error) { /* storage blocked: memory only */ }
+      }
+
+      // JSON request to Randata; non-2xx answers throw with the server's detail message.
+      async function request(path, options) {
+        const settings = options || {};
+        const abortController = new AbortController();
+        const timer = setTimeout(() => abortController.abort(), settings.timeoutMs || DEFAULT_TIMEOUT_MS);
+        const headers = { accept: "application/json" };
+        if (settings.admin) headers["X-Admin-Key"] = adminKey || "";
+        if (settings.body) headers["content-type"] = "application/json";
+        try {
+          const response = await fetch(API_BASE + path, {
+            method: settings.method || "GET",
+            headers: headers,
+            body: settings.body ? JSON.stringify(settings.body) : undefined,
+            signal: abortController.signal,
+          });
+          let payload = null;
+          try { payload = await response.json(); } catch (error) { payload = null; }
+          if (!response.ok) {
+            const detail = payload && payload.detail ? (typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail)) : response.statusText;
+            const failure = new Error("HTTP " + response.status + ": " + detail);
+            failure.status = response.status;
+            throw failure;
+          }
+          return payload;
+        } catch (error) {
+          if (error.name === "AbortError") throw new Error("Timed out. Randata may still be working; refresh in a minute.");
+          throw error;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      function statTile(label, value, tone) {
+        return '<div class="rd-stat"><div class="rd-stat-label">' + escapeHtml(label) + '</div><div class="rd-stat-value ' + (tone || "") + '">' + escapeHtml(value) + "</div></div>";
+      }
+
+      function hoursAgo(isoText) {
+        const hours = (Date.now() - new Date(isoText).getTime()) / 3600000;
+        return hours < 1 ? Math.round(hours * 60) + " min ago" : Math.round(hours) + " h ago";
+      }
+
+      // ---------- Status ----------
+      async function loadServerStatus() {
+        const [cacheStatus, lastUpdated] = await Promise.allSettled([
+          request("/finance/cache/status"),
+          request("/finance/last-updated"),
+        ]);
+        const tiles = [];
+        if (cacheStatus.status === "fulfilled" && cacheStatus.value) {
+          const status = cacheStatus.value;
+          tiles.push(statTile("SERVER", "ONLINE", "rd-ok"));
+          tiles.push(statTile("CACHE REBUILT", status.loaded_at ? hoursAgo(status.loaded_at) : "NEVER", status.loaded_at ? "" : "rd-bad"));
+          tiles.push(statTile("CACHE", formatNumber(status.symbols) + " symbols / " + formatNumber(status.total_rows) + " rows"));
+        } else {
+          tiles.push(statTile("SERVER", "OFFLINE: " + (cacheStatus.reason && cacheStatus.reason.message), "rd-bad"));
+        }
+        serverLastBySymbol = {};
+        if (lastUpdated.status === "fulfilled" && Array.isArray(lastUpdated.value)) {
+          lastUpdated.value.forEach((row) => { serverLastBySymbol[row.symbol] = row.last_date; });
+          const today = todayIsoDate();
+          const staleSymbols = lastUpdated.value
+            .filter((row) => RandataHealth.coverage([{ date: row.last_date }], today, null).problems.some((problem) => problem.startsWith("stale")))
+            .map((row) => row.symbol + " (" + row.last_date + ")");
+          const newest = lastUpdated.value.map((row) => row.last_date).sort().pop() || "—";
+          tiles.push(statTile("DATABASE NEWEST BAR", newest));
+          tiles.push(statTile("DATABASE STALE SYMBOLS", staleSymbols.length ? staleSymbols.join(", ") : "NONE", staleSymbols.length ? "rd-warn" : "rd-ok"));
+        } else {
+          tiles.push(statTile("DATABASE", "UNREACHABLE: " + (lastUpdated.reason && lastUpdated.reason.message), "rd-bad"));
+        }
+        return tiles;
+      }
+
+      function localStatusTile() {
+        const result = Randata.getLastResult();
+        if (!result) return statTile("LOCAL COPY", "NOT SYNCED", "rd-warn");
+        if (result.status === "offline") return statTile("LOCAL COPY", "OFFLINE" + (result.error ? ": " + result.error : ""), "rd-bad");
+        return statTile("LOCAL COPY", result.status.toUpperCase() + " " + (result.synced_date || "") + " · " + formatNumber(result.symbols) + " symbols", "rd-ok");
+      }
+
+      // ---------- Coverage ----------
+      async function buildCoverageRows() {
+        const today = todayIsoDate();
+        const rows = [];
+        for (const assetClass of CLASS_NAMES) {
+          const classData = await Randata.readClass(assetClass);
+          const seen = new Set();
+          (classData.assets || []).forEach((asset) => {
+            if (!asset || !asset.symbol || seen.has(asset.symbol)) return;
+            seen.add(asset.symbol);
+            const inception = inceptionBySymbol[asset.symbol] || null;
+            rows.push(Object.assign({ symbol: asset.symbol, name: asset.name || "", assetClass: assetClass, inception: inception },
+              RandataHealth.coverage(classData.data[asset.symbol], today, inception)));
+          });
+        }
+        rows.sort((first, second) => (second.problems.length - first.problems.length) || first.symbol.localeCompare(second.symbol));
+        coverageRows = rows;
+      }
+
+      function renderCoverage() {
+        const classFilter = element("coverage-class").value;
+        const problemsOnly = element("coverage-problems").checked;
+        const searchText = element("coverage-search").value.trim().toLowerCase();
+        const shown = coverageRows.filter((row) => (!classFilter || row.assetClass === classFilter) && (!problemsOnly || row.problems.length)
+          && (!searchText || row.symbol.toLowerCase().includes(searchText) || row.name.toLowerCase().includes(searchText)));
+        const problemCount = coverageRows.filter((row) => row.problems.length).length;
+        element("coverage-note").textContent = coverageRows.length
+          ? coverageRows.length + " registered symbols, " + problemCount + " with problems. Expected start: " + RandataHealth.expectedStart(todayIsoDate(), null)
+            + (adminKey ? " (or the inception date for younger listings)." : ". Unlock to use inception dates, so young listings are not flagged.")
+          : "No local market data yet. Wait for the sync or press REFRESH.";
+        element("coverage-body").innerHTML = shown.map((row) => {
+          const serverLast = serverLastBySymbol[row.symbol] || "—";
+          const status = row.problems.length
+            ? '<span class="' + (row.rows ? "rd-warn" : "rd-bad") + '">' + escapeHtml(row.problems.join("; ")) + "</span>"
+            : '<span class="rd-ok">OK</span>';
+          return "<tr>"
+            + "<td>" + escapeHtml(row.symbol) + "</td>"
+            + "<td>" + escapeHtml(row.name) + "</td>"
+            + "<td>" + escapeHtml(row.assetClass.toUpperCase()) + "</td>"
+            + "<td>" + escapeHtml(row.firstDate || "—") + "</td>"
+            + "<td>" + escapeHtml(row.lastDate || "—") + "</td>"
+            + "<td>" + escapeHtml(serverLast) + "</td>"
+            + "<td>" + formatNumber(row.rows) + "</td>"
+            + "<td>" + row.years + "</td>"
+            + "<td>" + row.largestGapDays + " d</td>"
+            + "<td>" + escapeHtml(row.inception || "—") + "</td>"
+            + '<td class="rd-wrap">' + status + "</td>"
+            + '<td><button class="btn btn-gta btn-sm" data-backfill="' + escapeHtml(row.symbol) + '"' + (adminKey ? "" : " disabled") + ">BACKFILL</button></td>"
+            + "</tr>";
+        }).join("");
+      }
+
+      async function backfill(symbol, button) {
+        if (!confirm("Re-download 10 years of " + symbol + " from Yahoo into Randata? Existing rows are updated, nothing is deleted.")) return;
+        button.disabled = true;
+        button.textContent = "WORKING...";
+        try {
+          const result = await request("/finance/admin/assets/" + encodeURIComponent(symbol) + "/backfill", { method: "POST", admin: true, timeoutMs: ONBOARD_TIMEOUT_MS });
+          button.textContent = result.rows_written + " ROWS";
+          await refreshAll(true);
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "BACKFILL";
+          alert(symbol + ": " + error.message);
+        }
+      }
+
+      // ---------- Find / register ----------
+      function findSymbol(query) {
+        const text = query.trim().toLowerCase();
+        element("register-result").textContent = "";
+        element("register-button").disabled = true;
+        checkedSymbol = null;
+        checkedName = null;
+        if (!text) { element("find-result").textContent = ""; element("register-panel").style.display = "none"; return; }
+        const exact = coverageRows.find((row) => row.symbol.toLowerCase() === text);
+        const partial = coverageRows.filter((row) => row.symbol.toLowerCase().includes(text) || row.name.toLowerCase().includes(text)).slice(0, 10);
+        const lines = [];
+        if (exact) {
+          lines.push('<span class="rd-ok">' + escapeHtml(exact.symbol) + " IS REGISTERED</span> (" + escapeHtml(exact.assetClass.toUpperCase()) + ", " + escapeHtml(exact.name) + ")");
+          lines.push(exact.rows + " bars from " + escapeHtml(exact.firstDate || "—") + " to " + escapeHtml(exact.lastDate || "—") + ": "
+            + (exact.problems.length ? '<span class="rd-warn">' + escapeHtml(exact.problems.join("; ")) + "</span>" : '<span class="rd-ok">10-YEAR COVERAGE OK</span>'));
+        } else {
+          lines.push('<span class="rd-warn">NO REGISTERED SYMBOL IS EXACTLY ' + escapeHtml(query.trim().toUpperCase()) + "</span>");
+          if (partial.length) lines.push("Matching symbols or names: " + partial.map((row) => escapeHtml(row.symbol) + " (" + escapeHtml(row.name) + ")").join(", "));
+          if (!adminKey) lines.push("Unlock with the admin key to register it.");
+        }
+        element("find-result").innerHTML = lines.join("<br>");
+        element("register-panel").style.display = !exact && adminKey ? "" : "none";
+      }
+
+      async function checkOnYahoo() {
+        const symbol = element("find-input").value.trim();
+        if (!symbol) return;
+        const output = element("register-result");
+        output.textContent = "Asking Yahoo through Randata...";
+        element("register-button").disabled = true;
+        try {
+          const check = await request("/finance/admin/assets/check?symbol=" + encodeURIComponent(symbol), { admin: true });
+          if (!check.exists) { output.innerHTML = '<span class="rd-bad">NOT FOUND ON YAHOO.</span> ' + escapeHtml(check.note || ""); return; }
+          if (check.already_tracked) { output.innerHTML = '<span class="rd-ok">ALREADY TRACKED ON THE SERVER.</span> Press REFRESH to pull it locally.'; return; }
+          checkedSymbol = check.symbol || symbol;
+          checkedName = check.name || null;
+          output.innerHTML = '<span class="rd-ok">FOUND:</span> ' + escapeHtml(check.name || "—") + " · suggested type " + escapeHtml(check.suggested_type || "none (pick one)")
+            + " · latest close " + escapeHtml(check.latest_close == null ? "—" : check.latest_close);
+          element("register-button").disabled = !check.suggested_type && !element("register-type").value;
+        } catch (error) {
+          output.innerHTML = '<span class="rd-bad">' + escapeHtml(error.message) + "</span>";
+        }
+      }
+
+      async function register() {
+        if (!checkedSymbol) return;
+        const assetType = element("register-type").value;
+        if (!confirm("Register " + checkedSymbol + (assetType ? " as " + assetType : "") + " in Randata and download its 10-year history? This takes about a minute.")) return;
+        const output = element("register-result");
+        const button = element("register-button");
+        button.disabled = true;
+        output.textContent = "Registering and backfilling " + checkedSymbol + "... (about a minute, keep this tab open)";
+        try {
+          const body = { symbol: checkedSymbol };
+          if (assetType) body.asset_type = assetType;
+          // Without it the server asks Yahoo again and falls back to the symbol if that lookup comes back empty.
+          if (checkedName) body.name = checkedName;
+          const result = await request("/finance/admin/assets/onboard", { method: "POST", admin: true, body: body, timeoutMs: ONBOARD_TIMEOUT_MS });
+          output.innerHTML = '<span class="rd-ok">REGISTERED ' + escapeHtml(result.asset.symbol) + "</span> as " + escapeHtml(result.asset.asset_type)
+            + " · " + formatNumber(result.rows_written) + " rows · latest " + escapeHtml(result.latest ? result.latest.date : "—")
+            + "<br>Pulling the new history into the local copy (a full reload)...";
+          await refreshAll(true);
+          findSymbol(checkedSymbol);
+        } catch (error) {
+          output.innerHTML = '<span class="rd-bad">' + escapeHtml(error.message) + "</span>";
+          button.disabled = false;
+        }
+      }
+
+      // ---------- Admin key ----------
+      // The check only appears once Randata has accepted the key.
+      function showAdminState() {
+        const button = element("admin-button");
+        button.textContent = adminKey ? "ADMIN ✓" : "ADMIN";
+        button.title = adminKey ? "Admin key unlocked" : "Enter the admin key";
+        button.setAttribute("aria-label", button.title);
+        element("rebuild-button").disabled = !adminKey;
+        element("rebuild-button").title = adminKey ? "Rebuild the server cache, then reload this browser's copy" : "Needs the admin key";
+      }
+
+      async function unlock(key, remember) {
+        const message = element("key-message");
+        adminKey = key;
+        message.textContent = "Checking key...";
+        try {
+          const response = await request("/finance/admin/assets", { admin: true });
+          inceptionBySymbol = {};
+          (response.assets || []).forEach((asset) => { if (asset.inception_date) inceptionBySymbol[asset.symbol] = String(asset.inception_date).slice(0, 10); });
+          writeStoredKey(remember ? key : null);
+          message.innerHTML = '<span class="rd-ok">UNLOCKED.</span> ' + (response.assets || []).length + " assets tracked in the database.";
+          element("key-input").value = "";
+          element("admin-dialog").close();
+        } catch (error) {
+          adminKey = null;
+          inceptionBySymbol = {};
+          if (error.status === 403) writeStoredKey(null);
+          message.innerHTML = '<span class="rd-bad">' + escapeHtml(error.message) + "</span>";
+        }
+        element("logs-button").disabled = !adminKey;
+        showAdminState();
+        element("logs-note").textContent = adminKey ? "Press LOAD to read the logs." : "Unlock with the admin key to read the logs.";
+        await buildCoverageRows();
+        renderCoverage();
+        findSymbol(element("find-input").value);
+      }
+
+      function lock() {
+        adminKey = null;
+        inceptionBySymbol = {};
+        writeStoredKey(null);
+        element("key-message").textContent = "Locked.";
+        element("logs-button").disabled = true;
+        showAdminState();
+        element("logs-body").innerHTML = "";
+        element("logs-note").textContent = "Unlock with the admin key to read the logs.";
+        buildCoverageRows().then(() => { renderCoverage(); findSymbol(element("find-input").value); });
+      }
+
+      // ---------- Logs ----------
+      async function loadLogs() {
+        const note = element("logs-note");
+        note.textContent = "Loading...";
+        try {
+          const response = await request("/finance/logs", { admin: true });
+          const failuresOnly = element("logs-failures").checked;
+          const logs = (response.logs || []).filter((log) => !failuresOnly || !log.success || log.level === "WARNING" || log.level === "ERROR");
+          note.textContent = (response.count || 0) + " events in 7 days, " + logs.length + " shown" + (logs.length > LOGS_SHOWN ? " (newest " + LOGS_SHOWN + ")" : "") + ".";
+          element("logs-body").innerHTML = logs.slice(0, LOGS_SHOWN).map((log) => {
+            const tone = log.level === "ERROR" || !log.success ? "rd-bad" : log.level === "WARNING" ? "rd-warn" : "";
+            return "<tr><td>" + escapeHtml(log.recorded_at) + '</td><td class="' + tone + '">' + escapeHtml(log.level) + "</td><td>" + escapeHtml(log.symbol || "—")
+              + '</td><td class="rd-wrap">' + escapeHtml(log.message) + (log.exception ? '<br><span class="rd-bad">' + escapeHtml(log.exception) + "</span>" : "") + "</td></tr>";
+          }).join("");
+        } catch (error) {
+          note.innerHTML = '<span class="rd-bad">' + escapeHtml(error.message) + "</span>";
+        }
+      }
+
+      // ---------- Refresh ----------
+      async function refreshAll(force) {
+        const button = element("refresh-button");
+        button.disabled = true;
+        element("status-note").textContent = "Syncing the local copy (the first run downloads ~40 MB)...";
+        const [serverTiles] = await Promise.all([loadServerStatus(), Randata.sync({ force: !!force })]);
+        element("status-grid").innerHTML = serverTiles.join("") + localStatusTile();
+        element("status-note").textContent = "LAST (SERVER) is the newest bar in Randata's database; LAST (LOCAL) is this browser's copy.";
+        await buildCoverageRows();
+        renderCoverage();
+        button.disabled = false;
+      }
+
+      // Server: reload Randata's in-memory cache and year documents from the database.
+      // Local: drop this browser's sync bookkeeping and download the full history again.
+      // The old local files stay until the new download has replaced them.
+      async function rebuildCache() {
+        if (!confirm("Rebuild Randata's server cache from the database, then download this browser's full history again (~40 MB)?\n\nNothing in the database is deleted. The old local copy is kept until the new one has arrived.")) return;
+        const button = element("rebuild-button");
+        const note = element("status-note");
+        button.disabled = true;
+        button.textContent = "REBUILDING SERVER...";
+        note.textContent = "Randata is reloading its cache from the database...";
+        try {
+          const server = await request("/finance/admin/cache/refresh", { method: "POST", admin: true, timeoutMs: ONBOARD_TIMEOUT_MS });
+          button.textContent = "RELOADING LOCAL...";
+          await Randata.forgetSync();
+          await refreshAll(true);
+          const local = Randata.getLastResult();
+          note.innerHTML = '<span class="rd-ok">REBUILT.</span> Server: ' + formatNumber(server.symbols) + " symbols / " + formatNumber(server.total_rows) + " rows. Local: "
+            + escapeHtml(local && local.status === "synced" ? formatNumber(local.symbols) + " symbols / " + formatNumber(local.rows) + " rows" : "reload failed, the previous copy is kept; press REFRESH to retry");
+        } catch (error) {
+          note.innerHTML = '<span class="rd-bad">' + escapeHtml(error.message) + "</span>";
+        } finally {
+          button.textContent = "REBUILD CACHE";
+          button.disabled = !adminKey;
+        }
+      }
+
+      element("refresh-button").addEventListener("click", () => refreshAll(true));
+      element("rebuild-button").addEventListener("click", rebuildCache);
+      element("key-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const key = element("key-input").value.trim();
+        if (key) unlock(key, element("key-remember").checked);
+      });
+      element("key-lock").addEventListener("click", lock);
+      element("admin-button").addEventListener("click", () => { element("admin-dialog").showModal(); element("key-input").focus(); });
+      element("admin-close").addEventListener("click", () => element("admin-dialog").close());
+      // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
+      element("admin-dialog").addEventListener("click", (event) => { if (event.target === element("admin-dialog")) element("admin-dialog").close(); });
+      element("find-form").addEventListener("submit", (event) => { event.preventDefault(); findSymbol(element("find-input").value); });
+      element("check-button").addEventListener("click", checkOnYahoo);
+      element("register-button").addEventListener("click", register);
+      element("register-type").addEventListener("change", () => { if (checkedSymbol) element("register-button").disabled = false; });
+      element("coverage-class").addEventListener("change", renderCoverage);
+      element("coverage-problems").addEventListener("change", renderCoverage);
+      element("coverage-search").addEventListener("input", renderCoverage);
+      element("logs-button").addEventListener("click", loadLogs);
+      element("logs-failures").addEventListener("change", () => { if (element("logs-body").innerHTML) loadLogs(); });
+      element("coverage-body").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-backfill]");
+        if (button) backfill(button.getAttribute("data-backfill"), button);
+      });
+
+      (async () => {
+        // Same browser-storage cache as the Market View: no folder picker, no profile.
+        await Storage.setSessionMode("classic");
+        await refreshAll(false);
+        const storedKey = readStoredKey();
+        if (storedKey) {
+          element("key-remember").checked = true;
+          await unlock(storedKey, true);
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -148,6 +148,7 @@ Current version: **v1.20** · Themed "Liberty City Network" 🌆
 - `js/app.js`: router, modals and CRUD orchestration
 - `js/pages-*.js`: page renderers, split by area: `pages-shared` (helpers + `Pages`), `pages-dashboard`, `pages-portfolios`, `pages-accounts`, `pages-money` (custodians, incomes, expenses, debts), `pages-goals`, `pages-market` (exchange rates, metals), `pages-wallstreet` (market overview)
 - `js/randata.js`: the **market data client**: fetches 10-year market history from the public Randata API (indexes, ETFs, stocks, metals, cryptos, FX) — one full load plus small daily incremental pulls — and caches each class as its own file inside `Resources/`, so the app serves cached data when offline
+- `randata.html`: the **Randata console** (not linked from the app): server and database health, "is this symbol registered", 10-year coverage per symbol (same rule as Randata's own backfill check), and, once unlocked with Randata's `X-Admin-Key`, registering new symbols, re-running backfills and reading the ingestion logs. The key is checked by Randata, kept only in the tab (memory or session storage), and the page loads no third-party scripts
 - `server.js`: **local preview only** (static files; GitHub Pages serves the same files in production)
 
 **Data storage**: plain JSON, one file per profile (plus a shared `market.json` for FX rates & metal prices, and a `Resources/` folder holding the market data cache — one file per asset class). Zero SQL, zero cloud. 📄
@@ -252,6 +253,7 @@ Open the link, choose a data folder or file, and you're in. Bookmark it.
 LibertyFinance/
 ├── index.html              # profile picker (landing page)
 ├── app.html                # main dashboard SPA
+├── randata.html            # Randata console: server health, 10-year coverage, register symbols (admin key)
 ├── css/style.css           # retro theme
 ├── js/
 │   ├── storage.js          # storage layer (folder + file adapters)
@@ -267,7 +269,8 @@ LibertyFinance/
 │   ├── pages-goals.js      # goals
 │   ├── pages-market.js     # exchange rates + metal prices
 │   ├── pages-wallstreet.js # market overview (Wall Street)
-│   └── randata.js          # Randata API client + Resources/ cache
+│   ├── randata.js          # Randata API client + Resources/ cache
+│   └── randata-health.js   # 10-year coverage rule used by randata.html
 ├── tests/                  # checks for the money math and data loading (node tests/run.js)
 ├── flags/                  # region flag SVGs (used across pages)
 ├── logo.png

@@ -461,6 +461,18 @@ const Randata = (() => {
     return syncInFlight;
   }
 
+  // Forget the local sync bookkeeping so the next sync does a full reload,
+  // which rewrites every class file. The old class files stay until then, so
+  // a failed reload never leaves the app without market data.
+  async function forgetSync() {
+    if (syncInFlight) await syncInFlight;
+    const storageAdapter = await getAdapter();
+    await storageAdapter.writeIn(RESOURCES_FOLDER, META_FILE, JSON.stringify(emptyMeta()));
+    metaCache = null;
+    cache = {};
+    lastStatusCheck = 0;
+  }
+
   async function readClass(assetClass) {
     if (!CLASSES[assetClass]) return emptyClass();
     if (!cache[assetClass]) {
@@ -487,6 +499,7 @@ const Randata = (() => {
 
   return {
     sync,
+    forgetSync,
     readFile,
     readClass,
     getLastResult: () => lastResult,
