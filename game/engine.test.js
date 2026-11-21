@@ -296,6 +296,20 @@ test('mortgage: 20% down, monthly payback, no rent, net worth minus the debt, re
   assertNear(historyRow.mortgageRepaidChf, sale.mortgageRepaidChf, 'history shows the payback');
 });
 
+test('mortgage: payback stops at two thirds of the price', () => {
+  const flat = { symbol: 'house-bern', class: 'house', name: 'Flat' };
+  const market = fakeMarket({ 'house-bern': { '2026-03-01': 600000 } }, { 'house-bern': { depreciation: 0, location: 'bern' } });
+  const game = newGame('easy', '2026-03-01');
+  const trade = GameEngine.buy(game, market, flat, { quantity: 1, downPayment: 0.2 }, '2026-03-01');
+  game.trades.push(trade);
+  // 180 monthly paybacks of 444.44 end in February 2041; the bank keeps the first 400k.
+  const later = GameEngine.replay(game, market, '2042-06-30');
+  assertNear(later.mortgageChf, 400000, 'two thirds of the price stays');
+  assert.strictEqual(later.budget.amortizationChf, 0, 'no payback left in the budget');
+  const lastMonth = later.events.filter((event) => event.type === 'month').pop();
+  assert.strictEqual(lastMonth.amortizationChf, 0, 'no payback taken from the cash');
+});
+
 test('mortgage: at least 20% down and the bank affordability check', () => {
   const villa = { symbol: 'house-villa', class: 'house', name: 'Villa' };
   const market = fakeMarket({ 'house-villa': { '2026-03-01': 1200000 } }, { 'house-villa': { depreciation: 0, location: 'zurich' } });

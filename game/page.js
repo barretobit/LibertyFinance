@@ -10,17 +10,33 @@ const GAME_BENCHMARK_SYMBOL = '^SSMI';
 const GAME_MARKET_CLASSES = ['stock', 'etf', 'crypto', 'metal'];
 // Units of the commodity futures; precious metals are counted in grams.
 const GAME_PRICE_UNITS = { 'HG=F': 'LB', 'CL=F': 'BARREL' };
-// The buy panel's two tabs, each split into option groups.
-const GAME_BUY_TABS = {
+// Stock regions in the buy list, from the listing venue (wallStreetStockRegion reads the exchange suffix).
+const GAME_STOCK_REGIONS = [
+  { label: 'SWITZERLAND', codes: ['CH'] },
+  { label: 'EUROPE', codes: ['DE', 'FR', 'GB', 'IT'] },
+  { label: 'UNITED STATES', codes: ['US'] },
+  { label: 'ASIA', codes: ['JP', 'HK', 'KR', 'IN'] },
+];
+function gameStockRegion(asset) {
+  const code = wallStreetStockRegion(asset.symbol);
+  const region = GAME_STOCK_REGIONS.find((item) => item.codes.includes(code));
+  return region ? region.label : 'OTHER';
+}
+// The buy panel's two tabs, each split into categories. A category's list can be split into option groups
+// (groupOf, in groupOrder or catalog order) and sorted cheapest first (byPrice).
+const GAME_BUY_CATEGORIES = {
   market: [
-    { label: 'STOCKS', matches: (asset) => asset.class === 'stock' },
+    { label: 'STOCKS', matches: (asset) => asset.class === 'stock', groupOf: gameStockRegion, groupOrder: GAME_STOCK_REGIONS.map((region) => region.label) },
     { label: 'ETFS', matches: (asset) => asset.class === 'etf' },
-    { label: 'CRYPTOS', matches: (asset) => asset.class === 'crypto' },
+    { label: 'CRYPTO', matches: (asset) => asset.class === 'crypto' },
     { label: 'COMMODITIES', matches: (asset) => asset.class === 'metal' && !GameTangibles.PRECIOUS_METALS[asset.symbol] },
   ],
-  // Precious metals, then one group per catalog group (car types, watches, art, houses per city).
-  tangible: [{ label: 'PRECIOUS METALS', matches: (asset) => asset.class === 'metal' && !!GameTangibles.PRECIOUS_METALS[asset.symbol] }]
-    .concat([...new Set(GameTangibles.ITEMS.map((item) => item.group))].map((label) => ({ label: label, matches: (asset) => asset.group === label }))),
+  // Precious metals, then cars by type, watches, art and houses by city ("CARS: SUV" groups as "SUV").
+  tangible: [{ label: 'PRECIOUS METALS', matches: (asset) => asset.class === 'metal' && !!GameTangibles.PRECIOUS_METALS[asset.symbol], byPrice: true }]
+    .concat(Object.keys(GameTangibles.CATEGORIES).map((assetClass) => ({
+      label: GameTangibles.CATEGORIES[assetClass], matches: (asset) => asset.class === assetClass,
+      groupOf: (asset) => asset.group.replace(/^.*: /, ''), byPrice: true,
+    }))),
 };
 // Who takes the cut when a tangible is sold.
 const GAME_SELLER_LABELS = { car: 'DEALER', watch: 'DEALER', art: 'AUCTION HOUSE', house: 'ESTATE AGENT' };
@@ -35,6 +51,7 @@ const GamePage = {
   currency: 'CHF',
   chart: null,
   buyTab: 'market',
+  buyCategory: { market: 'STOCKS', tangible: 'PRECIOUS METALS' },
   buyMode: 'amount',
 };
 
@@ -104,17 +121,19 @@ function gameBuildMarket(file) {
 function gameMoney(amountChf, date) {
   const code = GamePage.currency;
   const scale = code === 'CHF' ? 1 : GamePage.market.rate('CHF', code, date || todayIsoDate());
-  const symbol = _WALL_STREET_CURRENCY_SYMBOL[code] || code;
-  if (scale == null) return 'CHF ' + amountChf.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return symbol + ' ' + (amountChf * scale).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const symbol = scale == null ? 'CHF' : _WALL_STREET_CURRENCY_SYMBOL[code] || code;
+  const amount = scale == null ? amountChf : amountChf * scale;
+  // Rounding noise such as -0.0000001 would print as "-0.00".
+  return symbol + ' ' + (Math.abs(amount) < 0.005 ? 0 : amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function gameSignedMoney(amountChf, date) {
-  return (amountChf >= 0 ? '+' : '') + gameMoney(amountChf, date);
+  return (Number(amountChf.toFixed(2)) > 0 ? '+' : '') + gameMoney(amountChf, date);
 }
 
 function gamePercent(value) {
-  return (value >= 0 ? '+' : '') + (value * 100).toFixed(2) + '%';
+  const percent = Number((value * 100).toFixed(2)) || 0; // || 0 turns -0 into 0
+  return (percent > 0 ? '+' : '') + percent.toFixed(2) + '%';
 }
 
 // A rate as a short percentage: 0.0015 -> "0.15%", 0.035 -> "3.5%".
@@ -122,8 +141,10 @@ function gameRate(value) {
   return Number((value * 100).toFixed(3)) + '%';
 }
 
-function gameSignClass(value) {
-  return value >= 0 ? 'game-pos' : 'game-neg';
+// Green for a gain, red for a loss, grey when it shows as zero. Ratios shown as percentages need 4 decimals.
+function gameSignClass(value, decimals = 2) {
+  const rounded = Number(value.toFixed(decimals));
+  return rounded > 0 ? 'game-pos' : rounded < 0 ? 'game-neg' : 'game-zero';
 }
 
 function gameQuantity(quantity) {
@@ -144,6 +165,40 @@ function gameQuantityWithUnit(asset, quantity) {
 // Second line under an asset name: the category for tangibles, the ticker otherwise.
 function gameClassLabel(asset) {
   return GameTangibles.CATEGORIES[asset.class] || escapeHtml(asset.symbol);
+}
+
+// Holdings are grouped like the buy panel: stocks, ETFs, crypto, commodities, then metals, cars, watches, art, houses.
+const GAME_HOLDING_CATEGORIES = GAME_BUY_CATEGORIES.market.concat(GAME_BUY_CATEGORIES.tangible);
+
+// Holdings in the buy panel's categories, in the same order; what fits none goes last as OTHER.
+function gameHoldingGroups(positions) {
+  const groups = GAME_HOLDING_CATEGORIES.map((category) => ({ label: category.label, positions: positions.filter(category.matches) }))
+    .filter((group) => group.positions.length);
+  const grouped = new Set(groups.flatMap((group) => group.positions));
+  const others = positions.filter((position) => !grouped.has(position));
+  if (others.length) groups.push({ label: 'OTHER', positions: others });
+  return groups;
+}
+
+// Second line under a holding: ticker (and region for stocks), car type or city, and since when it is held.
+function gameHoldingDetail(position) {
+  const parts = [];
+  const item = GameTangibles.item(position.symbol);
+  if (item) {
+    const subgroup = item.group.replace(/^.*: /, '');
+    if (subgroup !== item.group) parts.push(subgroup);
+  } else if (!GameTangibles.PRECIOUS_METALS[position.symbol]) {
+    parts.push(escapeHtml(position.symbol));
+    if (position.class === 'stock') parts.push(gameStockRegion(position));
+  }
+  if (position.lots.length) parts.push('SINCE ' + formatDate(position.lots[0].date));
+  return parts.join(' · ');
+}
+
+// Grams from 1 kg up are shown in kilos.
+function gameHoldingQuantity(position) {
+  if (gameUnit(position) === 'G' && position.quantity >= 1000) return gameQuantity(position.quantity / 1000) + ' KG';
+  return gameQuantityWithUnit(position, position.quantity);
 }
 
 function gameCarUnits(state) {
@@ -255,25 +310,35 @@ function gameRenderStats(state, today) {
   const traderText = { private: 'PRIVATE INVESTOR', review: 'UNDER REVIEW', risk: 'PRO TRADER RISK' }[state.trader.status];
   const traderTitle = 'This year: ' + state.trader.shortSales + ' sale(s) held under 6 months, trade volume ' +
     state.trader.volumeMultiple.toFixed(1) + 'x your wealth at the start of the year (limit 5x).';
-  const card = (label, value, extraClass, title) =>
-    '<div class="col-6 col-lg-3"><div class="stat-card"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
-    '<span class="stat-label">' + label + '</span><span class="stat-value stat-value-sm ' + (extraClass || '') + '">' + value + '</span></div></div>';
-  document.getElementById('game-stats').innerHTML = [
-    card('NET WORTH', gameMoney(last.netWorth, today)),
-    card('TOTAL RETURN', totalChange == null ? '—' : gamePercent(totalChange), totalChange == null ? '' : gameSignClass(totalChange),
-      'Net worth against the money put in: your start cash plus what you saved from your salary.'),
-    card('TODAY', gameSignedMoney(dayChange, today), gameSignClass(dayChange)),
-    card('VS SMI', benchmarkChange == null || totalChange == null ? '—' : gamePercent(totalChange - benchmarkChange) + ' PTS',
-      benchmarkChange == null || totalChange == null ? '' : gameSignClass(totalChange - benchmarkChange), 'Your return minus the return of the same money put into the SMI on the same days.'),
-    card('CASH', gameMoney(state.cash, today), state.cash < 0 ? 'game-neg' : ''),
-    card('INVESTED', gameMoney(invested, today)),
-    card('MORTGAGES', state.mortgageChf > 0 ? '-' + gameMoney(state.mortgageChf, today) : gameMoney(0, today), state.mortgageChf > 0 ? 'game-neg' : ''),
-    card('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
-    card('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, property gains tax, stamp duty, purchase costs and dealer cuts.'),
-    card('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
-    card('SAVED PER MONTH', gameSignedMoney(state.budget.savingsChf, today), gameSignClass(state.budget.savingsChf), 'Take home salary minus this month\'s expenses.'),
-    card('TAX STATUS', traderText, 'game-trader-' + state.trader.status, traderTitle),
-  ].join('');
+  const stat = (label, value, extraClass, title) =>
+    '<div class="game-stat"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
+    '<span class="game-stat-label">' + label + '</span><span class="game-stat-value ' + (extraClass || '') + '">' + value + '</span></div>';
+  const group = (label, stats) =>
+    '<div class="col-12 col-xl-6"><div class="stat-card game-stat-group"><span class="stat-label">' + label + '</span>' +
+    '<div class="game-stat-grid">' + stats.join('') + '</div></div></div>';
+  document.getElementById('game-stats').innerHTML =
+    '<div class="col-12"><div class="stat-card game-hero">' +
+      '<div><span class="stat-label">NET WORTH</span><span class="stat-value game-hero-value">' + gameMoney(last.netWorth, today) + '</span></div>' +
+      '<div class="game-stat-grid game-hero-side">' + [
+        stat('TODAY', gameSignedMoney(dayChange, today), gameSignClass(dayChange)),
+        stat('TOTAL RETURN', totalChange == null ? '—' : gamePercent(totalChange), totalChange == null ? '' : gameSignClass(totalChange, 4),
+          'Net worth against the money put in: your start cash plus what you saved from your salary.'),
+        stat('VS SMI', benchmarkChange == null || totalChange == null ? '—' : gamePercent(totalChange - benchmarkChange) + ' PTS',
+          benchmarkChange == null || totalChange == null ? '' : gameSignClass(totalChange - benchmarkChange, 4), 'Your return minus the return of the same money put into the SMI on the same days.'),
+      ].join('') + '</div>' +
+    '</div></div>' +
+    group('MONEY', [
+      stat('CASH', gameMoney(state.cash, today), state.cash < 0 ? 'game-neg' : ''),
+      stat('INVESTED', gameMoney(invested, today)),
+      stat('MORTGAGES', state.mortgageChf > 0 ? '-' + gameMoney(state.mortgageChf, today) : gameMoney(0, today), state.mortgageChf > 0 ? 'game-neg' : ''),
+      stat('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
+    ]) +
+    group('COSTS &amp; SAVINGS', [
+      stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, property gains tax, stamp duty, purchase costs and dealer cuts.'),
+      stat('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
+      stat('SAVED PER MONTH', gameSignedMoney(state.budget.savingsChf, today), gameSignClass(state.budget.savingsChf), 'Take home salary minus this month\'s expenses.'),
+      stat('TAX STATUS', traderText, 'game-trader-' + state.trader.status, traderTitle),
+    ]);
 }
 
 function gameRenderChart(state) {
@@ -281,12 +346,18 @@ function gameRenderChart(state) {
   const scaleOn = (date) => (GamePage.currency === 'CHF' ? 1 : GamePage.market.rate('CHF', GamePage.currency, date) || 1);
   const points = (key) => state.days.filter((day) => day[key] != null).map((day) => ({ x: day.date, y: day[key] * scaleOn(day.date) }));
   if (GamePage.chart) GamePage.chart.destroy();
+  GamePage.chart = null;
+  // One day is a single dot in an empty frame: show a note until there is a line to draw.
+  const enoughDays = state.days.length > 1;
+  document.getElementById('game-chart-empty').style.display = enoughDays ? 'none' : '';
+  document.querySelector('.game-chart-wrap').style.display = enoughDays ? '' : 'none';
+  if (!enoughDays) return;
   GamePage.chart = new Chart(document.getElementById('game-chart'), {
     type: 'line',
     data: {
       datasets: [
         { label: 'NET WORTH', data: points('netWorth'), borderColor: accent, backgroundColor: accent, pointRadius: state.days.length < 3 ? 3 : 0, borderWidth: 2 },
-        { label: 'SMI', data: points('benchmark'), borderColor: '#ff4d4d', backgroundColor: '#ff4d4d', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
+        { label: 'SMI', data: points('benchmark'), borderColor: '#4da6ff', backgroundColor: '#4da6ff', borderDash: [6, 4], pointRadius: 0, borderWidth: 1.5 },
         { label: 'MONEY PUT IN', data: points('moneyIn'), borderColor: '#888888', backgroundColor: '#888888', borderDash: [2, 3], pointRadius: 0, borderWidth: 1.5 },
       ],
     },
@@ -313,28 +384,104 @@ function gameRenderHoldings(state, today) {
     container.innerHTML = '<div class="empty-state">NO HOLDINGS YET. BUY SOMETHING.</div>';
     return;
   }
-  const rows = state.positions.slice().sort((a, b) => b.valueChf - a.valueChf).map((position) => {
-    const profitLoss = position.valueChf - position.costChf;
+  const sum = (positions, key) => positions.reduce((total, position) => total + position[key], 0);
+  const totalChf = sum(state.positions, 'valueChf');
+  const shareOfHoldings = (valueChf) => (totalChf > 0 ? (valueChf / totalChf * 100).toFixed(1) + '% OF HOLDINGS' : '');
+  const profitCell = (valueChf, costChf) => {
+    const profitLoss = valueChf - costChf;
+    return '<td class="text-end ' + gameSignClass(profitLoss) + '">' + gameSignedMoney(profitLoss, today) +
+      '<br><small>' + gamePercent(costChf ? profitLoss / costChf : 0) + '</small></td>';
+  };
+
+  const groups = gameHoldingGroups(state.positions);
+
+  const row = (position) => {
     const symbol = escapeHtml(position.symbol);
+    const unit = gameUnit(position);
+    const perUnit = unit ? ' / ' + unit : '';
     // Whole units for cars, watches, art and houses: sell one at a time, never half a car.
     const partialSell = GameEngine.isTangible(position.class)
       ? '<button class="btn btn-gta btn-sm game-sell" data-symbol="' + symbol + '" data-quantity="1">SELL 1</button> '
       : '<button class="btn btn-gta btn-sm game-sell" data-symbol="' + symbol + '" data-fraction="0.5">SELL 50%</button> ';
     const mortgage = position.mortgageChf > 0 ? '<br><small class="game-neg">MORTGAGE -' + gameMoney(position.mortgageChf, today) + '</small>' : '';
-    return '<tr><td><span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + gameClassLabel(position) + '</span></td>' +
-      '<td class="text-end">' + gameQuantityWithUnit(position, position.quantity) + '</td>' +
-      '<td class="text-end">' + gameMoney(position.unitValueChf, today) + '</td>' +
-      '<td class="text-end">' + gameMoney(position.valueChf, today) + mortgage + '</td>' +
-      '<td class="text-end ' + gameSignClass(profitLoss) + '">' + gameSignedMoney(profitLoss, today) + '<br><small>' + gamePercent(position.costChf ? profitLoss / position.costChf : 0) + '</small></td>' +
+    return '<tr><td><span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + gameHoldingDetail(position) + '</span></td>' +
+      '<td class="text-end">' + gameHoldingQuantity(position) + '</td>' +
+      '<td class="text-end">' + gameMoney(position.unitValueChf, today) + perUnit +
+        '<br><small class="game-dim">PAID ' + gameMoney(position.quantity ? position.costChf / position.quantity : 0, today) + perUnit + '</small></td>' +
+      '<td class="text-end">' + gameMoney(position.valueChf, today) + '<br><small class="game-dim">' + shareOfHoldings(position.valueChf) + '</small>' + mortgage + '</td>' +
+      profitCell(position.valueChf, position.costChf) +
       '<td class="text-end text-nowrap">' + partialSell +
       '<button class="btn btn-gta btn-sm btn-danger-del game-sell" data-symbol="' + symbol + '" data-fraction="1">SELL ALL</button></td></tr>';
+  };
+  const rows = groups.map((group) => {
+    const valueChf = sum(group.positions, 'valueChf');
+    return '<tr class="game-holdings-group"><td colspan="3">' + group.label + ' <span class="game-dim">· ' + group.positions.length + '</span></td>' +
+      '<td class="text-end">' + gameMoney(valueChf, today) + '<br><small class="game-dim">' + shareOfHoldings(valueChf) + '</small></td>' +
+      profitCell(valueChf, sum(group.positions, 'costChf')) + '<td></td></tr>' +
+      group.positions.slice().sort((first, second) => second.valueChf - first.valueChf).map(row).join('');
   }).join('');
-  container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>ASSET</th><th class="text-end">QUANTITY</th><th class="text-end">VALUE / UNIT</th>' +
-    '<th class="text-end">VALUE</th><th class="text-end">P&amp;L</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>ASSET</th><th class="text-end">QUANTITY</th><th class="text-end">PRICE</th>' +
+    '<th class="text-end">VALUE</th><th class="text-end">P&amp;L</th><th></th></tr></thead><tbody>' + rows + '</tbody>' +
+    '<tfoot><tr class="game-holdings-total"><td colspan="3">TOTAL</td><td class="text-end">' + gameMoney(totalChf, today) + '</td>' +
+    profitCell(totalChf, sum(state.positions, 'costChf')) + '<td></td></tr></tfoot></table>';
   container.querySelectorAll('.game-sell').forEach((button) => {
     const order = button.dataset.quantity ? { quantity: Number(button.dataset.quantity) } : { fraction: Number(button.dataset.fraction) };
     button.onclick = () => gameTrade(GameEngine.sell(GamePage.game, GamePage.market, button.dataset.symbol, order, todayIsoDate()));
   });
+}
+
+// A list of labeled bars: name, figure and a thin bar per row. Every value is printed, so the list is its own table view.
+// A row's `share` (0..1) fills the bar from the left; a row's `change` (-1..1) grows right for a gain, left for a loss.
+function gameMeterList(rows) {
+  return '<div class="game-meters">' + rows.map((row) => {
+    let fill = '<div class="game-meter-fill" style="width:' + (Math.max(0, row.share) * 100).toFixed(2) + '%"></div>';
+    if (row.change != null) {
+      const width = (Math.min(1, Math.abs(row.change)) * 50).toFixed(2) + '%';
+      fill = '<div class="game-meter-zero"></div>' + (row.change > 0 ? '<div class="game-meter-fill game-meter-gain" style="left:50%;width:' + width + '"></div>'
+        : row.change < 0 ? '<div class="game-meter-fill game-meter-loss" style="right:50%;width:' + width + '"></div>' : '');
+    }
+    return '<div class="game-meter"' + (row.title ? ' title="' + escapeHtml(row.title) + '"' : '') + '>' +
+      '<div class="game-meter-text"><span class="game-meter-name">' + row.name + '</span><span class="game-meter-figure ' + (row.figureClass || '') + '">' + row.figure + '</span></div>' +
+      '<div class="game-meter-track' + (row.change != null ? ' game-meter-track-neutral' : '') + '">' + fill + '</div></div>';
+  }).join('') + '</div>';
+}
+
+// Allocation of cash and holdings, the weight of each holding and each holding's return.
+function gameRenderPortfolioCharts(state, today) {
+  const sum = (positions) => positions.reduce((total, position) => total + position.valueChf, 0);
+  const share = (part, whole) => (whole > 0 ? part / whole : 0);
+  const percentText = (value) => (value * 100).toFixed(1) + '%';
+
+  const parts = [{ name: 'CASH', valueChf: Math.max(0, state.cash) }]
+    .concat(gameHoldingGroups(state.positions).map((group) => ({ name: group.label, valueChf: sum(group.positions) })))
+    .filter((part) => part.valueChf > 0)
+    .sort((first, second) => second.valueChf - first.valueChf);
+  const assetsChf = parts.reduce((total, part) => total + part.valueChf, 0);
+  document.getElementById('game-allocation').innerHTML = gameMeterList(parts.map((part) => ({
+    name: part.name, figure: gameMoney(part.valueChf, today) + ' · ' + percentText(share(part.valueChf, assetsChf)), share: share(part.valueChf, assetsChf),
+  })));
+
+  const empty = '<div class="game-dim">NO HOLDINGS YET.</div>';
+  const holdingsChf = sum(state.positions);
+  const byValue = state.positions.slice().sort((first, second) => second.valueChf - first.valueChf);
+  // Eight bars at most: the rest fold into one OTHER row.
+  const top = byValue.length > 8 ? byValue.slice(0, 7) : byValue;
+  const rest = byValue.slice(top.length);
+  const weights = top.map((position) => ({ name: escapeHtml(position.name), valueChf: position.valueChf }));
+  if (rest.length) weights.push({ name: 'OTHER (' + rest.length + ')', valueChf: sum(rest) });
+  document.getElementById('game-weights').innerHTML = !weights.length ? empty : gameMeterList(weights.map((weight) => ({
+    name: weight.name, figure: percentText(share(weight.valueChf, holdingsChf)), share: share(weight.valueChf, holdingsChf),
+  })));
+
+  const returns = state.positions.map((position) => ({ position: position, change: position.costChf ? position.valueChf / position.costChf - 1 : 0 }))
+    .sort((first, second) => second.change - first.change);
+  // Bars scale to the biggest move, so small returns still show.
+  const biggestMove = Math.max(...returns.map((item) => Math.abs(item.change)), 0);
+  document.getElementById('game-returns').innerHTML = !returns.length ? empty : gameMeterList(returns.map((item) => ({
+    name: escapeHtml(item.position.name), figure: gamePercent(item.change), figureClass: gameSignClass(item.change, 4),
+    change: biggestMove > 0 ? item.change / biggestMove : 0,
+    title: 'P&L ' + gameSignedMoney(item.position.valueChf - item.position.costChf, today),
+  })));
 }
 
 function gameRenderBudget(state, today) {
@@ -394,6 +541,32 @@ function gameRenderHistory(state) {
     '<th class="text-end">FEES</th><th class="text-end">CASH</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
+// The asset list of one buy category: today's price on every option, in option groups when the category has several.
+function gameAssetOptions(category, today) {
+  const groups = new Map();
+  GamePage.assets.filter(category.matches).forEach((asset) => {
+    const label = category.groupOf ? category.groupOf(asset) : '';
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push({ asset: asset, quote: GamePage.market.quote(asset.symbol, today) });
+  });
+  // Groups keep the catalog order (compact cars before supercars); only the items inside a group go cheapest first.
+  const priceOf = (entry) => (entry.quote ? entry.quote.priceChf : 0);
+  if (category.byPrice) groups.forEach((entries) => entries.sort((first, second) => priceOf(first) - priceOf(second)));
+  const order = category.groupOrder || [];
+  const rank = (label) => (order.includes(label) ? order.indexOf(label) : order.length);
+  const labels = [...groups.keys()].sort((first, second) => rank(first) - rank(second));
+  const option = (entry) => {
+    const asset = entry.asset;
+    const physical = GameTangibles.isTangible(asset.symbol) || GameTangibles.PRECIOUS_METALS[asset.symbol];
+    const name = physical ? asset.name || asset.symbol : (asset.name || asset.symbol) + ' (' + asset.symbol + ')';
+    const unit = gameUnit(asset);
+    const price = entry.quote ? gameMoney(entry.quote.priceChf, today) + (unit ? ' / ' + unit : '') : 'NO PRICE';
+    return '<option value="' + escapeHtml(asset.symbol) + '">' + escapeHtml(name + ' · ' + price) + '</option>';
+  };
+  if (labels.length === 1) return groups.get(labels[0]).map(option).join('');
+  return labels.map((label) => '<optgroup label="' + escapeHtml(label) + '">' + groups.get(label).map(option).join('') + '</optgroup>').join('');
+}
+
 function gameSelectedAsset() {
   return GamePage.assets.find((item) => item.symbol === document.getElementById('game-asset').value);
 }
@@ -412,49 +585,49 @@ function gameOrder(asset) {
   return order;
 }
 
-// What the selected asset is and what owning it costs, before any amount is typed.
+// What the selected asset is and what owning it costs, before any amount is typed, as [label, value, note] rows.
 function gameAssetDetails(asset, state, priceChf, today) {
-  const lines = [];
+  const rows = [];
   const metal = GameTangibles.PRECIOUS_METALS[asset.symbol];
-  if (metal) return ['PHYSICAL ' + metal + ' AT THE REAL MARKET PRICE, PER GRAM', 'NO STAMP DUTY, GAINS ARE TAX FREE'];
+  if (metal) return [['MARKET', 'PHYSICAL ' + metal + ' AT THE REAL PRICE, PER GRAM'], ['TAX', 'NO STAMP DUTY, GAINS ARE TAX FREE']];
   if (!GameEngine.isTangible(asset.class)) {
     const dutyRate = GameEngine.stampDutyRate(asset);
-    lines.push(dutyRate ? 'STAMP DUTY ' + gameRate(dutyRate) + (asset.symbol.toUpperCase().endsWith('.SW') ? ' (SWISS)' : ' (FOREIGN)') + ' ON EVERY BUY AND SELL' : 'NO STAMP DUTY');
-    lines.push('GAINS ARE TAX FREE WHILE YOU STAY A PRIVATE INVESTOR');
-    return lines;
+    rows.push(['STAMP DUTY', dutyRate ? gameRate(dutyRate) + (asset.symbol.toUpperCase().endsWith('.SW') ? ' (SWISS)' : ' (FOREIGN)') + ' ON EVERY BUY AND SELL' : 'NONE']);
+    rows.push(['GAINS', 'TAX FREE WHILE YOU STAY A PRIVATE INVESTOR']);
+    return rows;
   }
   const item = GameTangibles.item(asset.symbol);
-  lines.push('MARKET PRICE ' + (item.trend >= 0 ? 'RISES' : 'FALLS') + ' ABOUT ' + gameRate(Math.abs(item.trend)) + ' A YEAR');
+  rows.push(['MARKET', (item.trend >= 0 ? 'RISES' : 'FALLS') + ' ABOUT ' + gameRate(Math.abs(item.trend)) + ' A YEAR']);
   if (asset.class === 'car') {
     const carsAfter = gameCarUnits(state) + 1;
-    if (!item.depreciation) lines.push('YOURS: NO EXTRA VALUE LOSS, A CLASSIC FOLLOWS THE MARKET PRICE');
+    if (!item.depreciation) rows.push(['YOURS', 'NO EXTRA VALUE LOSS, A CLASSIC FOLLOWS THE MARKET PRICE']);
     else {
-      lines.push('YOURS: LOSES ABOUT ' + gameRate(-item.depreciation) + ' A YEAR AS YOUR ONLY CAR, HALF FROM AGE AND HALF FROM ' +
-        GameEngine.CAR_KM_PER_YEAR.toLocaleString('en-GB') + ' KM A YEAR');
+      rows.push(['YOURS', 'LOSES ABOUT ' + gameRate(-item.depreciation) + ' A YEAR AS YOUR ONLY CAR',
+        'HALF FROM AGE AND HALF FROM ' + GameEngine.CAR_KM_PER_YEAR.toLocaleString('en-GB') + ' KM A YEAR']);
       if (carsAfter > 1) {
-        lines.push('WITH ' + carsAfter + ' CARS EACH DRIVES ' + Math.round(GameEngine.CAR_KM_PER_YEAR / carsAfter).toLocaleString('en-GB') + ' KM A YEAR AND LOSES ABOUT ' +
-          gameRate(-GameEngine.ownedYearlyChange(GamePage.market, asset.symbol, 'car', carsAfter)));
+        rows.push(['WITH ' + carsAfter + ' CARS', 'LOSES ABOUT ' + gameRate(-GameEngine.ownedYearlyChange(GamePage.market, asset.symbol, 'car', carsAfter)) + ' A YEAR',
+          'EACH CAR DRIVES ' + Math.round(GameEngine.CAR_KM_PER_YEAR / carsAfter).toLocaleString('en-GB') + ' KM A YEAR']);
       }
     }
     const costs = GameEngine.carMonthlyCosts(GamePage.game.location, item, priceChf, carsAfter);
-    lines.push('RUNNING COSTS ' + gameMoney(costs.totalChf, today) + ' A MONTH: INSURANCE ' + gameMoney(costs.insuranceChf, today) + ', ROAD TAX ' +
-      gameMoney(costs.roadTaxChf, today) + ', PARKING ' + gameMoney(costs.parkingChf, today) + ', FUEL &amp; SERVICE ' + gameMoney(costs.fuelAndServiceChf, today));
+    rows.push(['RUNNING COSTS', gameMoney(costs.totalChf, today) + ' A MONTH', 'INSURANCE ' + gameMoney(costs.insuranceChf, today) + ', ROAD TAX ' +
+      gameMoney(costs.roadTaxChf, today) + ', PARKING ' + gameMoney(costs.parkingChf, today) + ', FUEL &amp; SERVICE ' + gameMoney(costs.fuelAndServiceChf, today)]);
   } else if (asset.class === 'house') {
     const city = GameEngine.HOUSE_LOCATIONS[item.location];
     const costs = GameEngine.houseMonthlyCosts(item.location, priceChf);
-    lines.push('YOURS: FOLLOWS THE MARKET PRICE');
-    lines.push('PURCHASE COSTS ' + gameRate(GameEngine.housePurchaseCostRate(item.location)) + ': TRANSFER TAX ' + gameRate(city.transferTaxRate) +
-      ' (' + city.label + '), NOTARY &amp; LAND REGISTRY ' + gameRate(city.notaryRate));
-    lines.push('RUNNING COSTS ' + gameMoney(costs.totalChf, today) + ' A MONTH: UPKEEP ' + gameMoney(costs.maintenanceChf, today) + ', ENERGY &amp; INSURANCE ' +
-      gameMoney(costs.utilitiesChf, today) + ', PROPERTY TAX ' + gameMoney(costs.propertyTaxChf, today) + '. NO RENT WHILE YOU OWN A HOME');
-    lines.push('MORTGAGE AT ' + gameRate(GameEngine.MORTGAGE_INTEREST_RATE) + ' A YEAR, AT LEAST 20% DOWN. THE PART ABOVE 2/3 OF THE PRICE IS PAID BACK EVERY MONTH OVER 15 YEARS. ' +
-      'THE BANK CHECKS THAT 5% INTEREST, 1% UPKEEP AND THE PAYBACK STAY UNDER 1/3 OF YOUR GROSS SALARY');
+    rows.push(['YOURS', 'FOLLOWS THE MARKET PRICE']);
+    rows.push(['PURCHASE COSTS', gameRate(GameEngine.housePurchaseCostRate(item.location)) + ' OF THE PRICE', 'TRANSFER TAX ' + gameRate(city.transferTaxRate) +
+      ' (' + city.label + '), NOTARY &amp; LAND REGISTRY ' + gameRate(city.notaryRate)]);
+    rows.push(['RUNNING COSTS', gameMoney(costs.totalChf, today) + ' A MONTH', 'UPKEEP ' + gameMoney(costs.maintenanceChf, today) + ', ENERGY &amp; INSURANCE ' +
+      gameMoney(costs.utilitiesChf, today) + ', PROPERTY TAX ' + gameMoney(costs.propertyTaxChf, today) + '. NO RENT WHILE YOU OWN A HOME']);
+    rows.push(['MORTGAGE', gameRate(GameEngine.MORTGAGE_INTEREST_RATE) + ' A YEAR, AT LEAST 20% DOWN', 'THE PART ABOVE 2/3 OF THE PRICE IS PAID BACK EVERY MONTH OVER 15 YEARS. ' +
+      'THE BANK CHECKS THAT 5% INTEREST, 1% UPKEEP AND THE PAYBACK STAY UNDER 1/3 OF YOUR GROSS SALARY']);
   } else {
-    lines.push(item.depreciation ? 'YOURS: LOSES ABOUT ' + gameRate(-item.depreciation) + ' A YEAR ON TOP OF THE MARKET PRICE' : 'YOURS: FOLLOWS THE MARKET PRICE, NO EXTRA VALUE LOSS');
+    rows.push(['YOURS', item.depreciation ? 'LOSES ABOUT ' + gameRate(-item.depreciation) + ' A YEAR ON TOP OF THE MARKET PRICE' : 'FOLLOWS THE MARKET PRICE, NO EXTRA VALUE LOSS']);
   }
-  lines.push(GAME_SELLER_LABELS[asset.class] + ' KEEPS ' + Math.round(GameEngine.dealerFeeRate(asset.class) * 100) + '% WHEN YOU SELL');
-  if (asset.class === 'house') lines.push('PROPERTY GAINS TAX ON THE PROFIT: HIGHER IF SOLD WITHIN 2 YEARS, LOWER AFTER 5');
-  return lines;
+  rows.push(['WHEN YOU SELL', GAME_SELLER_LABELS[asset.class] + ' KEEPS ' + Math.round(GameEngine.dealerFeeRate(asset.class) * 100) + '%']);
+  if (asset.class === 'house') rows.push(['GAINS TAX', 'ON THE PROFIT: HIGHER IF SOLD WITHIN 2 YEARS, LOWER AFTER 5']);
+  return rows;
 }
 
 // The cost preview of the order being typed; returns whether it can be bought.
@@ -503,16 +676,21 @@ function gameRenderBuyForm(state) {
   const today = todayIsoDate();
   if (!state) state = GameEngine.replay(GamePage.game, GamePage.market, today);
   document.querySelectorAll('[data-buy-tab]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.buyTab === GamePage.buyTab)));
+  const categories = GAME_BUY_CATEGORIES[GamePage.buyTab].map((category) => Object.assign({ count: GamePage.assets.filter(category.matches).length }, category))
+    .filter((category) => category.count > 0);
+  const category = categories.find((item) => item.label === GamePage.buyCategory[GamePage.buyTab]) || categories[0];
   const select = document.getElementById('game-asset');
-  if (select.dataset.tab !== GamePage.buyTab) {
-    select.dataset.tab = GamePage.buyTab;
-    select.innerHTML = GAME_BUY_TABS[GamePage.buyTab].map((group) => {
-      const options = GamePage.assets.filter(group.matches).map((asset) => {
-        const label = GameTangibles.isTangible(asset.symbol) ? asset.name : (asset.name || asset.symbol) + ' (' + asset.symbol + ')';
-        return '<option value="' + escapeHtml(asset.symbol) + '">' + escapeHtml(label) + '</option>';
-      }).join('');
-      return options ? '<optgroup label="' + group.label + '">' + options + '</optgroup>' : '';
-    }).join('');
+  // Rebuilt only when the list changes: prices move with the day and the display currency.
+  const listKey = [GamePage.buyTab, category && category.label, GamePage.currency, today].join('|');
+  if (select.dataset.key !== listKey) {
+    select.dataset.key = listKey;
+    const categorySelect = document.getElementById('game-category');
+    categorySelect.innerHTML = categories.map((item) =>
+      '<option value="' + escapeHtml(item.label) + '">' + escapeHtml(item.label) + ' (' + item.count + ')</option>').join('');
+    if (category) categorySelect.value = category.label;
+    const selected = select.value;
+    select.innerHTML = category ? gameAssetOptions(category, today) : '';
+    if ([...select.options].some((option) => option.value === selected)) select.value = selected;
   }
 
   const asset = gameSelectedAsset();
@@ -532,7 +710,9 @@ function gameRenderBuyForm(state) {
   document.getElementById('game-quote').innerHTML = !quote ? 'NO PRICE'
     : 'PRICE ' + gameMoney(quote.priceChf, today) + (unit ? ' PER ' + (unit === 'G' ? 'GRAM' : unit) : '') +
       ' <span class="game-dim">(' + (wholeUnits ? 'TODAY' : 'CLOSE ' + formatDate(quote.date)) + ')</span>';
-  document.getElementById('game-details').innerHTML = asset && quote ? gameAssetDetails(asset, state, quote.priceChf, today).join('<br>') : '';
+  document.getElementById('game-details').innerHTML = !asset || !quote ? '' : '<table class="w-100 game-details-table"><tbody>' +
+    gameAssetDetails(asset, state, quote.priceChf, today).map((row) => '<tr><th>' + row[0] + '</th><td>' + row[1] +
+      (row[2] ? '<span class="game-details-note">' + row[2] + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>';
   document.getElementById('game-buy-btn').disabled = !gameRenderPreview(asset, today);
 }
 
@@ -550,6 +730,7 @@ function gameRender() {
   gameRenderChart(state);
   gameRenderBuyForm(state);
   gameRenderHoldings(state, today);
+  gameRenderPortfolioCharts(state, today);
   gameRenderBudget(state, today);
   gameRenderHistory(state);
 }
@@ -566,6 +747,7 @@ async function gameTrade(trade) {
     return;
   }
   gameToast((trade.side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name);
+  if (trade.side === 'buy') bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
   gameRender();
 }
 
@@ -577,6 +759,11 @@ function gameBindControls() {
   currencySelect.value = 'CHF';
   currencySelect.onchange = () => { GamePage.currency = currencySelect.value; if (GamePage.market) gameRender(); };
 
+  document.getElementById('game-open-buy').onclick = () => {
+    gameRenderBuyForm();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).show();
+  };
+  document.getElementById('game-category').onchange = (event) => { GamePage.buyCategory[GamePage.buyTab] = event.target.value; gameRenderBuyForm(); };
   document.getElementById('game-asset').onchange = () => gameRenderBuyForm();
   document.getElementById('game-amount').oninput = () => gameRenderBuyForm();
   document.getElementById('game-unit').onchange = () => gameRenderBuyForm();

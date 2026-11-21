@@ -162,6 +162,15 @@ const GameEngine = (() => {
   const AFFORDABILITY_UPKEEP_RATE = 0.01;
   const AFFORDABILITY_INCOME_SHARE = 1 / 3;
 
+  // Only the part of a lot's mortgage above two thirds of its price is paid back.
+  function mortgageAboveFirstShareChf(lot) {
+    return Math.max(0, (lot.mortgageChf || 0) - lot.quantity * lot.priceChf * FIRST_MORTGAGE_SHARE);
+  }
+
+  function monthlyPaybackChf(lot) {
+    return Math.min(mortgageAboveFirstShareChf(lot), lot.amortizationChf || 0);
+  }
+
   const STAMP_DUTY_DOMESTIC = 0.00075;
   const STAMP_DUTY_FOREIGN = 0.0015;
   // Share of the sale price a dealer (cars, watches), auction house (art) or estate agent (houses) keeps.
@@ -360,7 +369,7 @@ const GameEngine = (() => {
       position.lots.forEach((lot) => {
         runningChf += lot.quantity * houseMonthlyCosts(houseLocation, lot.priceChf).totalChf;
         interestChf += (lot.mortgageChf || 0) * MORTGAGE_INTEREST_RATE / 12;
-        amortizationChf += Math.min(lot.mortgageChf || 0, lot.amortizationChf || 0);
+        amortizationChf += monthlyPaybackChf(lot);
       });
       expenses.push({ label: 'HOUSE: ' + position.name, amountChf: runningChf, note: 'UPKEEP, ENERGY, INSURANCE, PROPERTY TAX' });
       if (interestChf > 0) expenses.push({ label: 'MORTGAGE INTEREST: ' + position.name, amountChf: interestChf, note: (MORTGAGE_INTEREST_RATE * 100).toFixed(1) + '% A YEAR' });
@@ -434,6 +443,7 @@ const GameEngine = (() => {
       const mortgageShare = lot.mortgageChf * used / lot.quantity;
       mortgageRepaidChf += mortgageShare;
       lot.mortgageChf -= mortgageShare;
+      lot.amortizationChf -= (lot.amortizationChf || 0) * used / lot.quantity;
       lot.quantity -= used;
       toSell -= used;
       if (lot.quantity <= EMPTY_QUANTITY) position.lots.shift();
@@ -515,7 +525,7 @@ const GameEngine = (() => {
       if (isMonthEnd(date)) {
         let amortizationChf = 0;
         allLots().forEach((lot) => {
-          const paid = Math.min(lot.mortgageChf, lot.amortizationDueChf || 0);
+          const paid = Math.min(mortgageAboveFirstShareChf(lot), lot.amortizationDueChf || 0);
           lot.mortgageChf -= paid;
           lot.amortizationDueChf = 0;
           amortizationChf += paid;
@@ -624,7 +634,7 @@ const GameEngine = (() => {
     let error = null;
     if (trade.mortgageChf > 0) {
       const yearlyChf = listAfter.filter((position) => position.class === 'house').reduce((sum, position) => sum + position.lots.reduce((lotSum, lot) =>
-        lotSum + lot.mortgageChf * AFFORDABILITY_INTEREST_RATE + lot.quantity * lot.priceChf * AFFORDABILITY_UPKEEP_RATE + lot.amortizationChf * 12, 0), 0);
+        lotSum + lot.mortgageChf * AFFORDABILITY_INTEREST_RATE + lot.quantity * lot.priceChf * AFFORDABILITY_UPKEEP_RATE + monthlyPaybackChf(lot) * 12, 0), 0);
       affordability = { yearlyChf: yearlyChf, limitChf: yearlySalary(game.location, game.difficulty) * AFFORDABILITY_INCOME_SHARE };
     }
     if (cashNeededChf > state.cash + 0.005) error = 'NOT ENOUGH CASH';

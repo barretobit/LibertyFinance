@@ -8,7 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=48" />
-    <link rel="stylesheet" href="game/game.css?v=3" />
+    <link rel="stylesheet" href="game/game.css?v=8" />
   </head>
   <body>
     <!-- ===== TOP NAV ===== -->
@@ -93,47 +93,42 @@
                 <span>NET WORTH</span>
                 <span class="ws-header-note">DASHED: THE SAME MONEY IN THE SMI · DOTTED: MONEY PUT IN</span>
               </div>
-              <div class="card-gta-body"><div class="game-chart-wrap"><canvas id="game-chart"></canvas></div></div>
+              <div class="card-gta-body">
+                <div id="game-chart-empty" class="empty-state" style="display: none">YOUR CHART STARTS TOMORROW: IT NEEDS TWO DAYS TO DRAW A LINE.</div>
+                <div class="game-chart-wrap"><canvas id="game-chart"></canvas></div>
+              </div>
             </div>
 
             <div class="row">
-              <div class="col-12 col-xl-4 mb-4">
-                <div class="card-gta h-100 mb-0">
-                  <div class="card-gta-header">BUY</div>
-                  <div class="card-gta-body">
-                    <div class="game-toggle mb-3" role="group" aria-label="Asset type">
-                      <button class="game-toggle-btn" data-buy-tab="market">STOCK MARKET</button>
-                      <button class="game-toggle-btn" data-buy-tab="tangible">TANGIBLE ASSETS</button>
-                    </div>
-                    <label class="form-label" for="game-asset">ASSET</label>
-                    <select id="game-asset" class="form-select form-gta mb-3"></select>
-                    <div class="game-quote mb-2" id="game-quote"></div>
-                    <div class="game-details mb-3" id="game-details"></div>
-                    <div class="game-toggle mb-2" role="group" aria-label="Buy by" id="game-mode-toggle">
-                      <button class="game-toggle-btn" data-buy-mode="amount">AMOUNT</button>
-                      <button class="game-toggle-btn" data-buy-mode="quantity">QUANTITY</button>
-                    </div>
-                    <label class="form-label" for="game-amount" id="game-amount-label">AMOUNT (CHF)</label>
-                    <div class="d-flex gap-2 mb-2">
-                      <input id="game-amount" class="form-control form-gta" type="number" min="0" step="any" inputmode="decimal" />
-                      <select id="game-unit" class="form-select form-gta game-unit" aria-label="Metal unit" style="display: none">
-                        <option value="g">GRAMS</option>
-                        <option value="kg">KILOS</option>
-                      </select>
-                    </div>
-                    <div id="game-down-wrap" style="display: none">
-                      <label class="form-label" for="game-down">DOWN PAYMENT (%, AT LEAST 20)</label>
-                      <input id="game-down" class="form-control form-gta mb-2" type="number" min="20" max="100" step="1" value="20" inputmode="numeric" />
-                    </div>
-                    <div class="game-preview mb-3" id="game-preview"></div>
-                    <button class="btn btn-gta w-100" id="game-buy-btn">BUY</button>
-                  </div>
-                </div>
-              </div>
               <div class="col-12 col-xl-8 mb-4">
                 <div class="card-gta h-100 mb-0">
-                  <div class="card-gta-header">HOLDINGS</div>
+                  <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                    <span>HOLDINGS</span>
+                    <button class="btn btn-gta btn-sm" id="game-open-buy">BUY</button>
+                  </div>
                   <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div></div>
+                </div>
+              </div>
+              <div class="col-12 col-xl-4 mb-4">
+                <div class="d-flex flex-column gap-4">
+                  <div class="card-gta mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                      <span>ALLOCATION</span><span class="ws-header-note">SHARE OF CASH + HOLDINGS</span>
+                    </div>
+                    <div class="card-gta-body"><div id="game-allocation"></div></div>
+                  </div>
+                  <div class="card-gta mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                      <span>WEIGHTS</span><span class="ws-header-note">SHARE OF HOLDINGS</span>
+                    </div>
+                    <div class="card-gta-body"><div id="game-weights"></div></div>
+                  </div>
+                  <div class="card-gta mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                      <span>RETURNS</span><span class="ws-header-note">SINCE YOU BOUGHT, AFTER FEES</span>
+                    </div>
+                    <div class="card-gta-body"><div id="game-returns"></div></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -163,6 +158,48 @@
       </div>
     </div>
 
+    <!-- ===== BUY DIALOG ===== -->
+    <div class="modal fade" id="game-buy-modal" tabindex="-1" aria-labelledby="game-buy-title" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title" id="game-buy-title">BUY</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="game-toggle mb-3" role="group" aria-label="Asset type">
+              <button class="game-toggle-btn" data-buy-tab="market">STOCK MARKET</button>
+              <button class="game-toggle-btn" data-buy-tab="tangible">TANGIBLE ASSETS</button>
+            </div>
+            <label class="form-label" for="game-category">CATEGORY</label>
+            <select id="game-category" class="form-select form-gta mb-3"></select>
+            <label class="form-label" for="game-asset">ASSET</label>
+            <select id="game-asset" class="form-select form-gta mb-3"></select>
+            <div class="game-quote mb-2" id="game-quote"></div>
+            <div class="game-details mb-3" id="game-details"></div>
+            <div class="game-toggle mb-2" role="group" aria-label="Buy by" id="game-mode-toggle">
+              <button class="game-toggle-btn" data-buy-mode="amount">AMOUNT</button>
+              <button class="game-toggle-btn" data-buy-mode="quantity">QUANTITY</button>
+            </div>
+            <label class="form-label" for="game-amount" id="game-amount-label">AMOUNT (CHF)</label>
+            <div class="d-flex gap-2 mb-2">
+              <input id="game-amount" class="form-control form-gta" type="number" min="0" step="any" inputmode="decimal" />
+              <select id="game-unit" class="form-select form-gta game-unit" aria-label="Metal unit" style="display: none">
+                <option value="g">GRAMS</option>
+                <option value="kg">KILOS</option>
+              </select>
+            </div>
+            <div id="game-down-wrap" style="display: none">
+              <label class="form-label" for="game-down">DOWN PAYMENT (%, AT LEAST 20)</label>
+              <input id="game-down" class="form-control form-gta mb-2" type="number" min="20" max="100" step="1" value="20" inputmode="numeric" />
+            </div>
+            <div class="game-preview mb-3" id="game-preview"></div>
+            <button class="btn btn-gta w-100" id="game-buy-btn">BUY</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== TOAST ===== -->
     <div class="toast-container position-fixed bottom-0 end-0 p-3">
       <div id="toast-msg" class="toast toast-gta" role="alert"><div class="toast-body" id="toast-body"></div></div>
@@ -186,9 +223,9 @@
     <script src="js/pages-wallstreet.js?v=44"></script>
 
     <!-- ===== GAME ===== -->
-    <script src="game/engine.js?v=4"></script>
+    <script src="game/engine.js?v=5"></script>
     <script src="game/tangibles.js?v=4"></script>
     <script src="game/saves.js?v=1"></script>
-    <script src="game/page.js?v=4"></script>
+    <script src="game/page.js?v=9"></script>
   </body>
 </html>

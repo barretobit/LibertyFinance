@@ -13,8 +13,6 @@ Liberty Finance is a **personal wealth management application** that runs **enti
 
 Current version: **v1.20** · Themed "Liberty City Network" 🌆
 
----
-
 ## ✨ Features
 
 ### 🖥️ MultiProfile Management
@@ -277,16 +275,6 @@ LibertyFinance/
 ├── server.js               # static dev server (local preview only)
 └── .nojekyll               # tells GitHub Pages to serve files asis
 ```
-
-### 🧪 Running the checks
-
-The money math (exchange rates, asset values, net worth, performance) and the profile loading rules have plain Node.js checks, no install needed:
-
-```
-node tests/run.js
-```
-
----
 
 ## 📜 License & Disclaimer
 
