@@ -8,21 +8,11 @@
  *
  * The market passed in is { quote(symbol, date) -> { priceChf, date } | null,
  * benchmark(date) -> number | null, tangible(symbol) -> item | null,
- * dividend(symbol, date) -> CHF per unit | null, split(symbol, date) -> ratio | null,
- * splitFactor(symbol, afterDate) -> number, benchmarkDividendYield }:
+ * dividend(symbol, date) -> CHF per unit | null, benchmarkDividendYield }:
  * quote gives the last price on or before the date, converted to CHF.
  * dividend (optional) is the cash dividend per unit whose ex-dividend day is
- * exactly that date. split (optional) is the new units per old unit of a
- * stock split on exactly that date, and splitFactor (optional, default 1) the
- * product of the ratios of every split after `afterDate`.
- * benchmarkDividendYield (optional, default 0) is the yearly dividend yield
- * of the benchmark, whose price index pays none.
- *
- * Quotes and dividends are on today's split scale: every price before a split
- * is already divided by its ratio. A trade keeps the units it was made in
- * (priced from its quoteDate), so the replay counts a trade from before a
- * split as `ratio` times its units at a `ratio` times lower price. The cash it
- * cost and the value of the holding stay the same.
+ * exactly that date. benchmarkDividendYield (optional, default 0) is the
+ * yearly dividend yield of the benchmark, whose price index pays none.
  * tangible (optional) describes a car, watch, artwork or house:
  * { depreciation, kind, location }. depreciation is how much a unit you own
  * loses per year on top of the market price, e.g. -0.15 for a new car; kind
@@ -500,7 +490,6 @@ const GameEngine = (() => {
       incomeTax(game.location, grossSalaryChf + earlierChf + amountChf) - incomeTax(game.location, grossSalaryChf + earlierChf);
     // The benchmark reinvests its yield every day, after the same income tax at the salary's margin.
     const benchmarkDailyGrowth = 1 + (market.benchmarkDividendYield || 0) * (1 - dividendTax(0, 10000) / 10000) / 365.25;
-    const splitFactor = (symbol, afterDate) => (market.splitFactor ? market.splitFactor(symbol, afterDate) : 1);
     const trades = game.trades.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     let tradeIndex = 0;
     const benchmarkStart = market.benchmark(game.startDate);
@@ -540,18 +529,6 @@ const GameEngine = (() => {
           });
         });
       }
-      // The replay already counts split units from the trade on; this only records the split for the history.
-      if (market.split) {
-        positionList().forEach((position) => {
-          const ratio = market.split(position.symbol, date);
-          if (!(ratio > 0) || ratio === 1) return;
-          const unitsAfter = position.quantity / splitFactor(position.symbol, date);
-          events.push({
-            type: 'split', date: date, symbol: position.symbol, class: position.class, name: position.name,
-            ratio: ratio, quantityBefore: unitsAfter / ratio, quantity: unitsAfter,
-          });
-        });
-      }
 
       while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
         const trade = trades[tradeIndex++];
@@ -560,10 +537,7 @@ const GameEngine = (() => {
         const purchaseCostsChf = trade.purchaseCostsChf || 0;
         const mortgageChf = trade.mortgageChf || 0;
         const countsAsSecurity = !isTangible(trade.class);
-        // Trades saved before quoteDate existed fall back to their own date.
-        const factor = splitFactor(trade.symbol, trade.quoteDate || trade.date);
-        const result = applyTrade(positions, factor === 1 ? trade
-          : Object.assign({}, trade, { quantity: trade.quantity * factor, priceChf: trade.priceChf / factor }));
+        const result = applyTrade(positions, trade);
         feesPaid += trade.stampDutyChf + dealerFeeChf + purchaseCostsChf;
         taxesPaid += gainsTaxChf;
         if (countsAsSecurity) {
@@ -678,7 +652,7 @@ const GameEngine = (() => {
     if (isTangible(asset.class) && !Number.isInteger(quantity)) return { error: 'BUY WHOLE UNITS' };
     const amountChf = order.quantity != null ? quantity * quote.priceChf : order.amountChf;
     const trade = {
-      date: date, quoteDate: quote.date, side: 'buy', symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
+      date: date, side: 'buy', symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
       quantity: quantity, priceChf: quote.priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(asset),
     };
     if (asset.class === 'house') {
@@ -745,7 +719,7 @@ const GameEngine = (() => {
       toSell -= used;
     }
     return {
-      date: date, quoteDate: quote.date, side: 'sell', symbol: symbol, class: position.class, name: position.name,
+      date: date, side: 'sell', symbol: symbol, class: position.class, name: position.name,
       quantity: quantity, priceChf: amountChf / quantity, amountChf: amountChf,
       stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: position.class }),
       dealerFeeChf: amountChf * feeRate,

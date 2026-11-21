@@ -85,14 +85,11 @@ function gameAssetCurrency(asset) {
 }
 
 // The engine's market: CHF closes per symbol and date, from the Randata cache,
-// CHF dividends per unit by ex-dividend date and the stock splits
-// (Randata.readCorporateActions()).
-function gameBuildMarket(file, corporateActions) {
+// and CHF dividends per unit by ex-dividend date (Randata.readDividends()).
+function gameBuildMarket(file, dividends) {
   const data = file.data || {};
-  const dividends = (corporateActions && corporateActions.dividends) || {};
-  const splits = (corporateActions && corporateActions.splits) || {};
   const dividendByDate = {};
-  Object.keys(dividends).forEach((symbol) => {
+  Object.keys(dividends || {}).forEach((symbol) => {
     dividendByDate[symbol] = {};
     dividends[symbol].forEach((payment) => { dividendByDate[symbol][payment.date] = payment.amount; });
   });
@@ -129,14 +126,11 @@ function gameBuildMarket(file, corporateActions) {
     const toChf = asset && rate(gameAssetCurrency(asset), 'CHF', date);
     return toChf ? amount * toChf : null;
   };
-  const splitOn = (symbol, date) => (splits[symbol] || []).find((split) => split.date === date);
   return {
     quote: quote,
     benchmark: (date) => { const benchmarkQuote = quote(GAME_BENCHMARK_SYMBOL, date); return benchmarkQuote ? benchmarkQuote.priceChf : null; },
     benchmarkDividendYield: GAME_BENCHMARK_DIVIDEND_YIELD,
     dividend: dividend,
-    split: (symbol, date) => { const found = splitOn(symbol, date); return found ? found.ratio : null; },
-    splitFactor: (symbol, afterDate) => (splits[symbol] || []).reduce((factor, split) => (split.date > afterDate ? factor * split.ratio : factor), 1),
     tangible: GameTangibles.item,
     rate: rate,
   };
@@ -547,13 +541,6 @@ function gameRenderHistory(state) {
         '<td class="text-end">INCOME TAX ' + gameMoney(event.taxChf, event.date) + '</td>' +
         '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
     }
-    if (event.type === 'split') {
-      const ratioText = event.ratio >= 1 ? gameQuantity(event.ratio) + ' FOR 1' : '1 FOR ' + gameQuantity(1 / event.ratio);
-      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-split">SPLIT ' + ratioText + '</span></td>' +
-        '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
-        '<td class="text-end">' + gameQuantityWithUnit(event, event.quantityBefore) + ' → ' + gameQuantityWithUnit(event, event.quantity) + '</td>' +
-        '<td class="text-end">SAME VALUE</td><td class="text-end game-zero">' + gameSignedMoney(0, event.date) + '</td></tr>';
-    }
     if (event.type === 'month') {
       const cashChange = event.salaryChf - event.expensesChf - event.amortizationChf;
       const parts = ['SALARY ' + gameSignedMoney(event.salaryChf, event.date), 'EXPENSES -' + gameMoney(event.expensesChf, event.date)];
@@ -857,7 +844,7 @@ async function gameBoot() {
   syncLabel.textContent = file.synced_date ? 'MARKET DATA: ' + formatDate(file.synced_date) : 'MARKET DATA: NO DATA';
   if (result && result.status === 'offline') gameToast('MARKET DATA OFFLINE');
 
-  GamePage.market = gameBuildMarket(file, await Randata.readCorporateActions());
+  GamePage.market = gameBuildMarket(file, await Randata.readDividends());
   const today = todayIsoDate();
   GamePage.assets = (file.assets || [])
     .filter((asset) => asset && GAME_MARKET_CLASSES.includes(asset.class) && GamePage.market.quote(asset.symbol, today))

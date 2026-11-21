@@ -5,19 +5,16 @@ const GameTangibles = require('./tangibles');
 
 // A market where every symbol's CHF price is fixed per date, else the last earlier one.
 // Optional tangible info per symbol ({ depreciation, kind, location }) for cars, watches, art and houses,
-// CHF dividends per unit by symbol and ex-dividend date, and split ratios by symbol and date.
-function fakeMarket(pricesBySymbol, tangibleBySymbol = {}, dividendsBySymbol = {}, splitsBySymbol = {}) {
+// and CHF dividends per unit by symbol and ex-dividend date.
+function fakeMarket(pricesBySymbol, tangibleBySymbol = {}, dividendsBySymbol = {}) {
   const quote = (symbol, date) => {
     const dates = Object.keys(pricesBySymbol[symbol] || {}).filter((day) => day <= date).sort();
     const day = dates[dates.length - 1];
     return day ? { priceChf: pricesBySymbol[symbol][day], date: day } : null;
   };
-  const splits = (symbol) => splitsBySymbol[symbol] || {};
   return {
     quote, benchmark: (date) => (quote('^SSMI', date) || {}).priceChf || null, tangible: (symbol) => tangibleBySymbol[symbol] || null,
     dividend: (symbol, date) => (dividendsBySymbol[symbol] || {})[date] || null,
-    split: (symbol, date) => splits(symbol)[date] || null,
-    splitFactor: (symbol, afterDate) => Object.keys(splits(symbol)).filter((day) => day > afterDate).reduce((factor, day) => factor * splits(symbol)[day], 1),
   };
 }
 
@@ -380,53 +377,6 @@ test('dividends: later ones in the year are taxed at the higher margin, nothing 
   assert.ok(taxes[1] > taxes[0], 'second dividend pays more: ' + taxes);
   const salary = GameEngine.yearlySalary('zurich', 'easy');
   assertNear(taxes[0] + taxes[1], GameEngine.incomeTax('zurich', salary + 6000) - GameEngine.incomeTax('zurich', salary), 'same as one payment');
-});
-
-// NVDA before and after a 10 for 1 split on 2026-06-10: once it happened, every earlier price and dividend is a tenth.
-const nvidia = { symbol: 'NVDA', class: 'stock', name: 'Nvidia' };
-const beforeSplit = fakeMarket({ NVDA: { '2026-06-01': 1000 }, '^SSMI': { '2026-06-01': 10000 } });
-const afterSplit = fakeMarket(
-  { NVDA: { '2026-06-01': 100, '2026-06-10': 110 }, '^SSMI': { '2026-06-01': 10000 } }, {},
-  { NVDA: { '2026-06-05': 0.1 } }, { NVDA: { '2026-06-10': 10 } },
-);
-
-test('splits: a holding bought before a split holds ratio times the units, at the same value and dividends', () => {
-  const game = newGame('medium', '2026-06-01');
-  game.trades.push(GameEngine.buy(game, beforeSplit, nvidia, { quantity: 10 }, '2026-06-01'));
-  const boughtAt = GameEngine.replay(game, beforeSplit, '2026-06-01');
-
-  const state = GameEngine.replay(game, afterSplit, '2026-06-12');
-
-  const position = state.positions.find((item) => item.symbol === 'NVDA');
-  assertNear(position.quantity, 100, 'units after the split');
-  assertNear(position.valueChf, 100 * 110, 'value at the new price');
-  assertNear(position.costChf, boughtAt.positions[0].costChf, 'cost unchanged');
-  assertNear(state.days[0].netWorth, boughtAt.days[0].netWorth, 'first day worth the same on the new scale');
-  assert.strictEqual(state.dividendsReceived, 10, 'old 1.00 per share on 10 shares');
-  const split = state.events.find((item) => item.type === 'split');
-  assert.deepStrictEqual([split.date, split.ratio, split.quantityBefore, split.quantity], ['2026-06-10', 10, 10, 100]);
-  assert.strictEqual(state.events.find((item) => item.type === 'buy').quantity, 10, 'history keeps the units as bought');
-});
-
-test('splits: later trades are in new units, and saves without quoteDate fall back to the trade date', () => {
-  const game = newGame('medium', '2026-06-01');
-  const oldBuy = GameEngine.buy(game, beforeSplit, nvidia, { quantity: 10 }, '2026-06-01');
-  delete oldBuy.quoteDate;
-  game.trades.push(oldBuy);
-  game.trades.push(GameEngine.buy(game, afterSplit, nvidia, { quantity: 5 }, '2026-06-11'));
-  game.trades.push(GameEngine.sell(game, afterSplit, 'NVDA', { quantity: 50 }, '2026-06-12'));
-
-  const position = GameEngine.replay(game, afterSplit, '2026-06-12').positions.find((item) => item.symbol === 'NVDA');
-  assertNear(position.quantity, 100 + 5 - 50, 'units left');
-});
-
-test('splits: a trade priced before the split day counts as old units even when made on it', () => {
-  const game = newGame('medium', '2026-06-01');
-  // Bought on the split day from the last close before it, still on the old scale.
-  const trade = GameEngine.buy(game, beforeSplit, nvidia, { quantity: 10 }, '2026-06-10');
-  assert.strictEqual(trade.quoteDate, '2026-06-01');
-  game.trades.push(trade);
-  assertNear(GameEngine.replay(game, afterSplit, '2026-06-12').positions[0].quantity, 100, 'scaled by the split');
 });
 
 test('benchmark: reinvests its dividend yield after tax, none without one', () => {
