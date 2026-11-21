@@ -106,10 +106,11 @@ const _WALL_STREET_STOCK_SUFFIX_REGION = {
 };
 // Trading currency per listing region (used to convert prices to the display
 // currency). KRW and INR have no Randata FX pair yet, so those fall back to
-// showing the native price.
+// showing the native price. GBp is pence: Yahoo quotes London shares, and
+// their dividends, in pence, not pounds.
 const _WALL_STREET_REGION_CURRENCY = {
   US: 'USD', CH: 'CHF', DE: 'EUR', JP: 'JPY', KR: 'KRW',
-  HK: 'HKD', FR: 'EUR', GB: 'GBP', IT: 'EUR', IN: 'INR',
+  HK: 'HKD', FR: 'EUR', GB: 'GBp', IT: 'EUR', IN: 'INR',
 };
 function wallStreetStockRegion(symbol) {
   const upperSymbol = String(symbol || '').toUpperCase();
@@ -211,9 +212,17 @@ function wallStreetRateMap(data, assets) {
   return usdPerUnit;
 }
 
+// USD per unit of `currency`, given `usdPerUnitOf(code)` for the currencies
+// Randata has FX pairs for. Pence (GBp) have none: they are a hundredth of a GBP.
+function wallStreetUsdPerUnit(usdPerUnitOf, currency) {
+  if (currency !== 'GBp') return usdPerUnitOf(currency);
+  const usdPerPound = usdPerUnitOf('GBP');
+  return usdPerPound == null ? null : usdPerPound / 100;
+}
+
 function wallStreetCurrencyScale(usdPerUnit, fromCode, toCode) {
-  const fromInUsd = usdPerUnit[fromCode];
-  const toInUsd = usdPerUnit[toCode];
+  const fromInUsd = wallStreetUsdPerUnit((code) => usdPerUnit[code], fromCode);
+  const toInUsd = wallStreetUsdPerUnit((code) => usdPerUnit[code], toCode);
   if (fromInUsd == null || toInUsd == null) return null;
   return fromInUsd / toInUsd;
 }

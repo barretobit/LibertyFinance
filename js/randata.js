@@ -21,6 +21,9 @@
  *
  * Each asset class is persisted as its own file inside the Resources/ folder:
  *   indexes.json · stocks.json · etfs.json · metals.json · cryptos.json · fx.json
+ * corporate-actions.json holds the cash dividends and stock splits
+ * (GET /finance/corporate-actions), refreshed whenever prices are pulled;
+ * readCorporateActions() serves it to pages.
  * A small randata-meta.json holds the sync bookkeeping (schema version, the
  * last ingested server cache build instant, and the per-class sync day), so
  * class files are only rewritten when their bars actually changed — a weekend
@@ -40,6 +43,9 @@ const Randata = (() => {
   const HISTORY_RANGE_API = 'finance/history/range';
   const HISTORY_YEAR_API = 'finance/history/year';
   const META_FILE = 'randata-meta.json';
+  // Dividends and splits; older Randata servers answer 404 and the game simply has none.
+  const CORPORATE_ACTIONS_API = 'finance/corporate-actions';
+  const CORPORATE_ACTIONS_FILE = 'corporate-actions.json';
 
   // The full set (~460k bars) is pulled one calendar year per request: a single
   // history/all dump is cut off by the host proxy (~502). Years without data
@@ -79,6 +85,7 @@ const Randata = (() => {
   let syncInFlight = null;
   let legacyRemoved = false;
   let lastStatusCheck = 0;
+  let corporateActionsCache = null;
   // Goes up whenever a sync changes the market data, so pages know to redraw.
   let dataVersion = 0;
 
@@ -235,6 +242,57 @@ const Randata = (() => {
     return bySymbol;
   }
 
+  // Server columns { symbol: { date: [...], [field]: [...] } } as { symbol: [{ date, [field] }] }.
+  function eventsPerSymbol(columnsBySymbol, field) {
+    const bySymbol = {};
+    Object.keys(columnsBySymbol || {}).forEach((symbol) => {
+      const columns = columnsBySymbol[symbol];
+      bySymbol[symbol] = columns.date.map((date, index) => ({ date: date, [field]: columns[field][index] }));
+    });
+    return bySymbol;
+  }
+
+  // { dividends: { symbol: [{ date, amount }] }, splits: { symbol: [{ date, ratio }] } },
+  // date-ascending. A dividend's `amount` is per share in the same currency as the
+  // symbol's prices, on its ex-dividend day; a split's `ratio` is new shares per old one.
+  async function fetchCorporateActions() {
+    const json = (await apiJson(API_BASE + '/' + CORPORATE_ACTIONS_API)) || {};
+    return { dividends: eventsPerSymbol(json.dividends, 'amount'), splits: eventsPerSymbol(json.splits, 'ratio') };
+  }
+
+  async function readCorporateActionsFile() {
+    const storageAdapter = await getAdapter();
+    let content = null;
+    try { content = await storageAdapter.readIn(RESOURCES_FOLDER, CORPORATE_ACTIONS_FILE); } catch (error) { content = null; }
+    if (!content) return null;
+    try {
+      const parsed = JSON.parse(content);
+      return parsed && parsed.data && typeof parsed.data === 'object' ? parsed.data : null;
+    } catch (error) { return null; /* corrupted file */ }
+  }
+
+  // The stored corporate actions, read once per page; null when none were ever synced.
+  async function storedCorporateActions() {
+    if (!corporateActionsCache) corporateActionsCache = await readCorporateActionsFile();
+    return corporateActionsCache;
+  }
+
+  // { dividends, splits } for pages (see fetchCorporateActions); empty when none were ever synced.
+  async function readCorporateActions() {
+    const stored = (await storedCorporateActions()) || {};
+    return { dividends: stored.dividends || {}, splits: stored.splits || {} };
+  }
+
+  // Never fails the sync: an older server or an outage keeps the stored file.
+  async function refreshCorporateActions() {
+    try {
+      const data = await fetchCorporateActions();
+      const storageAdapter = await getAdapter();
+      await storageAdapter.writeIn(RESOURCES_FOLDER, CORPORATE_ACTIONS_FILE, JSON.stringify({ data: data }));
+      corporateActionsCache = data;
+    } catch (error) { /* keep the stored file */ }
+  }
+
   // Full UTC instant (epoch ms) at which the Randata cache was last rebuilt,
   // or null when the status endpoint is unreachable. Drives the "new data
   // landed on the server" check regardless of the calendar day.
@@ -350,6 +408,8 @@ const Randata = (() => {
         remoteBuiltAt > new Date(meta.built_at).getTime();
 
       if (!stale.length && !fullNeeded && !rebuildDetected) {
+        // Prices are current, but a copy synced before corporate actions existed still needs them once.
+        if (!(await storedCorporateActions())) await refreshCorporateActions();
         cache = states;
         lastResult = summary('fresh', today);
         return lastResult;
@@ -429,6 +489,8 @@ const Randata = (() => {
         } catch (error) { /* range failed: keep the cached files; still stale tomorrow */ }
       }
 
+      // Randata only changes its corporate actions when it rebuilds, which is also when prices are pulled.
+      await refreshCorporateActions();
       await writeMeta(meta);
       // Reused in-memory classes still carry the sync dates of when they were read.
       classKeys.forEach((assetClass) => { states[assetClass] = assembleClass(assetClass, meta, states[assetClass]); });
@@ -501,6 +563,7 @@ const Randata = (() => {
     sync,
     forgetSync,
     readFile,
+    readCorporateActions,
     readClass,
     getLastResult: () => lastResult,
     dataVersion: () => dataVersion

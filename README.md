@@ -165,7 +165,7 @@ Your data always lives in **plain JSON files**. _How_ those files are read and w
 - The button becomes **CHANGE DATA FOLDER** once connected. Click it anytime to switch to a different folder (e.g. if you picked the wrong one).
 - Profiles are listed from that folder; **every save writes directly to the real `.json` file** on disk.
 - A `Backups/` subfolder is created next to your data; every time you open a profile, a timestamped snapshot is saved. Backups are never deleted by the app.
-- A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`) plus a small `randata-meta.json` with sync bookkeeping. Each page reads only the resources it needs.
+- A `Resources/` subfolder caches the market data fetched from the Randata API — one file per asset class (`indexes.json`, `stocks.json`, `etfs.json`, `metals.json`, `cryptos.json`, `fx.json`), `corporate-actions.json` with the cash dividends and stock splits, plus a small `randata-meta.json` with sync bookkeeping. Each page reads only the resources it needs.
 - FX rates & metal prices are stored in `market.json` in the same folder, shared by all profiles.
 - **Your files are just files**: copy them, back them up, open them in another device, anything.
 

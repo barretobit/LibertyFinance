@@ -7,8 +7,22 @@
  * that list against the market prices.
  *
  * The market passed in is { quote(symbol, date) -> { priceChf, date } | null,
- * benchmark(date) -> number | null, tangible(symbol) -> item | null }:
+ * benchmark(date) -> number | null, tangible(symbol) -> item | null,
+ * dividend(symbol, date) -> CHF per unit | null, split(symbol, date) -> ratio | null,
+ * splitFactor(symbol, afterDate) -> number, benchmarkDividendYield }:
  * quote gives the last price on or before the date, converted to CHF.
+ * dividend (optional) is the cash dividend per unit whose ex-dividend day is
+ * exactly that date. split (optional) is the new units per old unit of a
+ * stock split on exactly that date, and splitFactor (optional, default 1) the
+ * product of the ratios of every split after `afterDate`.
+ * benchmarkDividendYield (optional, default 0) is the yearly dividend yield
+ * of the benchmark, whose price index pays none.
+ *
+ * Quotes and dividends are on today's split scale: every price before a split
+ * is already divided by its ratio. A trade keeps the units it was made in
+ * (priced from its quoteDate), so the replay counts a trade from before a
+ * split as `ratio` times its units at a `ratio` times lower price. The cash it
+ * cost and the value of the holding stay the same.
  * tangible (optional) describes a car, watch, artwork or house:
  * { depreciation, kind, location }. depreciation is how much a unit you own
  * loses per year on top of the market price, e.g. -0.15 for a new car; kind
@@ -27,6 +41,9 @@
  *     affordability check.
  * Swiss rules modelled for a private investor:
  *   - Capital gains on movable assets are tax free.
+ *   - Dividends are income: each one is paid in cash to the units held at the
+ *     end of the day before its ex-dividend day, and the income tax it adds on
+ *     top of the salary and the year's earlier dividends is taken at once.
  *   - Securities transfer stamp duty on every stock and ETF trade:
  *     0.075% for Swiss securities, 0.15% for foreign ones. Crypto and
  *     physical precious metals pay none.
@@ -40,9 +57,10 @@
  *     costs (transfer tax, notary, land registry) when one is bought.
  * Cars, watches, art and houses are bought in whole units and sold through a
  * dealer, auction house or estate agent, who keeps a share of the sale price.
- * Not modelled: dividends and interest (the market data is price only), the
- * pension fund savings in the social contributions, imputed rental value, and
- * the lower tax value of property.
+ * Not modelled: interest on cash, the withholding taxes on dividends (Swiss
+ * 35% refunded, foreign ones credited: the net effect is the income tax
+ * above), the pension fund savings in the social contributions, imputed
+ * rental value, and the lower tax value of property.
  */
 
 const GameEngine = (() => {
@@ -474,6 +492,15 @@ const GameEngine = (() => {
     let feesPaid = 0;
     let salaryReceived = 0;
     let expensesPaid = 0;
+    let dividendsReceived = 0;
+    const yearDividends = {};
+    const grossSalaryChf = yearlySalary(game.location, game.difficulty);
+    // The extra income tax on `amountChf` of dividends after `earlierChf` of them this year.
+    const dividendTax = (earlierChf, amountChf) =>
+      incomeTax(game.location, grossSalaryChf + earlierChf + amountChf) - incomeTax(game.location, grossSalaryChf + earlierChf);
+    // The benchmark reinvests its yield every day, after the same income tax at the salary's margin.
+    const benchmarkDailyGrowth = 1 + (market.benchmarkDividendYield || 0) * (1 - dividendTax(0, 10000) / 10000) / 365.25;
+    const splitFactor = (symbol, afterDate) => (market.splitFactor ? market.splitFactor(symbol, afterDate) : 1);
     const trades = game.trades.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     let tradeIndex = 0;
     const benchmarkStart = market.benchmark(game.startDate);
@@ -489,9 +516,42 @@ const GameEngine = (() => {
     const netWorthOn = (date) => cash + positionList().reduce((sum, position) => sum + positionValue(market, position, date), 0) - mortgageBalance();
 
     for (let date = game.startDate; date <= untilDate; date = addDays(date, 1)) {
-      if (date !== game.startDate) applyWear(positions, market);
+      if (date !== game.startDate) {
+        applyWear(positions, market);
+        if (benchmarkUnits != null) benchmarkUnits *= benchmarkDailyGrowth;
+      }
       const year = Number(date.slice(0, 4));
       if (yearStartWealth[year] == null) yearStartWealth[year] = date === game.startDate ? game.startCash : netWorthOn(date);
+
+      // Before today's trades: a unit bought on the ex-dividend day gets nothing, one sold that day still does.
+      if (market.dividend) {
+        positionList().forEach((position) => {
+          const perUnitChf = market.dividend(position.symbol, date);
+          if (!(perUnitChf > 0)) return;
+          const amountChf = perUnitChf * position.quantity;
+          const taxChf = dividendTax(yearDividends[year] || 0, amountChf);
+          yearDividends[year] = (yearDividends[year] || 0) + amountChf;
+          cash += amountChf - taxChf;
+          taxesPaid += taxChf;
+          dividendsReceived += amountChf;
+          events.push({
+            type: 'dividend', date: date, symbol: position.symbol, class: position.class, name: position.name,
+            quantity: position.quantity, perUnitChf: perUnitChf, amountChf: amountChf, taxChf: taxChf,
+          });
+        });
+      }
+      // The replay already counts split units from the trade on; this only records the split for the history.
+      if (market.split) {
+        positionList().forEach((position) => {
+          const ratio = market.split(position.symbol, date);
+          if (!(ratio > 0) || ratio === 1) return;
+          const unitsAfter = position.quantity / splitFactor(position.symbol, date);
+          events.push({
+            type: 'split', date: date, symbol: position.symbol, class: position.class, name: position.name,
+            ratio: ratio, quantityBefore: unitsAfter / ratio, quantity: unitsAfter,
+          });
+        });
+      }
 
       while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
         const trade = trades[tradeIndex++];
@@ -500,7 +560,10 @@ const GameEngine = (() => {
         const purchaseCostsChf = trade.purchaseCostsChf || 0;
         const mortgageChf = trade.mortgageChf || 0;
         const countsAsSecurity = !isTangible(trade.class);
-        const result = applyTrade(positions, trade);
+        // Trades saved before quoteDate existed fall back to their own date.
+        const factor = splitFactor(trade.symbol, trade.quoteDate || trade.date);
+        const result = applyTrade(positions, factor === 1 ? trade
+          : Object.assign({}, trade, { quantity: trade.quantity * factor, priceChf: trade.priceChf / factor }));
         feesPaid += trade.stampDutyChf + dealerFeeChf + purchaseCostsChf;
         taxesPaid += gainsTaxChf;
         if (countsAsSecurity) {
@@ -589,6 +652,7 @@ const GameEngine = (() => {
       feesPaid: feesPaid,
       salaryReceived: salaryReceived,
       expensesPaid: expensesPaid,
+      dividendsReceived: dividendsReceived,
       trader: { status: ['private', 'review', 'risk'][failedRules], shortSales: shortSales, volumeMultiple: volumeMultiple },
     };
   }
@@ -614,7 +678,7 @@ const GameEngine = (() => {
     if (isTangible(asset.class) && !Number.isInteger(quantity)) return { error: 'BUY WHOLE UNITS' };
     const amountChf = order.quantity != null ? quantity * quote.priceChf : order.amountChf;
     const trade = {
-      date: date, side: 'buy', symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
+      date: date, quoteDate: quote.date, side: 'buy', symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
       quantity: quantity, priceChf: quote.priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(asset),
     };
     if (asset.class === 'house') {
@@ -681,7 +745,7 @@ const GameEngine = (() => {
       toSell -= used;
     }
     return {
-      date: date, side: 'sell', symbol: symbol, class: position.class, name: position.name,
+      date: date, quoteDate: quote.date, side: 'sell', symbol: symbol, class: position.class, name: position.name,
       quantity: quantity, priceChf: amountChf / quantity, amountChf: amountChf,
       stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: position.class }),
       dealerFeeChf: amountChf * feeRate,

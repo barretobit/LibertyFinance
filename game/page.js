@@ -7,6 +7,8 @@
  */
 
 const GAME_BENCHMARK_SYMBOL = '^SSMI';
+// shortcut: the SMI is a price index, so the benchmark gets the SMI's usual dividend yield as a fixed rate; refresh it by hand when it drifts.
+const GAME_BENCHMARK_DIVIDEND_YIELD = 0.03;
 const GAME_MARKET_CLASSES = ['stock', 'etf', 'crypto', 'metal'];
 // Units of the commodity futures; precious metals are counted in grams.
 const GAME_PRICE_UNITS = { 'HG=F': 'LB', 'CL=F': 'BARREL' };
@@ -82,9 +84,18 @@ function gameAssetCurrency(asset) {
   return 'USD';
 }
 
-// The engine's market: CHF closes per symbol and date, from the Randata cache.
-function gameBuildMarket(file) {
+// The engine's market: CHF closes per symbol and date, from the Randata cache,
+// CHF dividends per unit by ex-dividend date and the stock splits
+// (Randata.readCorporateActions()).
+function gameBuildMarket(file, corporateActions) {
   const data = file.data || {};
+  const dividends = (corporateActions && corporateActions.dividends) || {};
+  const splits = (corporateActions && corporateActions.splits) || {};
+  const dividendByDate = {};
+  Object.keys(dividends).forEach((symbol) => {
+    dividendByDate[symbol] = {};
+    dividends[symbol].forEach((payment) => { dividendByDate[symbol][payment.date] = payment.amount; });
+  });
   const assetBySymbol = {};
   const fxBars = {};
   (file.assets || []).forEach((asset) => {
@@ -98,8 +109,9 @@ function gameBuildMarket(file) {
     return bar ? bar.close : null;
   };
   const rate = (fromCurrency, toCurrency, date) => {
-    const fromUsd = usdPerUnit(fromCurrency, date);
-    const toUsd = usdPerUnit(toCurrency, date);
+    const usdPerUnitOn = (currency) => usdPerUnit(currency, date);
+    const fromUsd = wallStreetUsdPerUnit(usdPerUnitOn, fromCurrency);
+    const toUsd = wallStreetUsdPerUnit(usdPerUnitOn, toCurrency);
     return fromUsd && toUsd ? fromUsd / toUsd : null;
   };
   const quote = (symbol, date) => {
@@ -110,9 +122,21 @@ function gameBuildMarket(file) {
     const unitsPerQuote = GameTangibles.PRECIOUS_METALS[symbol] ? GameTangibles.GRAMS_PER_TROY_OUNCE : 1;
     return toChf ? { priceChf: bar.close * toChf / unitsPerQuote, date: bar.date } : null;
   };
+  // Yahoo reports dividends in the same unit as the prices, so they convert exactly like the quote, on the ex-date.
+  const dividend = (symbol, date) => {
+    const amount = dividendByDate[symbol] && dividendByDate[symbol][date];
+    const asset = amount && assetBySymbol[symbol];
+    const toChf = asset && rate(gameAssetCurrency(asset), 'CHF', date);
+    return toChf ? amount * toChf : null;
+  };
+  const splitOn = (symbol, date) => (splits[symbol] || []).find((split) => split.date === date);
   return {
     quote: quote,
     benchmark: (date) => { const benchmarkQuote = quote(GAME_BENCHMARK_SYMBOL, date); return benchmarkQuote ? benchmarkQuote.priceChf : null; },
+    benchmarkDividendYield: GAME_BENCHMARK_DIVIDEND_YIELD,
+    dividend: dividend,
+    split: (symbol, date) => { const found = splitOn(symbol, date); return found ? found.ratio : null; },
+    splitFactor: (symbol, afterDate) => (splits[symbol] || []).reduce((factor, split) => (split.date > afterDate ? factor * split.ratio : factor), 1),
     tangible: GameTangibles.item,
     rate: rate,
   };
@@ -334,7 +358,8 @@ function gameRenderStats(state, today) {
       stat('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
     ]) +
     group('COSTS &amp; SAVINGS', [
-      stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, property gains tax, stamp duty, purchase costs and dealer cuts.'),
+      stat('DIVIDENDS', gameMoney(state.dividendsReceived, today), '', 'Dividends paid to you before income tax. The tax on them is in the taxes paid.'),
+      stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, income tax on dividends, property gains tax, stamp duty, purchase costs and dealer cuts.'),
       stat('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
       stat('SAVED PER MONTH', gameSignedMoney(state.budget.savingsChf, today), gameSignClass(state.budget.savingsChf), 'Take home salary minus this month\'s expenses.'),
       stat('TAX STATUS', traderText, 'game-trader-' + state.trader.status, traderTitle),
@@ -513,6 +538,21 @@ function gameRenderHistory(state) {
     if (event.type === 'tax') {
       return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-tax">WEALTH TAX ' + event.year + '</span></td>' +
         '<td colspan="3">ON NET WORTH ' + gameMoney(event.wealthChf, event.date) + '</td><td class="text-end game-neg">-' + gameMoney(event.amountChf, event.date) + '</td></tr>';
+    }
+    if (event.type === 'dividend') {
+      const cashChange = event.amountChf - event.taxChf;
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-dividend">DIVIDEND</span></td>' +
+        '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
+        '<td class="text-end">' + gameQuantityWithUnit(event, event.quantity) + ' × ' + gameMoney(event.perUnitChf, event.date) + '</td>' +
+        '<td class="text-end">INCOME TAX ' + gameMoney(event.taxChf, event.date) + '</td>' +
+        '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
+    }
+    if (event.type === 'split') {
+      const ratioText = event.ratio >= 1 ? gameQuantity(event.ratio) + ' FOR 1' : '1 FOR ' + gameQuantity(1 / event.ratio);
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-split">SPLIT ' + ratioText + '</span></td>' +
+        '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
+        '<td class="text-end">' + gameQuantityWithUnit(event, event.quantityBefore) + ' → ' + gameQuantityWithUnit(event, event.quantity) + '</td>' +
+        '<td class="text-end">SAME VALUE</td><td class="text-end game-zero">' + gameSignedMoney(0, event.date) + '</td></tr>';
     }
     if (event.type === 'month') {
       const cashChange = event.salaryChf - event.expensesChf - event.amortizationChf;
@@ -817,7 +857,7 @@ async function gameBoot() {
   syncLabel.textContent = file.synced_date ? 'MARKET DATA: ' + formatDate(file.synced_date) : 'MARKET DATA: NO DATA';
   if (result && result.status === 'offline') gameToast('MARKET DATA OFFLINE');
 
-  GamePage.market = gameBuildMarket(file);
+  GamePage.market = gameBuildMarket(file, await Randata.readCorporateActions());
   const today = todayIsoDate();
   GamePage.assets = (file.assets || [])
     .filter((asset) => asset && GAME_MARKET_CLASSES.includes(asset.class) && GamePage.market.quote(asset.symbol, today))

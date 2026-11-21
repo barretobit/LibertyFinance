@@ -22,6 +22,10 @@ function loadRandata(options = {}) {
   const answers = {
     'finance/cache/status': { loaded_at: '2026-11-13T00:00:00Z' },
     'finance/assets': { indexes: [{ symbol: '^GSPC', name: 'S&P 500' }], stocks: [], etfs: [], precious_metals: [], crypto: [], fx_pairs: [{ symbol: 'CHFUSD=X' }] },
+    'finance/corporate-actions': {
+      dividends: { 'NESN.SW': { date: ['2025-04-22', '2026-04-20'], amount: [3.05, 3.1] } },
+      splits: { NVDA: { date: ['2024-06-10'], ratio: [10] } },
+    },
   };
   const fakeFetch = async (url) => {
     const path = url.replace('https://randata.onrender.com/', '');
@@ -39,6 +43,7 @@ function loadRandata(options = {}) {
       return { ok: true, status: 200, json: async () => ({ year: yearNumber, symbols }) };
     }
     if (path.startsWith('finance/history/range')) return { ok: true, status: 200, json: async () => ({ data: [] }) };
+    if (path === 'finance/corporate-actions' && options.actionsMissing) return { ok: false, status: 404 };
     return { ok: true, status: 200, json: async () => answers[path] };
   };
   const { Randata } = loadScripts(['js/randata.js'], ['Randata'], { Storage: { async get() { return adapter; } }, fetch: fakeFetch });
@@ -111,6 +116,35 @@ test('a failed reload after forgetSync keeps the old market data', async () => {
   await Randata.sync({ force: true });
 
   assert.deepStrictEqual((await Randata.readClass('index')).data['^GSPC'].map((bar) => bar.close), [10, 11, 12, 13]);
+});
+
+test('a sync stores the dividends and splits as date-ascending rows per symbol', async () => {
+  const { Randata } = loadRandata();
+  await Randata.sync();
+  const actions = await Randata.readCorporateActions();
+  assert.deepStrictEqual(actions.dividends['NESN.SW'], [{ date: '2025-04-22', amount: 3.05 }, { date: '2026-04-20', amount: 3.1 }]);
+  assert.deepStrictEqual(actions.splits.NVDA, [{ date: '2024-06-10', ratio: 10 }]);
+});
+
+test('a server without the corporate actions endpoint still syncs, with none', async () => {
+  const { Randata } = loadRandata({ actionsMissing: true });
+  const result = await Randata.sync();
+  assert.strictEqual(result.status, 'synced');
+  assert.deepStrictEqual(await Randata.readCorporateActions(), { dividends: {}, splits: {} });
+});
+
+test('a copy synced before corporate actions existed fetches them once on the next check', async () => {
+  const options = { actionsMissing: true };
+  const { Randata, requests } = loadRandata(options);
+  await Randata.sync();
+  options.actionsMissing = false;
+
+  await Randata.sync({ force: true });
+  const requestsBefore = requests.length;
+  await Randata.sync({ force: true });
+
+  assert.strictEqual((await Randata.readCorporateActions()).dividends['NESN.SW'].length, 2);
+  assert.deepStrictEqual(requests.slice(requestsBefore), ['finance/cache/status'], 'stored corporate actions are not fetched again');
 });
 
 test('fx pairs come from the cached history, not from the database-backed /finance/fx/rates', async () => {
