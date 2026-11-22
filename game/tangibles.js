@@ -1,4 +1,4 @@
-/* ===== Zuri Vault: tangible assets =====
+/* ===== Vaulty: tangible assets =====
  *
  * Cars, watches, art and houses have no public daily price feed, so their
  * prices are simulated around a rough real price per item. The simulation is deterministic: the same item on the same date

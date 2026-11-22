@@ -1,4 +1,4 @@
-/* ===== Zuri Vault (game.html only) ===== */
+/* ===== Vaulty (game.html only) ===== */
 
 .game-rules,
 .game-note {
@@ -52,12 +52,6 @@
 .game-player {
   color: var(--text-secondary);
   font-size: 13px;
-}
-.game-save-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
 }
 .game-unit {
   width: auto;

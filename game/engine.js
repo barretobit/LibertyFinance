@@ -1,4 +1,4 @@
-/* ===== Zuri Vault: rules engine =====
+/* ===== Vaulty: rules engine =====
  *
  * Pure game rules, no DOM and no storage, so they can be tested in plain node.
  * Everything is in CHF. A game is its player (name, city, difficulty), its

@@ -1,4 +1,4 @@
-/* ===== Zuri Vault: page =====
+/* ===== Vaulty: page =====
  *
  * Public page, no profile. Saves are files in the Game/ folder of the data
  * folder (game/saves.js); market data is the Randata cache in Resources/ of
@@ -275,8 +275,7 @@ function gameShow(view) {
 
 function gameRenderHeader() {
   const game = GamePage.game;
-  const controls = document.getElementById('game-save-controls');
-  controls.style.display = GamePage.saves.length ? '' : 'none';
+  document.getElementById('game-saves-btn').style.display = GamePage.saves.length ? '' : 'none';
   const select = document.getElementById('game-save');
   select.innerHTML = GamePage.saves.map((save) => {
     const label = save.game.name + ' (' + GameEngine.DIFFICULTIES[save.game.difficulty].label + ', ' + GameEngine.LOCATIONS[save.game.location].label + ')';
@@ -807,12 +806,14 @@ function gameBindControls() {
     gameTrade(GameEngine.buy(GamePage.game, GamePage.market, asset, gameOrder(asset), todayIsoDate()));
   };
 
-  document.getElementById('game-save').onchange = (event) => gameOpenSave(event.target.value);
-  document.getElementById('game-new-btn').onclick = () => { GamePage.view = 'start'; gameRender(); };
+  const savesDialog = () => bootstrap.Modal.getOrCreateInstance(document.getElementById('game-saves-modal'));
+  document.getElementById('game-save').onchange = (event) => { savesDialog().hide(); gameOpenSave(event.target.value); };
+  document.getElementById('game-new-btn').onclick = () => { savesDialog().hide(); GamePage.view = 'start'; gameRender(); };
   document.getElementById('game-start-back').onclick = () => { GamePage.view = 'board'; gameRender(); };
   document.getElementById('game-reset-btn').onclick = async () => {
     const game = GamePage.game;
     if (!confirm('Start "' + game.name + '" again from today? All its trades and history are deleted.')) return;
+    savesDialog().hide();
     const before = { startDate: game.startDate, trades: game.trades };
     game.startDate = todayIsoDate();
     game.trades = [];

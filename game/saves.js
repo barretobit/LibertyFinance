@@ -1,4 +1,4 @@
-/* ===== Zuri Vault: save files =====
+/* ===== Vaulty: save files =====
  *
  * Every game is one JSON file in the Game/ folder of the Liberty Finance data
  * folder, next to Resources/. In folder mode (Chrome, Edge) these are real
