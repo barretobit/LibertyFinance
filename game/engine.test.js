@@ -503,6 +503,24 @@ test('day trade: a partly closed trade keeps the sold part and reverts the rest'
   assertNear(buyEvent.amountChf, 400, 'history amount');
 });
 
+test('day trade: each buy of the same asset stays its own trade, and a close can pick one', () => {
+  const { market, game } = dayTradeGame();
+  const firstAt = '2026-11-23T09:00:00.000Z';
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { quantity: 10 }, 100, sixSession, firstAt));
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { quantity: 20 }, 90, sixSession, duringSession));
+  const open = GameEngine.replay(game, market, '2026-11-23', laterInSession);
+  assert.deepStrictEqual(open.dayTrades.map((item) => [item.at, item.quantity, item.priceChf]), [[firstAt, 10, 100], [duringSession, 20, 90]]);
+
+  const sale = GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1, lotAt: duringSession }, 95, laterInSession);
+  assert.strictEqual(sale.lotAt, duringSession);
+  assertNear(sale.quantity, 20, 'only the second buy');
+  game.trades.push(sale);
+  const state = GameEngine.replay(game, market, '2026-11-23', laterInSession);
+  assert.deepStrictEqual(state.dayTrades.map((item) => [item.at, item.quantity]), [[firstAt, 10]], 'the first buy is untouched');
+  assertNear(state.dayTradeProfitChf, 1900 * (1 - 0.00075) - 1800 * 1.00075, 'profit against the second buy price');
+  assert.strictEqual(GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1, lotAt: duringSession }, 95, laterInSession).error, 'NO OPEN DAY TRADE');
+});
+
 test('day trade: only while the market is open, with the cash at hand, never tangibles', () => {
   const { market, game } = dayTradeGame();
   assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 100 }, 100, sixSession, afterClose).error, 'MARKET CLOSED');

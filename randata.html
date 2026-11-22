@@ -82,7 +82,7 @@
             <div class="card-gta-body">
               <form class="rd-row" id="key-form" autocomplete="off">
                 <input type="password" class="form-control form-gta" id="key-input" placeholder="X-ADMIN-KEY" autocomplete="off" spellcheck="false" />
-                <label><input type="checkbox" id="key-remember" /> KEEP FOR THIS TAB</label>
+                <label><input type="checkbox" id="key-remember" /> REMEMBER ON THIS DEVICE</label>
                 <button type="submit" class="btn btn-gta">UNLOCK</button>
                 <button type="button" class="btn btn-gta" id="key-lock">LOCK</button>
               </form>
@@ -200,13 +200,14 @@
 
       const element = (id) => document.getElementById(id);
 
+      // localStorage keeps the key across refreshes and closed tabs until LOCK is pressed.
       function readStoredKey() {
-        try { return sessionStorage.getItem(KEY_STORAGE_NAME); } catch (error) { return null; }
+        try { return localStorage.getItem(KEY_STORAGE_NAME); } catch (error) { return null; }
       }
       function writeStoredKey(value) {
         try {
-          if (value) sessionStorage.setItem(KEY_STORAGE_NAME, value);
-          else sessionStorage.removeItem(KEY_STORAGE_NAME);
+          if (value) localStorage.setItem(KEY_STORAGE_NAME, value);
+          else localStorage.removeItem(KEY_STORAGE_NAME);
         } catch (error) { /* storage blocked: memory only */ }
       }
 

@@ -8,7 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=48" />
-    <link rel="stylesheet" href="game/game.css?v=17" />
+    <link rel="stylesheet" href="game/game.css?v=19" />
   </head>
   <body>
     <!-- ===== TOP NAV ===== -->
@@ -75,104 +75,161 @@
 
           <!-- ===== RUNNING GAME ===== -->
           <div id="game-board" style="display: none">
-            <div class="row" id="game-stats"></div>
+            <div class="mb-4" id="game-stats"></div>
 
-            <div class="card-gta mb-4">
-              <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span>NET WORTH</span>
-                <span class="ws-header-note">DASHED: THE SAME MONEY IN THE SMI · DOTTED: MONEY PUT IN</span>
-              </div>
-              <div class="card-gta-body">
-                <div id="game-chart-empty" class="empty-state" style="display: none">YOUR CHART STARTS TOMORROW: IT NEEDS TWO DAYS TO DRAW A LINE.</div>
-                <div class="game-chart-wrap"><canvas id="game-chart"></canvas></div>
-              </div>
+            <div class="game-tabs mb-4" role="tablist" aria-label="Game sections">
+              <button class="game-toggle-btn" role="tab" id="game-tab-overview" aria-controls="game-panel-overview" data-game-tab="overview">OVERVIEW</button>
+              <button class="game-toggle-btn" role="tab" id="game-tab-portfolio" aria-controls="game-panel-portfolio" data-game-tab="portfolio">PORTFOLIO</button>
+              <button class="game-toggle-btn" role="tab" id="game-tab-day-trading" aria-controls="game-panel-day-trading" data-game-tab="day-trading">DAY TRADING</button>
+              <button class="game-toggle-btn" role="tab" id="game-tab-budget" aria-controls="game-panel-budget" data-game-tab="budget">BUDGET &amp; TAXES</button>
+              <button class="game-toggle-btn" role="tab" id="game-tab-history" aria-controls="game-panel-history" data-game-tab="history">HISTORY</button>
             </div>
 
-            <div class="card-gta mb-4">
-              <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
-                <span>DAY TRADING</span>
-                <span class="ws-header-note">SIMULATED LIVE PRICES · CLOSE BEFORE THE MARKET CLOSES OR THE TRADE IS REVERTED</span>
-              </div>
-              <div class="card-gta-body">
-                <div class="row">
-                  <div class="col-12 col-xl-8 mb-3 mb-xl-0">
-                    <div class="row">
-                      <div class="col-12 col-md-4 mb-2">
-                        <label class="form-label" for="game-day-category">CATEGORY</label>
-                        <select id="game-day-category" class="form-select form-gta"></select>
+            <!-- ===== OVERVIEW ===== -->
+            <div id="game-panel-overview" role="tabpanel" aria-labelledby="game-tab-overview">
+              <div class="row">
+                <div class="col-12 col-xl-8 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <span>NET WORTH</span>
+                      <span class="ws-header-note">DASHED: THE SAME MONEY IN THE SMI · DOTTED: MONEY PUT IN</span>
+                    </div>
+                    <div class="card-gta-body">
+                      <div id="game-chart-empty" class="empty-state" style="display: none">YOUR CHART STARTS TOMORROW: IT NEEDS TWO DAYS TO DRAW A LINE.</div>
+                      <div class="game-chart-wrap"><canvas id="game-chart"></canvas></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12 col-xl-4 mb-4">
+                  <div class="d-flex flex-column gap-4">
+                    <div id="game-money"></div>
+                    <div class="card-gta mb-0">
+                      <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                        <span>ALLOCATION</span><span class="ws-header-note">SHARE OF CASH + HOLDINGS</span>
                       </div>
-                      <div class="col-12 col-md-8 mb-2">
-                        <label class="form-label" for="game-day-asset">ASSET</label>
-                        <select id="game-day-asset" class="form-select form-gta"></select>
+                      <div class="card-gta-body"><div id="game-allocation"></div></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ===== PORTFOLIO ===== -->
+            <div id="game-panel-portfolio" role="tabpanel" aria-labelledby="game-tab-portfolio">
+              <div class="row">
+                <div class="col-12 col-xl-8 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                      <span>HOLDINGS</span>
+                      <button class="btn btn-gta btn-sm" id="game-open-buy">BUY</button>
+                    </div>
+                    <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div></div>
+                  </div>
+                </div>
+                <div class="col-12 col-xl-4 mb-4">
+                  <div class="d-flex flex-column gap-4">
+                    <div class="card-gta mb-0">
+                      <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                        <span>WEIGHTS</span><span class="ws-header-note">SHARE OF HOLDINGS</span>
                       </div>
+                      <div class="card-gta-body"><div id="game-weights"></div></div>
                     </div>
-                    <div class="game-quote mb-2" id="game-day-quote" aria-live="off"></div>
-                    <div class="game-toggle game-day-zoom mb-2" role="group" aria-label="Chart zoom">
-                      <button class="game-toggle-btn" data-day-zoom="15M">15M</button>
-                      <button class="game-toggle-btn" data-day-zoom="1H">1H</button>
-                      <button class="game-toggle-btn" data-day-zoom="4H">4H</button>
-                      <button class="game-toggle-btn" data-day-zoom="DAY">DAY</button>
+                    <div class="card-gta mb-0">
+                      <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                        <span>RETURNS</span><span class="ws-header-note">SINCE YOU BOUGHT, AFTER FEES</span>
+                      </div>
+                      <div class="card-gta-body"><div id="game-returns"></div></div>
                     </div>
-                    <div id="game-day-chart-empty" class="empty-state" style="display: none">THE CHART STARTS WHEN THE MARKET OPENS.</div>
-                    <div class="game-day-chart-wrap"><canvas id="game-day-chart"></canvas></div>
-                  </div>
-                  <div class="col-12 col-xl-4">
-                    <label class="form-label" for="game-day-amount">AMOUNT (CHF)</label>
-                    <input id="game-day-amount" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
-                    <div class="game-preview mb-2" id="game-day-preview"></div>
-                    <button class="btn btn-gta w-100 mb-3" id="game-day-buy-btn">BUY AT THE LIVE PRICE</button>
-                    <div class="game-table-scroll" id="game-day-positions"></div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div class="row">
-              <div class="col-12 col-xl-8 mb-4">
-                <div class="card-gta h-100 mb-0">
-                  <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
-                    <span>HOLDINGS</span>
-                    <button class="btn btn-gta btn-sm" id="game-open-buy">BUY</button>
+            <!-- ===== DAY TRADING ===== -->
+            <div id="game-panel-day-trading" role="tabpanel" aria-labelledby="game-tab-day-trading">
+              <div class="row">
+                <div class="col-12 col-xl-8 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <span>LIVE PRICE</span>
+                      <span class="ws-header-note">SIMULATED · CLOSE BEFORE THE MARKET CLOSES OR THE TRADE IS REVERTED</span>
+                    </div>
+                    <div class="card-gta-body">
+                      <div class="row">
+                        <div class="col-12 col-md-4 mb-2">
+                          <label class="form-label" for="game-day-category">CATEGORY</label>
+                          <select id="game-day-category" class="form-select form-gta"></select>
+                        </div>
+                        <div class="col-12 col-md-8 mb-2">
+                          <label class="form-label" for="game-day-asset">ASSET</label>
+                          <select id="game-day-asset" class="form-select form-gta"></select>
+                        </div>
+                      </div>
+                      <div class="d-flex justify-content-between align-items-end flex-wrap gap-2 mb-2">
+                        <div class="game-quote" id="game-day-quote" aria-live="off"></div>
+                        <div class="game-toggle game-day-zoom" role="group" aria-label="Chart zoom">
+                          <button class="game-toggle-btn" data-day-zoom="15M">15M</button>
+                          <button class="game-toggle-btn" data-day-zoom="1H">1H</button>
+                          <button class="game-toggle-btn" data-day-zoom="4H">4H</button>
+                          <button class="game-toggle-btn" data-day-zoom="DAY">DAY</button>
+                        </div>
+                      </div>
+                      <div id="game-day-chart-empty" class="empty-state" style="display: none">THE CHART STARTS WHEN THE MARKET OPENS.</div>
+                      <div class="game-day-chart-wrap"><canvas id="game-day-chart"></canvas></div>
+                    </div>
                   </div>
-                  <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div></div>
+                </div>
+                <div class="col-12 col-xl-4 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header">BUY</div>
+                    <div class="card-gta-body">
+                      <div class="game-toggle mb-3" role="group" aria-label="Buy by">
+                        <button class="game-toggle-btn" data-day-mode="amount">AMOUNT</button>
+                        <button class="game-toggle-btn" data-day-mode="quantity">QUANTITY</button>
+                      </div>
+                      <label class="form-label" for="game-day-amount" id="game-day-amount-label">AMOUNT (CHF)</label>
+                      <input id="game-day-amount" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+                      <div class="game-toggle mb-3" role="group" aria-label="Quick values">
+                        <button class="game-toggle-btn" data-day-preset="1">1</button>
+                        <button class="game-toggle-btn" data-day-preset="10">10</button>
+                        <button class="game-toggle-btn" data-day-preset="50">50</button>
+                        <button class="game-toggle-btn" data-day-preset="100">100</button>
+                        <button class="game-toggle-btn" data-day-preset="1000">1K</button>
+                        <button class="game-toggle-btn" data-day-preset="10000">10K</button>
+                      </div>
+                      <div class="game-preview mb-3" id="game-day-preview"></div>
+                      <button class="btn btn-gta w-100" id="game-day-buy-btn">BUY AT THE LIVE PRICE</button>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="col-12 col-xl-4 mb-4">
-                <div class="d-flex flex-column gap-4">
-                  <div class="card-gta mb-0">
-                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
-                      <span>ALLOCATION</span><span class="ws-header-note">SHARE OF CASH + HOLDINGS</span>
-                    </div>
-                    <div class="card-gta-body"><div id="game-allocation"></div></div>
-                  </div>
-                  <div class="card-gta mb-0">
-                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
-                      <span>WEIGHTS</span><span class="ws-header-note">SHARE OF HOLDINGS</span>
-                    </div>
-                    <div class="card-gta-body"><div id="game-weights"></div></div>
-                  </div>
-                  <div class="card-gta mb-0">
-                    <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
-                      <span>RETURNS</span><span class="ws-header-note">SINCE YOU BOUGHT, AFTER FEES</span>
-                    </div>
-                    <div class="card-gta-body"><div id="game-returns"></div></div>
-                  </div>
+              <div class="card-gta mb-4">
+                <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <span>OPEN DAY TRADES</span>
+                  <span class="ws-header-note" id="game-day-summary"></span>
                 </div>
+                <div class="card-gta-body game-table-scroll"><div id="game-day-positions"></div></div>
               </div>
             </div>
 
-            <div class="row">
-              <div class="col-12 col-xl-4 mb-4">
-                <div class="card-gta h-100 mb-0">
-                  <div class="card-gta-header" id="game-budget-title">MONTHLY BUDGET</div>
-                  <div class="card-gta-body"><div id="game-budget"></div></div>
+            <!-- ===== BUDGET & TAXES ===== -->
+            <div id="game-panel-budget" role="tabpanel" aria-labelledby="game-tab-budget">
+              <div class="row align-items-start">
+                <div class="col-12 col-xl-6 mb-4">
+                  <div class="card-gta mb-0">
+                    <div class="card-gta-header" id="game-budget-title">MONTHLY BUDGET</div>
+                    <div class="card-gta-body"><div id="game-budget"></div></div>
+                  </div>
                 </div>
+                <div class="col-12 col-xl-6 mb-4" id="game-costs"></div>
               </div>
-              <div class="col-12 col-xl-8 mb-4">
-                <div class="card-gta h-100 mb-0">
-                  <div class="card-gta-header">HISTORY</div>
-                  <div class="card-gta-body game-table-scroll"><div id="game-history"></div></div>
-                </div>
+            </div>
+
+            <!-- ===== HISTORY ===== -->
+            <div id="game-panel-history" role="tabpanel" aria-labelledby="game-tab-history">
+              <div class="card-gta mb-4">
+                <div class="card-gta-header">HISTORY</div>
+                <div class="card-gta-body game-table-scroll"><div id="game-history"></div></div>
               </div>
             </div>
 
@@ -276,10 +333,10 @@
     <script src="js/pages-wallstreet.js?v=45"></script>
 
     <!-- ===== GAME ===== -->
-    <script src="game/engine.js?v=10"></script>
+    <script src="game/engine.js?v=11"></script>
     <script src="game/intraday.js?v=1"></script>
     <script src="game/tangibles.js?v=4"></script>
     <script src="game/saves.js?v=1"></script>
-    <script src="game/page.js?v=20"></script>
+    <script src="game/page.js?v=28"></script>
   </body>
 </html>

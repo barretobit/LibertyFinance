@@ -527,10 +527,10 @@ const GameEngine = (() => {
         return;
       }
       cash += trade.amountChf - trade.stampDutyChf;
-      // First in, first out; every buy it closes is a sale held under six months.
+      // The buy named by trade.lotAt, else first in, first out; every buy it closes is a sale held under six months.
       let toSell = trade.quantity;
       let costChf = 0;
-      openDayLots.filter((lot) => lot.trade.symbol === trade.symbol).forEach((lot) => {
+      openDayLots.filter((lot) => lot.trade.symbol === trade.symbol && (!trade.lotAt || lot.trade.at === trade.lotAt)).forEach((lot) => {
         if (toSell <= EMPTY_QUANTITY) return;
         const used = Math.min(lot.quantity, toSell);
         costChf += (lot.trade.amountChf + lot.trade.stampDutyChf) * used / lot.trade.quantity;
@@ -693,19 +693,16 @@ const GameEngine = (() => {
     };
   }
 
-  // Open day trade units per symbol: amountChf at the buy prices, costChf with the stamp duty paid.
+  // Open day trades, one per buy with units left, in buy order: `at` and priceChf of the buy, amountChf at
+  // that price, costChf with the stamp duty paid.
   function openDayPositions(lots) {
-    const bySymbol = {};
-    lots.forEach((lot) => {
+    return lots.map((lot) => {
       const share = lot.quantity / lot.trade.quantity;
-      const position = bySymbol[lot.trade.symbol] || (bySymbol[lot.trade.symbol] = {
-        symbol: lot.trade.symbol, class: lot.trade.class, name: lot.trade.name, quantity: 0, amountChf: 0, costChf: 0, closesAt: lot.trade.closesAt,
-      });
-      position.quantity += lot.quantity;
-      position.amountChf += lot.trade.amountChf * share;
-      position.costChf += (lot.trade.amountChf + lot.trade.stampDutyChf) * share;
+      return {
+        symbol: lot.trade.symbol, class: lot.trade.class, name: lot.trade.name, at: lot.trade.at, priceChf: lot.trade.priceChf, quantity: lot.quantity,
+        amountChf: lot.trade.amountChf * share, costChf: (lot.trade.amountChf + lot.trade.stampDutyChf) * share, closesAt: lot.trade.closesAt,
+      };
     });
-    return Object.keys(bySymbol).map((symbol) => bySymbol[symbol]);
   }
 
   // A recent quote for trading on `date`, or an error message.
@@ -826,21 +823,25 @@ const GameEngine = (() => {
   }
 
   // The day trade sale of `order` ({ fraction } of the open units, or { quantity }) at the simulated `priceChf`
-  // at `now` (ISO time), before its market closes. Returns the trade, or { error }.
+  // at `now` (ISO time), before its market closes. With order.lotAt (a buy's `at`) it sells from that buy only,
+  // else from the symbol's buys, first in, first out. Returns the trade, or { error }.
   function closeDayTrade(game, market, symbol, order, priceChf, now) {
     const date = now.slice(0, 10);
-    const position = replay(game, market, date, now).dayTrades.find((item) => item.symbol === symbol);
-    if (!position) return { error: 'NO OPEN DAY TRADE' };
-    if (Date.parse(now) >= Date.parse(position.closesAt)) return { error: 'MARKET CLOSED' };
+    const lots = replay(game, market, date, now).dayTrades.filter((item) => item.symbol === symbol && (!order.lotAt || item.at === order.lotAt));
+    if (!lots.length) return { error: 'NO OPEN DAY TRADE' };
+    if (Date.parse(now) >= Date.parse(lots[0].closesAt)) return { error: 'MARKET CLOSED' };
     if (!(priceChf > 0)) return { error: 'NO PRICE FOR THIS ASSET' };
-    const quantity = order.quantity != null ? order.quantity : position.quantity * Math.min(1, Math.max(0, order.fraction));
+    const openQuantity = lots.reduce((sum, lot) => sum + lot.quantity, 0);
+    const quantity = order.quantity != null ? order.quantity : openQuantity * Math.min(1, Math.max(0, order.fraction));
     if (!(quantity > 0)) return { error: 'NOTHING TO SELL' };
-    if (quantity > position.quantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HOLD ' + position.quantity };
+    if (quantity > openQuantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HOLD ' + openQuantity };
     const amountChf = quantity * priceChf;
-    return {
-      date: date, side: 'sell', intraday: true, at: now, symbol: symbol, class: position.class, name: position.name,
-      quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: position.class }),
+    const trade = {
+      date: date, side: 'sell', intraday: true, at: now, symbol: symbol, class: lots[0].class, name: lots[0].name,
+      quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: lots[0].class }),
     };
+    if (order.lotAt) trade.lotAt = order.lotAt;
+    return trade;
   }
 
   return {

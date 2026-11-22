@@ -66,6 +66,8 @@ const GamePage = {
   dayChart: null,
   dayChartKey: '',
   dayZoom: '1H',
+  // Day trades are bought by 'amount' (CHF) or 'quantity' (units).
+  dayMode: 'amount',
 };
 // Day trading chart zooms: how much time the chart shows, null for the whole session.
 const GAME_DAY_ZOOMS = { '15M': 15 * 60000, '1H': 60 * 60000, '4H': 4 * 60 * 60000, DAY: null };
@@ -360,10 +362,11 @@ function gameRenderStats(state, today) {
     '<div class="game-stat"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
     '<span class="game-stat-label">' + label + '</span><span class="game-stat-value ' + (extraClass || '') + '">' + value + '</span></div>';
   const group = (label, stats) =>
-    '<div class="col-12 col-xl-6"><div class="stat-card game-stat-group"><span class="stat-label">' + label + '</span>' +
-    '<div class="game-stat-grid">' + stats.join('') + '</div></div></div>';
+    '<div class="stat-card game-stat-group"><span class="stat-label">' + label + '</span>' +
+    '<div class="game-stat-grid">' + stats.join('') + '</div></div>';
+  // Net worth and cash sit above the tabs; the other figures live in the tab they belong to.
   document.getElementById('game-stats').innerHTML =
-    '<div class="col-12"><div class="stat-card game-hero">' +
+    '<div class="stat-card game-hero">' +
       '<div><span class="stat-label">NET WORTH</span><span class="stat-value game-hero-value">' + gameMoney(last.netWorth, today) + '</span></div>' +
       '<div class="game-stat-grid game-hero-side">' + [
         stat('TODAY', gameSignedMoney(dayChange, today), gameSignClass(dayChange)),
@@ -371,21 +374,32 @@ function gameRenderStats(state, today) {
           'Net worth against the money put in: your start cash plus what you saved from your salary.'),
         stat('VS SMI', benchmarkChange == null || totalChange == null ? '—' : gamePercent(totalChange - benchmarkChange) + ' PTS',
           benchmarkChange == null || totalChange == null ? '' : gameSignClass(totalChange - benchmarkChange, 4), 'Your return minus the return of the same money put into the SMI on the same days.'),
+        stat('CASH', gameMoney(state.cash, today), state.cash < 0 ? 'game-neg' : ''),
       ].join('') + '</div>' +
-    '</div></div>' +
-    group('MONEY', [
-      stat('CASH', gameMoney(state.cash, today), state.cash < 0 ? 'game-neg' : ''),
-      stat('INVESTED', gameMoney(invested, today)),
-      stat('MORTGAGES', state.mortgageChf > 0 ? '-' + gameMoney(state.mortgageChf, today) : gameMoney(0, today), state.mortgageChf > 0 ? 'game-neg' : ''),
-      stat('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
-    ]) +
-    group('COSTS &amp; SAVINGS', [
-      stat('DIVIDENDS', gameMoney(state.dividendsReceived, today), '', 'Dividends paid to you before income tax. The tax on them is in the taxes paid.'),
-      stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, income tax on dividends, property gains tax, stamp duty, purchase costs and dealer cuts.'),
-      stat('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
-      stat('SAVED PER MONTH', gameSignedMoney(state.budget.savingsChf, today), gameSignClass(state.budget.savingsChf), 'Take home salary minus this month\'s expenses.'),
-      stat('TAX STATUS', traderText, 'game-trader-' + state.trader.status, traderTitle),
-    ]);
+    '</div>';
+  document.getElementById('game-money').innerHTML = group('MONEY', [
+    stat('INVESTED', gameMoney(invested, today)),
+    stat('MORTGAGES', state.mortgageChf > 0 ? '-' + gameMoney(state.mortgageChf, today) : gameMoney(0, today), state.mortgageChf > 0 ? 'game-neg' : ''),
+    stat('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
+  ]);
+  // Saved per month is in the budget table beside this card.
+  document.getElementById('game-costs').innerHTML = group('SINCE YOU STARTED', [
+    stat('DIVIDENDS', gameMoney(state.dividendsReceived, today), '', 'Dividends paid to you before income tax. The tax on them is in the taxes paid.'),
+    stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, income tax on dividends, property gains tax, stamp duty, purchase costs and dealer cuts.'),
+    stat('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
+    stat('TAX STATUS THIS YEAR', traderText, 'game-trader-' + state.trader.status, traderTitle),
+  ]);
+}
+
+// The board's tabs; the open one is kept in the URL hash so a reload stays on it.
+const GAME_TABS = ['overview', 'portfolio', 'day-trading', 'budget', 'history'];
+function gameShowTab(tab) {
+  const open = GAME_TABS.includes(tab) ? tab : 'overview';
+  history.replaceState(null, '', '#' + open);
+  GAME_TABS.forEach((name) => {
+    document.getElementById('game-tab-' + name).setAttribute('aria-selected', String(name === open));
+    document.getElementById('game-panel-' + name).hidden = name !== open;
+  });
 }
 
 function gameRenderChart(state) {
@@ -863,29 +877,40 @@ function gameRenderDayTrading(state, today) {
   gameFillAssetLists(document.getElementById('game-day-category'), document.getElementById('game-day-asset'),
     GAME_BUY_CATEGORIES.market, GamePage.dayCategory, today);
 
+  // Open day trades are reverted at the close, so the tab shows them while another tab is open.
+  document.getElementById('game-tab-day-trading').textContent = 'DAY TRADING' + (state.dayTrades.length ? ' · ' + state.dayTrades.length + ' OPEN' : '');
   const container = document.getElementById('game-day-positions');
   const profitChf = state.dayTradeProfitChf;
-  const summary = '<div class="game-day-summary">CLOSED DAY TRADES, ALL TIME <span class="' + gameSignClass(profitChf) + '">' +
-    gameSignedMoney(profitChf, today) + '</span></div>';
+  document.getElementById('game-day-summary').innerHTML = 'CLOSED DAY TRADES, ALL TIME <span class="' + gameSignClass(profitChf) + '">' +
+    gameSignedMoney(profitChf, today) + '</span>';
   if (!state.dayTrades.length) {
-    container.innerHTML = summary + '<div class="game-dim">NO OPEN DAY TRADES.</div>';
+    container.innerHTML = '<div class="game-dim">NO OPEN DAY TRADES. PICK AN ASSET WHOSE MARKET IS OPEN AND BUY IT ABOVE.</div>';
   } else {
-    container.innerHTML = summary + '<table class="table-gta w-100"><thead><tr><th>OPEN</th><th class="text-end">VALUE</th>' +
-      '<th class="text-end">P&amp;L</th><th></th></tr></thead><tbody>' + state.dayTrades.map((position) => {
+    // Price, value, P&L and time left are filled in every second by gameDayTick.
+    container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>ASSET</th><th class="text-end">QUANTITY</th><th class="text-end">PRICE</th>' +
+      '<th class="text-end">VALUE</th><th class="text-end">P&amp;L</th><th class="text-end">CLOSES IN</th><th></th></tr></thead><tbody>' +
+      // One row per buy, so the same asset bought at different prices shows each buy; a close sells from that buy only.
+      state.dayTrades.map((position) => {
         const symbol = escapeHtml(position.symbol);
-        return '<tr data-day-row="' + symbol + '"><td><button type="button" class="game-day-pick" data-symbol="' + symbol + '">' +
-          '<span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' +
-          gameQuantityWithUnit(position, position.quantity) + ' · CLOSES ' + gameClock(position.closesAt) + '</span></button></td>' +
-          '<td class="text-end" data-day-value="' + symbol + '"></td><td class="text-end" data-day-profit="' + symbol + '"></td>' +
-          '<td class="text-end"><button class="btn btn-gta btn-sm game-day-close" data-symbol="' + symbol + '">CLOSE</button></td></tr>';
+        const at = escapeHtml(position.at);
+        const unit = gameUnit(position);
+        return '<tr data-day-row="' + symbol + '" data-day-lot="' + at + '"><td><button type="button" class="game-day-pick" data-symbol="' + symbol + '">' +
+          '<span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + symbol + ' · BOUGHT ' + gameClock(position.at) + '</span></button></td>' +
+          '<td class="text-end">' + gameQuantityWithUnit(position, position.quantity) + '</td>' +
+          '<td class="text-end"><span data-day-cell="price"></span><br><small class="game-dim">PAID ' +
+            gameMoney(position.priceChf, today) + (unit ? ' / ' + unit : '') + '</small></td>' +
+          '<td class="text-end" data-day-cell="value"></td><td class="text-end" data-day-cell="profit"></td>' +
+          '<td class="text-end"><span data-day-cell="closes"></span><br><small class="game-dim">AT ' + gameClock(position.closesAt) + '</small></td>' +
+          '<td class="text-end text-nowrap"><button class="btn btn-gta btn-sm game-day-close" data-lot="' + at + '" data-fraction="0.5">CLOSE 50%</button> ' +
+          '<button class="btn btn-gta btn-sm btn-danger-del game-day-close" data-lot="' + at + '" data-fraction="1">CLOSE ALL</button></td></tr>';
       }).join('') + '</tbody></table><p class="game-note">P&amp;L if you close now, after stamp duty. Still open when its market closes, a trade is reverted.</p>';
     container.querySelectorAll('.game-day-close').forEach((button) => {
       button.onclick = () => {
         const now = new Date().toISOString();
-        const position = GamePage.dayState.dayTrades.find((item) => item.symbol === button.dataset.symbol);
+        const position = GamePage.dayState.dayTrades.find((item) => item.at === button.dataset.lot);
         const day = position && gameTradingDay(position, now.slice(0, 10));
-        gameTrade(day ? GameEngine.closeDayTrade(GamePage.game, GamePage.market, position.symbol, { fraction: 1 }, GameIntraday.priceAt(day, Date.parse(now)), now)
-          : { error: 'MARKET CLOSED' });
+        gameTrade(day ? GameEngine.closeDayTrade(GamePage.game, GamePage.market, position.symbol, { fraction: Number(button.dataset.fraction), lotAt: position.at },
+          GameIntraday.priceAt(day, Date.parse(now)), now) : { error: 'MARKET CLOSED' });
       };
     });
     container.querySelectorAll('.game-day-pick').forEach((button) => {
@@ -906,7 +931,7 @@ function gameDaySelect(symbol) {
   gameFillAssetLists(document.getElementById('game-day-category'), assetSelect, GAME_BUY_CATEGORIES.market, GamePage.dayCategory, todayIsoDate());
   assetSelect.value = symbol;
   gameDayTick();
-  // On narrow screens the chart sits above the open trades.
+  // The chart sits above the open trades.
   document.getElementById('game-day-quote').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
@@ -933,22 +958,29 @@ function gameRenderDayChart(day, nowMs, today) {
   const maxMs = windowMs ? Math.min(closesMs, nowStepMs + windowMs * 0.05) : closesMs;
   const minMs = windowMs ? Math.max(opensMs, maxMs - windowMs) : opensMs;
   const firstStep = Math.ceil((minMs - opensMs) / stepMs);
-  // At most about 360 points, so a 24 hour crypto day stays light; the last point is always the current price.
-  const stride = Math.max(1, Math.ceil((step - firstStep) / 360));
-  const points = [];
-  for (let index = firstStep; index <= step; index += stride) points.push({ x: opensMs + index * stepMs, y: day.prices[index] * scale });
-  if ((step - firstStep) % stride) points.push({ x: nowStepMs, y: day.prices[step] * scale });
-  // This asset's day trades today, at the time and price they were made; reverted ones are gone from the events.
+  // A trade fills at the price of its 10 second step, so it is drawn at the start of that step, where the line has that price.
+  const tradeStep = (event) => GameIntraday.stepAt(day, Date.parse(event.at));
+  const tradeX = (event) => opensMs + tradeStep(event) * stepMs;
+  // This asset's day trades today; reverted ones are gone from the events.
   const tradesShown = GamePage.dayState.events.filter((event) => event.intraday && event.symbol === day.symbol && event.date === day.session.date &&
-    Date.parse(event.at) >= minMs && Date.parse(event.at) <= maxMs);
+    tradeX(event) >= minMs && tradeX(event) <= maxMs);
+  // At most about 360 points, so a 24 hour crypto day stays light; the current price and every trade's step are always
+  // points, so the trade dots sit on the line.
+  const stride = Math.max(1, Math.ceil((step - firstStep) / 360));
+  const indexes = new Set([step]);
+  for (let index = firstStep; index <= step; index += stride) indexes.add(index);
+  tradesShown.forEach((event) => indexes.add(tradeStep(event)));
+  const points = [...indexes].sort((first, second) => first - second).map((index) => ({ x: opensMs + index * stepMs, y: day.prices[index] * scale }));
   const markers = (side) => tradesShown.filter((event) => event.type === side).map((event) => ({
-    x: Date.parse(event.at), y: event.priceChf * scale,
+    x: tradeX(event), y: event.priceChf * scale,
     text: (side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, today),
   }));
-  const sideColors = { buy: '#4da6ff', sell: '#ffcc00' };
-  const markerDataset = (label, data, color, rotation) => ({
-    type: 'scatter', label: label, data: data, pointStyle: 'triangle', rotation: rotation, pointRadius: 10, pointHoverRadius: 12,
-    backgroundColor: color, borderColor: '#ffffff', borderWidth: 2,
+  const sideColors = { buy: '#00a5ff', sell: '#ffcc00' };
+  // A small solid dot on the exact price, ringed in the background color so it stands out from the line.
+  // Order -1 draws it over the price line, which Chart.js otherwise draws on top as the first dataset.
+  const markerDataset = (label, data, color) => ({
+    type: 'scatter', label: label, data: data, order: -1, pointStyle: 'circle', pointRadius: 5, pointHoverRadius: 7,
+    backgroundColor: color, borderColor: '#0a0a0a', borderWidth: 2, pointHoverBackgroundColor: color, pointHoverBorderColor: '#0a0a0a',
   });
   // Each trade also gets a dashed line across the chart, behind the price, and a BUY tag at the top or a SELL tag at the bottom.
   const tradeLines = {
@@ -959,7 +991,7 @@ function gameRenderDayChart(day, nowMs, today) {
       ctx.lineWidth = 1.5;
       ctx.setLineDash([5, 4]);
       tradesShown.forEach((event) => {
-        const x = chart.scales.x.getPixelForValue(Date.parse(event.at));
+        const x = chart.scales.x.getPixelForValue(tradeX(event));
         ctx.strokeStyle = sideColors[event.type];
         ctx.beginPath();
         ctx.moveTo(x, chartArea.top);
@@ -977,7 +1009,7 @@ function gameRenderDayChart(day, nowMs, today) {
         const text = event.type === 'buy' ? 'BUY' : 'SELL';
         const width = ctx.measureText(text).width + 8;
         const height = 14;
-        const x = Math.min(chartArea.right - width, Math.max(chartArea.left, chart.scales.x.getPixelForValue(Date.parse(event.at)) - width / 2));
+        const x = Math.min(chartArea.right - width, Math.max(chartArea.left, chart.scales.x.getPixelForValue(tradeX(event)) - width / 2));
         const y = event.type === 'buy' ? chartArea.top : chartArea.bottom - height;
         ctx.fillStyle = sideColors[event.type];
         ctx.fillRect(x, y, width, height);
@@ -993,8 +1025,8 @@ function gameRenderDayChart(day, nowMs, today) {
     data: {
       datasets: [
         { label: 'PRICE', data: points, borderColor: accent, backgroundColor: accent, pointRadius: 0, borderWidth: 2 },
-        markerDataset('BUY', markers('buy'), sideColors.buy, 0),
-        markerDataset('SELL', markers('sell'), sideColors.sell, 180),
+        markerDataset('BUY', markers('buy'), sideColors.buy),
+        markerDataset('SELL', markers('sell'), sideColors.sell),
       ],
     },
     plugins: [tradeLines],
@@ -1056,17 +1088,23 @@ function gameDayTick() {
   gameRenderDayChart(day, nowMs, today);
 
   // Preview from the last replay's cash; the buy itself checks again.
-  const amountChf = Number(document.getElementById('game-day-amount').value);
+  const byQuantity = GamePage.dayMode === 'quantity';
+  const value = Number(document.getElementById('game-day-amount').value);
+  document.querySelectorAll('[data-day-mode]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.dayMode === GamePage.dayMode)));
+  document.querySelectorAll('[data-day-preset]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.dayPreset) === value)));
+  const assetUnit = asset ? gameUnit(asset) : '';
+  document.getElementById('game-day-amount-label').textContent = byQuantity ? 'QUANTITY' + (assetUnit ? ' (' + assetUnit + ')' : '') : 'AMOUNT (CHF)';
   const preview = document.getElementById('game-day-preview');
   let canBuy = false;
   if (!open) preview.innerHTML = '<span class="game-dim">THE MARKET IS CLOSED</span>';
-  else if (!(amountChf > 0)) preview.innerHTML = '<span class="game-dim">ENTER AN AMOUNT TO SEE THE COSTS</span>';
+  else if (!(value > 0)) preview.innerHTML = '<span class="game-dim">' + (byQuantity ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT') + ' TO SEE THE COSTS</span>';
   else {
     const priceChf = GameIntraday.priceAt(day, nowMs);
+    const amountChf = byQuantity ? value * priceChf : value;
     const dutyChf = amountChf * GameEngine.stampDutyRate(asset);
     const cashLeftChf = GamePage.dayState.cash - amountChf - dutyChf;
     canBuy = cashLeftChf >= -0.005;
-    const rows = [['QUANTITY', gameQuantityWithUnit(asset, amountChf / priceChf)]];
+    const rows = [byQuantity ? ['AMOUNT', gameMoney(amountChf, today)] : ['QUANTITY', gameQuantityWithUnit(asset, amountChf / priceChf)]];
     if (dutyChf) rows.push(['STAMP DUTY ' + gameRate(GameEngine.stampDutyRate(asset)), gameMoney(dutyChf, today)]);
     rows.push(['<strong>CASH NEEDED</strong>', '<strong>' + gameMoney(amountChf + dutyChf, today) + '</strong>']);
     rows.push(['CASH LEFT', '<span class="' + (canBuy ? '' : 'game-neg') + '">' + gameMoney(cashLeftChf, today) + '</span>']);
@@ -1080,17 +1118,18 @@ function gameDayTick() {
   document.querySelectorAll('[data-day-row]').forEach((row) => row.classList.toggle('game-day-selected', !!asset && row.dataset.dayRow === asset.symbol));
   GamePage.dayState.dayTrades.forEach((position) => {
     const positionDay = gameTradingDay(position, today);
-    if (!positionDay) return;
-    const valueChf = position.quantity * GameIntraday.priceAt(positionDay, nowMs);
+    const row = document.querySelector('[data-day-lot="' + CSS.escape(position.at) + '"]');
+    if (!positionDay || !row) return;
+    const priceChf = GameIntraday.priceAt(positionDay, nowMs);
+    const valueChf = position.quantity * priceChf;
     const profitChf = valueChf * (1 - GameEngine.stampDutyRate(position)) - position.costChf;
-    const symbol = CSS.escape(position.symbol);
-    const valueCell = document.querySelector('[data-day-value="' + symbol + '"]');
-    const profitCell = document.querySelector('[data-day-profit="' + symbol + '"]');
-    if (valueCell) valueCell.textContent = gameMoney(valueChf, today);
-    if (profitCell) {
-      profitCell.className = 'text-end ' + gameSignClass(profitChf);
-      profitCell.innerHTML = gameSignedMoney(profitChf, today) + '<br><small>' + gamePercent(profitChf / position.costChf) + '</small>';
-    }
+    const positionUnit = gameUnit(position);
+    row.querySelector('[data-day-cell="price"]').textContent = gameMoney(priceChf, today) + (positionUnit ? ' / ' + positionUnit : '');
+    row.querySelector('[data-day-cell="value"]').textContent = gameMoney(valueChf, today);
+    row.querySelector('[data-day-cell="closes"]').textContent = gameDuration(Date.parse(position.closesAt) - nowMs);
+    const profitCell = row.querySelector('[data-day-cell="profit"]');
+    profitCell.className = 'text-end ' + gameSignClass(profitChf);
+    profitCell.innerHTML = gameSignedMoney(profitChf, today) + '<br><small>' + gamePercent(profitChf / position.costChf) + '</small>';
   });
 }
 
@@ -1101,6 +1140,12 @@ function gameBindControls() {
   currencySelect.innerHTML = _WALL_STREET_CURRENCIES.map((code) => '<option value="' + code + '">' + code + '</option>').join('');
   currencySelect.value = 'CHF';
   currencySelect.onchange = () => { GamePage.currency = currencySelect.value; if (GamePage.market) gameRender(); };
+
+  document.querySelectorAll('[data-game-tab]').forEach((button) => {
+    button.onclick = () => gameShowTab(button.dataset.gameTab);
+  });
+  gameShowTab(location.hash.slice(1));
+  window.addEventListener('hashchange', () => gameShowTab(location.hash.slice(1)));
 
   document.getElementById('game-open-buy').onclick = () => {
     gameRenderBuyForm();
@@ -1132,13 +1177,22 @@ function gameBindControls() {
   document.querySelectorAll('[data-day-zoom]').forEach((button) => {
     button.onclick = () => { GamePage.dayZoom = button.dataset.dayZoom; gameDayTick(); };
   });
-  document.getElementById('game-day-amount').oninput = () => gameDayTick();
+  const dayAmountInput = document.getElementById('game-day-amount');
+  dayAmountInput.oninput = () => gameDayTick();
+  document.querySelectorAll('[data-day-mode]').forEach((button) => {
+    // The same number means something else in the other mode, so it is cleared.
+    button.onclick = () => { GamePage.dayMode = button.dataset.dayMode; dayAmountInput.value = ''; gameDayTick(); };
+  });
+  document.querySelectorAll('[data-day-preset]').forEach((button) => {
+    button.onclick = () => { dayAmountInput.value = button.dataset.dayPreset; gameDayTick(); };
+  });
   document.getElementById('game-day-buy-btn').onclick = () => {
     const asset = gameDayAsset();
     if (!asset) { gameToast('PICK AN ASSET'); return; }
     const now = new Date().toISOString();
     const day = gameTradingDay(asset, now.slice(0, 10));
-    gameTrade(day ? GameEngine.openDayTrade(GamePage.game, GamePage.market, asset, { amountChf: Number(document.getElementById('game-day-amount').value) },
+    const value = Number(dayAmountInput.value);
+    gameTrade(day ? GameEngine.openDayTrade(GamePage.game, GamePage.market, asset, GamePage.dayMode === 'quantity' ? { quantity: value } : { amountChf: value },
       GameIntraday.priceAt(day, Date.parse(now)), day.session, now) : { error: 'MARKET CLOSED' });
   };
 
