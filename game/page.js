@@ -57,7 +57,18 @@ const GamePage = {
   buyTab: 'market',
   buyCategory: { market: 'STOCKS', tangible: 'PRECIOUS METALS' },
   buyMode: 'amount',
+  dayCategory: 'STOCKS',
+  // Simulated trading days by "symbol|date" (game/intraday.js), null when closed.
+  tradingDays: new Map(),
+  // The replay the day trading panel was drawn from, and its UTC date.
+  dayState: null,
+  dayDate: null,
+  dayChart: null,
+  dayChartKey: '',
+  dayZoom: '1H',
 };
+// Day trading chart zooms: how much time the chart shows, null for the whole session.
+const GAME_DAY_ZOOMS = { '15M': 15 * 60000, '1H': 60 * 60000, '4H': 4 * 60 * 60000, DAY: null };
 
 function gameToast(message) {
   document.getElementById('toast-body').textContent = message;
@@ -128,8 +139,11 @@ function gameBuildMarket(file, dividends) {
     const toChf = asset && rate(gameAssetCurrency(asset), 'CHF', date);
     return toChf ? amount * toChf : null;
   };
+  // Every daily close on or before `date`, oldest first, in the quote currency: for the day trading volatility.
+  const closes = (symbol, date) => (data[symbol] || []).filter((bar) => bar.date <= date && bar.close != null).map((bar) => bar.close);
   return {
     quote: quote,
+    closes: closes,
     benchmark: (date) => { const benchmarkQuote = quote(GAME_BENCHMARK_SYMBOL, date); return benchmarkQuote ? benchmarkQuote.priceChf : null; },
     benchmarkDividendYield: GAME_BENCHMARK_DIVIDEND_YIELD,
     dividend: dividend,
@@ -334,7 +348,7 @@ function gameRenderStats(state, today) {
   const days = state.days;
   const last = days[days.length - 1];
   const previous = days.length > 1 ? days[days.length - 2] : null;
-  const invested = state.positions.reduce((sum, position) => sum + position.valueChf, 0);
+  const invested = state.positions.reduce((sum, position) => sum + position.valueChf, 0) + state.dayTrades.reduce((sum, position) => sum + position.amountChf, 0);
   const totalChange = last.moneyIn > 0 ? last.netWorth / last.moneyIn - 1 : null;
   const benchmarkChange = last.benchmark != null && last.moneyIn > 0 ? last.benchmark / last.moneyIn - 1 : null;
   // Salary and bills paid today are not a gain or a loss.
@@ -459,7 +473,7 @@ function gameRenderHoldings(state, today) {
     profitCell(totalChf, sum(state.positions, 'costChf')) + '<td></td></tr></tfoot></table>';
   container.querySelectorAll('.game-sell').forEach((button) => {
     const order = button.dataset.quantity ? { quantity: Number(button.dataset.quantity) } : { fraction: Number(button.dataset.fraction) };
-    button.onclick = () => gameTrade(GameEngine.sell(GamePage.game, GamePage.market, button.dataset.symbol, order, todayIsoDate()));
+    button.onclick = () => gameTrade(GameEngine.sell(GamePage.game, GamePage.market, button.dataset.symbol, order, todayIsoDate(), new Date().toISOString()));
   });
 }
 
@@ -485,7 +499,7 @@ function gameRenderPortfolioCharts(state, today) {
   const share = (part, whole) => (whole > 0 ? part / whole : 0);
   const percentText = (value) => (value * 100).toFixed(1) + '%';
 
-  const parts = [{ name: 'CASH', valueChf: Math.max(0, state.cash) }]
+  const parts = [{ name: 'CASH', valueChf: Math.max(0, state.cash) }, { name: 'DAY TRADES', valueChf: state.dayTrades.reduce((sum, position) => sum + position.amountChf, 0) }]
     .concat(gameHoldingGroups(state.positions).map((group) => ({ name: group.label, valueChf: sum(group.positions) })))
     .filter((part) => part.valueChf > 0)
     .sort((first, second) => second.valueChf - first.valueChf);
@@ -573,8 +587,10 @@ function gameRenderHistory(state) {
     if (event.mortgageChf) fees.push('MORTGAGE ' + gameMoney(event.mortgageChf, event.date));
     if (event.dealerFeeChf) fees.push((GAME_SELLER_LABELS[event.class] || 'DEALER') + ' ' + gameMoney(event.dealerFeeChf, event.date));
     if (event.gainsTaxChf) fees.push('GAINS TAX ' + gameMoney(event.gainsTaxChf, event.date));
+    if (event.profitChf != null) fees.push('<span class="' + gameSignClass(event.profitChf) + '">P&amp;L ' + gameSignedMoney(event.profitChf, event.date) + '</span>');
     if (event.mortgageRepaidChf) fees.push('MORTGAGE PAID BACK ' + gameMoney(event.mortgageRepaidChf, event.date));
-    return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-' + event.type + '">' + event.type.toUpperCase() + '</span></td>' +
+    return '<tr><td>' + formatDate(event.date) + (event.at ? ' ' + gameClock(event.at) : '') + '</td><td><span class="game-badge game-badge-' + event.type + '">' +
+      (event.intraday ? 'DAY ' : '') + event.type.toUpperCase() + '</span></td>' +
       '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
       '<td class="text-end">' + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, event.date) + '</td>' +
       '<td class="text-end">' + (fees.length ? fees.join('<br>') : '—') + '</td>' +
@@ -681,7 +697,7 @@ function gameRenderPreview(asset, today) {
     container.innerHTML = '<span class="game-dim">' + (gameBuyMode(asset) === 'quantity' ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT') + ' TO SEE THE COSTS</span>';
     return false;
   }
-  const preview = GameEngine.previewBuy(GamePage.game, GamePage.market, asset, gameOrder(asset), today);
+  const preview = GameEngine.previewBuy(GamePage.game, GamePage.market, asset, gameOrder(asset), today, new Date().toISOString());
   const errorLine = preview.error ? '<div class="game-neg game-preview-error">' + escapeHtml(preview.error) + '</div>' : '';
   if (!preview.trade) { container.innerHTML = errorLine; return false; }
   const trade = preview.trade;
@@ -715,26 +731,30 @@ function gameRenderPreview(asset, today) {
   return !preview.error;
 }
 
+// Fills a category list from `categoryList` (one tab of GAME_BUY_CATEGORIES) and the asset list of the
+// `chosenLabel` category, or the first one, keeping the picked asset.
+function gameFillAssetLists(categorySelect, assetSelect, categoryList, chosenLabel, today) {
+  const categories = categoryList.map((category) => Object.assign({ count: GamePage.assets.filter(category.matches).length }, category))
+    .filter((category) => category.count > 0);
+  const category = categories.find((item) => item.label === chosenLabel) || categories[0];
+  // Rebuilt only when the list changes: prices move with the day and the display currency.
+  const listKey = [categories.map((item) => item.label).join(','), category && category.label, GamePage.currency, today].join('|');
+  if (assetSelect.dataset.key === listKey) return;
+  assetSelect.dataset.key = listKey;
+  categorySelect.innerHTML = categories.map((item) =>
+    '<option value="' + escapeHtml(item.label) + '">' + escapeHtml(item.label) + ' (' + item.count + ')</option>').join('');
+  if (category) categorySelect.value = category.label;
+  const selected = assetSelect.value;
+  assetSelect.innerHTML = category ? gameAssetOptions(category, today) : '';
+  if ([...assetSelect.options].some((option) => option.value === selected)) assetSelect.value = selected;
+}
+
 function gameRenderBuyForm(state) {
   const today = todayIsoDate();
-  if (!state) state = GameEngine.replay(GamePage.game, GamePage.market, today);
+  if (!state) state = GameEngine.replay(GamePage.game, GamePage.market, today, new Date().toISOString());
   document.querySelectorAll('[data-buy-tab]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.buyTab === GamePage.buyTab)));
-  const categories = GAME_BUY_CATEGORIES[GamePage.buyTab].map((category) => Object.assign({ count: GamePage.assets.filter(category.matches).length }, category))
-    .filter((category) => category.count > 0);
-  const category = categories.find((item) => item.label === GamePage.buyCategory[GamePage.buyTab]) || categories[0];
-  const select = document.getElementById('game-asset');
-  // Rebuilt only when the list changes: prices move with the day and the display currency.
-  const listKey = [GamePage.buyTab, category && category.label, GamePage.currency, today].join('|');
-  if (select.dataset.key !== listKey) {
-    select.dataset.key = listKey;
-    const categorySelect = document.getElementById('game-category');
-    categorySelect.innerHTML = categories.map((item) =>
-      '<option value="' + escapeHtml(item.label) + '">' + escapeHtml(item.label) + ' (' + item.count + ')</option>').join('');
-    if (category) categorySelect.value = category.label;
-    const selected = select.value;
-    select.innerHTML = category ? gameAssetOptions(category, today) : '';
-    if ([...select.options].some((option) => option.value === selected)) select.value = selected;
-  }
+  gameFillAssetLists(document.getElementById('game-category'), document.getElementById('game-asset'),
+    GAME_BUY_CATEGORIES[GamePage.buyTab], GamePage.buyCategory[GamePage.buyTab], today);
 
   const asset = gameSelectedAsset();
   const mode = gameBuyMode(asset);
@@ -767,11 +787,13 @@ function gameRender() {
     return;
   }
   gameShow('board');
-  const today = todayIsoDate();
-  const state = GameEngine.replay(GamePage.game, GamePage.market, today);
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+  const state = GameEngine.replay(GamePage.game, GamePage.market, today, now);
   gameRenderStats(state, today);
   gameRenderChart(state);
   gameRenderBuyForm(state);
+  gameRenderDayTrading(state, today);
   gameRenderHoldings(state, today);
   gameRenderPortfolioCharts(state, today);
   gameRenderBudget(state, today);
@@ -789,9 +811,287 @@ async function gameTrade(trade) {
     gameToast('COULD NOT SAVE, TRADE CANCELLED: ' + (error.message || error));
     return;
   }
-  gameToast((trade.side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name);
-  if (trade.side === 'buy') bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
+  gameToast((trade.intraday ? 'DAY TRADE: ' : '') + (trade.side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name);
+  if (trade.side === 'buy' && !trade.intraday) bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
   gameRender();
+}
+
+// ---------- Day trading ----------
+
+// Local clock time of an ISO time: "14:05".
+function gameClock(isoTime) {
+  return new Date(isoTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+// "1D 7H", "3H 12M", "12M", "45S".
+function gameDuration(milliseconds) {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000));
+  if (seconds < 60) return seconds + 'S';
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  if (hours >= 24) return Math.floor(hours / 24) + 'D ' + (hours % 24) + 'H';
+  return minutes < 60 ? minutes + 'M' : hours + 'H ' + (minutes % 60) + 'M';
+}
+
+function gameDayMarket(asset) {
+  return GameIntraday.marketOf(asset.class, wallStreetStockRegion(asset.symbol));
+}
+
+// The simulated trading day of an asset on a UTC date, from its last real close before that day; null when
+// its market is closed that day or the close is too old.
+function gameTradingDay(asset, date) {
+  const key = asset.symbol + '|' + date;
+  if (!GamePage.tradingDays.has(key)) {
+    const dayBefore = GameEngine.addDays(date, -1);
+    const anchor = GamePage.market.quote(asset.symbol, dayBefore);
+    const fresh = anchor && GameEngine.daysBetween(anchor.date, date) <= GameEngine.MAX_QUOTE_AGE_DAYS;
+    GamePage.tradingDays.set(key, fresh
+      ? GameIntraday.tradingDay(asset.symbol, gameDayMarket(asset), date, anchor.priceChf, GamePage.market.closes(asset.symbol, dayBefore))
+      : null);
+  }
+  return GamePage.tradingDays.get(key);
+}
+
+function gameDayAsset() {
+  return GamePage.assets.find((item) => item.symbol === document.getElementById('game-day-asset').value);
+}
+
+// The panel's lists and open trades; the live parts are drawn by gameDayTick.
+function gameRenderDayTrading(state, today) {
+  GamePage.dayState = state;
+  GamePage.dayDate = today;
+  gameFillAssetLists(document.getElementById('game-day-category'), document.getElementById('game-day-asset'),
+    GAME_BUY_CATEGORIES.market, GamePage.dayCategory, today);
+
+  const container = document.getElementById('game-day-positions');
+  const profitChf = state.dayTradeProfitChf;
+  const summary = '<div class="game-day-summary">CLOSED DAY TRADES, ALL TIME <span class="' + gameSignClass(profitChf) + '">' +
+    gameSignedMoney(profitChf, today) + '</span></div>';
+  if (!state.dayTrades.length) {
+    container.innerHTML = summary + '<div class="game-dim">NO OPEN DAY TRADES.</div>';
+  } else {
+    container.innerHTML = summary + '<table class="table-gta w-100"><thead><tr><th>OPEN</th><th class="text-end">VALUE</th>' +
+      '<th class="text-end">P&amp;L</th><th></th></tr></thead><tbody>' + state.dayTrades.map((position) => {
+        const symbol = escapeHtml(position.symbol);
+        return '<tr data-day-row="' + symbol + '"><td><button type="button" class="game-day-pick" data-symbol="' + symbol + '">' +
+          '<span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' +
+          gameQuantityWithUnit(position, position.quantity) + ' · CLOSES ' + gameClock(position.closesAt) + '</span></button></td>' +
+          '<td class="text-end" data-day-value="' + symbol + '"></td><td class="text-end" data-day-profit="' + symbol + '"></td>' +
+          '<td class="text-end"><button class="btn btn-gta btn-sm game-day-close" data-symbol="' + symbol + '">CLOSE</button></td></tr>';
+      }).join('') + '</tbody></table><p class="game-note">P&amp;L if you close now, after stamp duty. Still open when its market closes, a trade is reverted.</p>';
+    container.querySelectorAll('.game-day-close').forEach((button) => {
+      button.onclick = () => {
+        const now = new Date().toISOString();
+        const position = GamePage.dayState.dayTrades.find((item) => item.symbol === button.dataset.symbol);
+        const day = position && gameTradingDay(position, now.slice(0, 10));
+        gameTrade(day ? GameEngine.closeDayTrade(GamePage.game, GamePage.market, position.symbol, { fraction: 1 }, GameIntraday.priceAt(day, Date.parse(now)), now)
+          : { error: 'MARKET CLOSED' });
+      };
+    });
+    container.querySelectorAll('.game-day-pick').forEach((button) => {
+      button.onclick = () => gameDaySelect(button.dataset.symbol);
+    });
+  }
+  GamePage.dayChartKey = '';
+  gameDayTick();
+}
+
+// Shows an asset in the panel's lists and chart, switching to its category.
+function gameDaySelect(symbol) {
+  const asset = GamePage.assets.find((item) => item.symbol === symbol);
+  const category = asset && GAME_BUY_CATEGORIES.market.find((item) => item.matches(asset));
+  if (!category) return;
+  GamePage.dayCategory = category.label;
+  const assetSelect = document.getElementById('game-day-asset');
+  gameFillAssetLists(document.getElementById('game-day-category'), assetSelect, GAME_BUY_CATEGORIES.market, GamePage.dayCategory, todayIsoDate());
+  assetSelect.value = symbol;
+  gameDayTick();
+  // On narrow screens the chart sits above the open trades.
+  document.getElementById('game-day-quote').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// The selected asset's price line, from the open to now, in the display currency.
+function gameRenderDayChart(day, nowMs, today) {
+  const step = day && nowMs >= Date.parse(day.session.opensAt) ? GameIntraday.stepAt(day, nowMs) : -1;
+  const key = [day ? day.symbol + '|' + day.session.date : '', step, GamePage.currency, GamePage.dayZoom].join('|');
+  document.querySelectorAll('[data-day-zoom]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.dayZoom === GamePage.dayZoom)));
+  if (key === GamePage.dayChartKey) return;
+  GamePage.dayChartKey = key;
+  if (GamePage.dayChart) GamePage.dayChart.destroy();
+  GamePage.dayChart = null;
+  document.getElementById('game-day-chart-empty').style.display = step < 0 ? '' : 'none';
+  document.querySelector('.game-day-chart-wrap').style.display = step < 0 ? 'none' : '';
+  document.querySelector('.game-day-zoom').style.display = step < 0 ? 'none' : '';
+  if (step < 0) return;
+  const scale = GamePage.currency === 'CHF' ? 1 : GamePage.market.rate('CHF', GamePage.currency, today) || 1;
+  const opensMs = Date.parse(day.session.opensAt);
+  const closesMs = Date.parse(day.session.closesAt);
+  const stepMs = GameIntraday.STEP_SECONDS * 1000;
+  // A zoom window ends a little after the current step, so little future time is shown; DAY shows the whole session.
+  const windowMs = GAME_DAY_ZOOMS[GamePage.dayZoom];
+  const nowStepMs = opensMs + step * stepMs;
+  const maxMs = windowMs ? Math.min(closesMs, nowStepMs + windowMs * 0.05) : closesMs;
+  const minMs = windowMs ? Math.max(opensMs, maxMs - windowMs) : opensMs;
+  const firstStep = Math.ceil((minMs - opensMs) / stepMs);
+  // At most about 360 points, so a 24 hour crypto day stays light; the last point is always the current price.
+  const stride = Math.max(1, Math.ceil((step - firstStep) / 360));
+  const points = [];
+  for (let index = firstStep; index <= step; index += stride) points.push({ x: opensMs + index * stepMs, y: day.prices[index] * scale });
+  if ((step - firstStep) % stride) points.push({ x: nowStepMs, y: day.prices[step] * scale });
+  // This asset's day trades today, at the time and price they were made; reverted ones are gone from the events.
+  const tradesShown = GamePage.dayState.events.filter((event) => event.intraday && event.symbol === day.symbol && event.date === day.session.date &&
+    Date.parse(event.at) >= minMs && Date.parse(event.at) <= maxMs);
+  const markers = (side) => tradesShown.filter((event) => event.type === side).map((event) => ({
+    x: Date.parse(event.at), y: event.priceChf * scale,
+    text: (side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, today),
+  }));
+  const sideColors = { buy: '#4da6ff', sell: '#ffcc00' };
+  const markerDataset = (label, data, color, rotation) => ({
+    type: 'scatter', label: label, data: data, pointStyle: 'triangle', rotation: rotation, pointRadius: 10, pointHoverRadius: 12,
+    backgroundColor: color, borderColor: '#ffffff', borderWidth: 2,
+  });
+  // Each trade also gets a dashed line across the chart, behind the price, and a BUY tag at the top or a SELL tag at the bottom.
+  const tradeLines = {
+    id: 'gameDayTradeLines',
+    beforeDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      tradesShown.forEach((event) => {
+        const x = chart.scales.x.getPixelForValue(Date.parse(event.at));
+        ctx.strokeStyle = sideColors[event.type];
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+      });
+      ctx.restore();
+    },
+    afterDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.font = 'bold 10px ' + Chart.defaults.font.family;
+      ctx.textBaseline = 'middle';
+      tradesShown.forEach((event) => {
+        const text = event.type === 'buy' ? 'BUY' : 'SELL';
+        const width = ctx.measureText(text).width + 8;
+        const height = 14;
+        const x = Math.min(chartArea.right - width, Math.max(chartArea.left, chart.scales.x.getPixelForValue(Date.parse(event.at)) - width / 2));
+        const y = event.type === 'buy' ? chartArea.top : chartArea.bottom - height;
+        ctx.fillStyle = sideColors[event.type];
+        ctx.fillRect(x, y, width, height);
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillText(text, x + 4, y + height / 2);
+      });
+      ctx.restore();
+    },
+  };
+  const accent = readAccent();
+  GamePage.dayChart = new Chart(document.getElementById('game-day-chart'), {
+    type: 'line',
+    data: {
+      datasets: [
+        { label: 'PRICE', data: points, borderColor: accent, backgroundColor: accent, pointRadius: 0, borderWidth: 2 },
+        markerDataset('BUY', markers('buy'), sideColors.buy, 0),
+        markerDataset('SELL', markers('sell'), sideColors.sell, 180),
+      ],
+    },
+    plugins: [tradeLines],
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      scales: {
+        x: {
+          type: 'time', min: minMs, max: maxMs, time: { tooltipFormat: 'HH:mm:ss', displayFormats: { minute: 'HH:mm', hour: 'HH:mm' } },
+          grid: { color: '#1f1f1f' }, ticks: { color: '#888', maxTicksLimit: 9 },
+        },
+        // Room above and below the price for the BUY and SELL tags.
+        y: { grace: tradesShown.length ? '15%' : 0, grid: { color: '#1f1f1f' }, ticks: { color: '#888' } },
+      },
+      plugins: {
+        // Only the trade markers get a legend entry, and only when there are some.
+        legend: { display: tradesShown.length > 0, labels: { color: '#d0d0d0', usePointStyle: true, filter: (item, data) => item.datasetIndex > 0 && data.datasets[item.datasetIndex].data.length > 0 } },
+        tooltip: { callbacks: { label: (item) => item.raw.text || (_WALL_STREET_CURRENCY_SYMBOL[GamePage.currency] || GamePage.currency) + ' ' + item.parsed.y.toLocaleString('en-GB', { maximumFractionDigits: 2 }) } },
+      },
+    },
+  });
+}
+
+// Every second: the live price, market status, chart, order preview and the open trades' P&L. A new day, or an
+// open trade's market closing, replays the game so reverted trades give their cash back.
+function gameDayTick() {
+  if (!GamePage.game || GamePage.view !== 'board' || !GamePage.dayState) return;
+  const nowMs = Date.now();
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  if (today !== GamePage.dayDate || GamePage.dayState.dayTrades.some((position) => nowMs >= Date.parse(position.closesAt))) { gameRender(); return; }
+
+  const asset = gameDayAsset();
+  const day = asset ? gameTradingDay(asset, today) : null;
+  const open = !!day && GameIntraday.isOpen(day.session, nowMs);
+  const quote = document.getElementById('game-day-quote');
+  if (!asset) quote.innerHTML = 'PICK AN ASSET';
+  else {
+    const market = GameIntraday.MARKETS[gameDayMarket(asset)];
+    const next = GameIntraday.currentOrNextSession(gameDayMarket(asset), nowMs);
+    const status = open ? '<span class="game-pos">OPEN</span> · CLOSES IN ' + gameDuration(Date.parse(day.session.closesAt) - nowMs)
+      : '<span class="game-neg">CLOSED</span>' + (next ? ' · OPENS ' + new Date(next.opensAt).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).toUpperCase() +
+        ', IN ' + gameDuration(Date.parse(next.opensAt) - nowMs) : '');
+    const unit = gameUnit(asset);
+    const priceLine = !day ? '<span class="game-dim">NO SIMULATED PRICE TODAY</span>' : (() => {
+      const priceChf = GameIntraday.priceAt(day, nowMs);
+      // The change over the chosen zoom, up to now or the close; DAY and windows reaching back past the open use the last close.
+      const windowMs = GAME_DAY_ZOOMS[GamePage.dayZoom];
+      const referenceChf = windowMs ? GameIntraday.priceAt(day, Math.min(nowMs, Date.parse(day.session.closesAt)) - windowMs) : day.anchorPriceChf;
+      const change = priceChf / referenceChf - 1;
+      return '<span class="game-day-price">' + gameMoney(priceChf, today) + (unit ? ' / ' + unit : '') + '</span> ' +
+        '<span class="' + gameSignClass(change, 4) + '">' + gamePercent(change) + '</span> <span class="game-dim">' +
+        (windowMs ? 'IN THE LAST ' + GamePage.dayZoom + ', FROM ' : 'SINCE THE LAST CLOSE, ') + gameMoney(referenceChf, today) +
+        (nowMs >= Date.parse(day.session.closesAt) ? ' · FINAL PRICE TODAY' : '') + '</span>';
+    })();
+    quote.innerHTML = '<div>' + escapeHtml(market.label) + ' · ' + status + '</div><div>' + priceLine + '</div>';
+  }
+  gameRenderDayChart(day, nowMs, today);
+
+  // Preview from the last replay's cash; the buy itself checks again.
+  const amountChf = Number(document.getElementById('game-day-amount').value);
+  const preview = document.getElementById('game-day-preview');
+  let canBuy = false;
+  if (!open) preview.innerHTML = '<span class="game-dim">THE MARKET IS CLOSED</span>';
+  else if (!(amountChf > 0)) preview.innerHTML = '<span class="game-dim">ENTER AN AMOUNT TO SEE THE COSTS</span>';
+  else {
+    const priceChf = GameIntraday.priceAt(day, nowMs);
+    const dutyChf = amountChf * GameEngine.stampDutyRate(asset);
+    const cashLeftChf = GamePage.dayState.cash - amountChf - dutyChf;
+    canBuy = cashLeftChf >= -0.005;
+    const rows = [['QUANTITY', gameQuantityWithUnit(asset, amountChf / priceChf)]];
+    if (dutyChf) rows.push(['STAMP DUTY ' + gameRate(GameEngine.stampDutyRate(asset)), gameMoney(dutyChf, today)]);
+    rows.push(['<strong>CASH NEEDED</strong>', '<strong>' + gameMoney(amountChf + dutyChf, today) + '</strong>']);
+    rows.push(['CASH LEFT', '<span class="' + (canBuy ? '' : 'game-neg') + '">' + gameMoney(cashLeftChf, today) + '</span>']);
+    preview.innerHTML = '<table class="w-100 game-preview-table"><tbody>' +
+      rows.map((row) => '<tr><td>' + row[0] + '</td><td class="text-end">' + row[1] + '</td></tr>').join('') + '</tbody></table>' +
+      (canBuy ? '' : '<div class="game-neg game-preview-error">NOT ENOUGH CASH</div>');
+  }
+  document.getElementById('game-day-buy-btn').disabled = !canBuy;
+
+  // The open trade whose chart is shown is highlighted.
+  document.querySelectorAll('[data-day-row]').forEach((row) => row.classList.toggle('game-day-selected', !!asset && row.dataset.dayRow === asset.symbol));
+  GamePage.dayState.dayTrades.forEach((position) => {
+    const positionDay = gameTradingDay(position, today);
+    if (!positionDay) return;
+    const valueChf = position.quantity * GameIntraday.priceAt(positionDay, nowMs);
+    const profitChf = valueChf * (1 - GameEngine.stampDutyRate(position)) - position.costChf;
+    const symbol = CSS.escape(position.symbol);
+    const valueCell = document.querySelector('[data-day-value="' + symbol + '"]');
+    const profitCell = document.querySelector('[data-day-profit="' + symbol + '"]');
+    if (valueCell) valueCell.textContent = gameMoney(valueChf, today);
+    if (profitCell) {
+      profitCell.className = 'text-end ' + gameSignClass(profitChf);
+      profitCell.innerHTML = gameSignedMoney(profitChf, today) + '<br><small>' + gamePercent(profitChf / position.costChf) + '</small>';
+    }
+  });
 }
 
 // ---------- Boot ----------
@@ -820,7 +1120,26 @@ function gameBindControls() {
   document.getElementById('game-buy-btn').onclick = () => {
     const asset = gameSelectedAsset();
     if (!asset) { gameToast('PICK AN ASSET'); return; }
-    gameTrade(GameEngine.buy(GamePage.game, GamePage.market, asset, gameOrder(asset), todayIsoDate()));
+    gameTrade(GameEngine.buy(GamePage.game, GamePage.market, asset, gameOrder(asset), todayIsoDate(), new Date().toISOString()));
+  };
+
+  document.getElementById('game-day-category').onchange = (event) => {
+    GamePage.dayCategory = event.target.value;
+    gameFillAssetLists(document.getElementById('game-day-category'), document.getElementById('game-day-asset'), GAME_BUY_CATEGORIES.market, GamePage.dayCategory, todayIsoDate());
+    gameDayTick();
+  };
+  document.getElementById('game-day-asset').onchange = () => gameDayTick();
+  document.querySelectorAll('[data-day-zoom]').forEach((button) => {
+    button.onclick = () => { GamePage.dayZoom = button.dataset.dayZoom; gameDayTick(); };
+  });
+  document.getElementById('game-day-amount').oninput = () => gameDayTick();
+  document.getElementById('game-day-buy-btn').onclick = () => {
+    const asset = gameDayAsset();
+    if (!asset) { gameToast('PICK AN ASSET'); return; }
+    const now = new Date().toISOString();
+    const day = gameTradingDay(asset, now.slice(0, 10));
+    gameTrade(day ? GameEngine.openDayTrade(GamePage.game, GamePage.market, asset, { amountChf: Number(document.getElementById('game-day-amount').value) },
+      GameIntraday.priceAt(day, Date.parse(now)), day.session, now) : { error: 'MARKET CLOSED' });
   };
 
   const savesDialog = () => bootstrap.Modal.getOrCreateInstance(document.getElementById('game-saves-modal'));
@@ -886,6 +1205,7 @@ async function gameBoot() {
     GamePage.saveFile = last.file;
   }
   gameRender();
+  setInterval(gameDayTick, 1000);
 }
 
 (async () => {

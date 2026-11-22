@@ -2,6 +2,7 @@
 const { test, assert, assertNear, runRegisteredTests } = require('../tests/helpers');
 const GameEngine = require('./engine');
 const GameTangibles = require('./tangibles');
+const GameIntraday = require('./intraday');
 
 // A market where every symbol's CHF price is fixed per date, else the last earlier one.
 // Optional tangible info per symbol ({ depreciation, kind, location }) for cars, watches, art and houses,
@@ -388,6 +389,130 @@ test('benchmark: reinvests its dividend yield after tax, none without one', () =
   const last = GameEngine.replay(game, withYield, '2026-12-31').days.pop();
   const gain = last.benchmark / last.moneyIn - 1;
   assert.ok(gain > 0.015 && gain < 0.03, 'benchmark gain ' + gain);
+});
+
+test('day trading hours: real local hours with daylight saving, each session inside one UTC day', () => {
+  const nyWinter = GameIntraday.session('US', '2026-01-14');
+  assert.deepStrictEqual([nyWinter.opensAt, nyWinter.closesAt], ['2026-01-14T14:30:00.000Z', '2026-01-14T21:00:00.000Z']);
+  assert.strictEqual(GameIntraday.session('US', '2026-07-14').opensAt, '2026-07-14T13:30:00.000Z', 'New York in summer time');
+  assert.strictEqual(GameIntraday.session('CH', '2026-07-14').closesAt, '2026-07-14T15:30:00.000Z', 'Zürich in summer time');
+  ['2026-01-14', '2026-07-14'].forEach((date) => Object.keys(GameIntraday.MARKETS).forEach((market) => {
+    const daySession = GameIntraday.session(market, date);
+    assert.ok(daySession.opensAt.startsWith(date) && daySession.opensAt < daySession.closesAt, market + ' opens on ' + date);
+    assert.ok(daySession.closesAt <= GameEngine.addDays(date, 1) + 'T00:00:00.000Z', market + ' closes on ' + date);
+  }));
+  // 2026-11-21 is a Saturday: only crypto trades.
+  assert.strictEqual(GameIntraday.session('CH', '2026-11-21'), null);
+  assert.strictEqual(GameIntraday.session('FUTURES', '2026-11-21'), null);
+  assert.ok(GameIntraday.session('CRYPTO', '2026-11-21'));
+  assert.strictEqual(GameIntraday.currentOrNextSession('CH', Date.parse('2026-11-21T10:00:00Z')).date, '2026-11-23', 'opens again on Monday');
+  assert.strictEqual(GameIntraday.marketOf('stock', 'JP'), 'JP');
+  assert.strictEqual(GameIntraday.marketOf('etf', 'NL'), 'US', 'unknown regions trade in New York');
+  assert.strictEqual(GameIntraday.marketOf('car', 'US'), null);
+});
+
+test('day trading prices: the same walk for the same asset and day, starting at the last close', () => {
+  const closes = Array.from({ length: 61 }, (unused, index) => 100 * Math.exp(0.01 * (index % 2 ? 1 : -1)));
+  const first = GameIntraday.tradingDay('NESN.SW', 'CH', '2026-11-23', 100, closes);
+  const again = GameIntraday.tradingDay('NESN.SW', 'CH', '2026-11-23', 100, closes);
+  const nextDay = GameIntraday.tradingDay('NESN.SW', 'CH', '2026-11-24', 100, closes);
+  assert.strictEqual(first.prices.length, 8.5 * 3600 / GameIntraday.STEP_SECONDS + 1);
+  assert.strictEqual(first.prices[0], 100);
+  assert.deepStrictEqual(Array.from(again.prices), Array.from(first.prices));
+  assert.notStrictEqual(nextDay.prices[100], first.prices[100]);
+  const opensMs = Date.parse(first.session.opensAt);
+  assert.strictEqual(GameIntraday.priceAt(first, opensMs - 1000), 100, 'before the open');
+  assert.strictEqual(GameIntraday.priceAt(first, opensMs + 25000), first.prices[2], 'one step every 10 seconds');
+  assert.strictEqual(GameIntraday.priceAt(first, Date.parse(first.session.closesAt) + 60000), first.prices[first.prices.length - 1], 'after the close');
+  assert.strictEqual(GameIntraday.tradingDay('NESN.SW', 'CH', '2026-11-22', 100, closes), null, 'closed on Sunday');
+  assert.ok(Math.abs(GameIntraday.dailyVolatility(closes) - 0.02) < 0.001, 'volatility of +/-2% days');
+  assert.strictEqual(GameIntraday.dailyVolatility([100, 101]), 0.02, 'default with too little history');
+  // Over many days the walk ends near the start on average, with moves near twice the real 2% a day.
+  const ends = Array.from({ length: 400 }, (unused, index) =>
+    GameIntraday.tradingDay('TEST', 'CRYPTO', GameEngine.addDays('2026-01-01', index), 100, closes).prices.slice(-1)[0] / 100 - 1);
+  const mean = ends.reduce((sum, value) => sum + value, 0) / ends.length;
+  const spread = Math.sqrt(ends.reduce((sum, value) => sum + value * value, 0) / ends.length);
+  assert.ok(Math.abs(mean) < 0.01, 'mean end move ' + mean);
+  assert.ok(spread > 0.03 && spread < 0.05, 'end move spread ' + spread);
+});
+
+// A Swiss stock day trade on Monday 2026-11-23, while SIX is open (08:00 to 16:30 UTC).
+const sixSession = GameIntraday.session('CH', '2026-11-23');
+const duringSession = '2026-11-23T10:00:00.000Z';
+const laterInSession = '2026-11-23T14:00:00.000Z';
+const afterClose = '2026-11-23T17:00:00.000Z';
+
+function dayTradeGame() {
+  const market = fakeMarket({ 'NESN.SW': { '2026-11-20': 100 }, '^SSMI': { '2026-11-20': 10000 } });
+  return { market: market, game: newGame('hard', '2026-11-23') };
+}
+
+test('day trade: bought and sold the same day, profit after stamp duty on both legs, a quick sale', () => {
+  const { market, game } = dayTradeGame();
+  const buy = GameEngine.openDayTrade(game, market, swissStock, { amountChf: 5000 }, 100, sixSession, duringSession);
+  assert.ok(!buy.error, buy.error);
+  assertNear(buy.quantity, 50, 'quantity');
+  game.trades.push(buy);
+  const open = GameEngine.replay(game, market, '2026-11-23', laterInSession);
+  assertNear(open.cash, 10000 - 5003.75, 'cash held while open');
+  assertNear(open.days[0].netWorth, 10000 - 3.75, 'net worth counts the open trade at its cost');
+  assert.strictEqual(open.positions.length, 0, 'not a holding');
+  assert.deepStrictEqual(open.dayTrades.map((item) => [item.symbol, item.quantity, item.closesAt]), [['NESN.SW', 50, sixSession.closesAt]]);
+
+  const sale = GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1 }, 110, laterInSession);
+  assert.ok(!sale.error, sale.error);
+  game.trades.push(sale);
+  const state = GameEngine.replay(game, market, '2026-11-23', afterClose);
+  const profitChf = 5500 - 5500 * 0.00075 - 5003.75;
+  assertNear(state.cash, 10000 + profitChf, 'cash after the round trip');
+  assertNear(state.dayTradeProfitChf, profitChf, 'day trade profit');
+  assertNear(state.feesPaid, 3.75 + 4.125, 'duty on both legs');
+  assert.strictEqual(state.dayTrades.length, 0);
+  assert.strictEqual(state.trader.status, 'review', 'a day trade is a sale held under six months');
+  assertNear(state.trader.volumeMultiple, 10500 / 10000, 'both legs count as volume');
+  assert.deepStrictEqual(state.events.filter((event) => event.intraday).map((event) => event.type), ['buy', 'sell']);
+  assert.ok(GameEngine.replay(game, market, '2026-11-24').dayTradeProfitChf > 0, 'a closed day trade stays');
+});
+
+test('day trade: still open at the close it is reverted, no cash, fees, volume or history left', () => {
+  const { market, game } = dayTradeGame();
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 5000 }, 100, sixSession, duringSession));
+  const without = GameEngine.replay(newGame('hard', '2026-11-23'), market, '2026-11-23');
+  [GameEngine.replay(game, market, '2026-11-23', afterClose), GameEngine.replay(game, market, '2026-11-24')].forEach((state) => {
+    assertNear(state.cash, without.cash, 'cash back');
+    assertNear(state.feesPaid, 0, 'no fees');
+    assert.strictEqual(state.events.length, without.events.length, 'no history');
+    assert.strictEqual(state.trader.status, 'private');
+    assertNear(state.trader.volumeMultiple, 0, 'no volume');
+    assert.strictEqual(state.dayTrades.length, 0);
+  });
+  assert.strictEqual(GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1 }, 110, afterClose).error, 'NO OPEN DAY TRADE');
+  assertNear(GameEngine.previewBuy(game, market, swissStock, { amountChf: 9000 }, '2026-11-23', afterClose).cashChf, 10000, 'its cash is free again');
+});
+
+test('day trade: a partly closed trade keeps the sold part and reverts the rest', () => {
+  const { market, game } = dayTradeGame();
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { quantity: 10 }, 100, sixSession, duringSession));
+  game.trades.push(GameEngine.closeDayTrade(game, market, 'NESN.SW', { quantity: 4 }, 90, laterInSession));
+  const state = GameEngine.replay(game, market, '2026-11-23', afterClose);
+  const profitChf = 360 - 360 * 0.00075 - 400 * 1.00075;
+  assertNear(state.cash, 10000 + profitChf, 'only the 4 sold count');
+  assertNear(state.feesPaid, 400 * 0.00075 + 360 * 0.00075, 'duty on the 4 units');
+  const buyEvent = state.events.find((event) => event.intraday && event.type === 'buy');
+  assertNear(buyEvent.quantity, 4, 'history shows the 4 units bought');
+  assertNear(buyEvent.amountChf, 400, 'history amount');
+});
+
+test('day trade: only while the market is open, with the cash at hand, never tangibles', () => {
+  const { market, game } = dayTradeGame();
+  assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 100 }, 100, sixSession, afterClose).error, 'MARKET CLOSED');
+  assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 100 }, 100, null, duringSession).error, 'MARKET CLOSED');
+  assert.strictEqual(GameEngine.openDayTrade(game, market, familyCar, { quantity: 1 }, 100, sixSession, duringSession).error, 'NOT FOR DAY TRADING');
+  assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 0 }, 100, sixSession, duringSession).error, 'ENTER AN AMOUNT');
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 6000 }, 100, sixSession, duringSession));
+  assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 5000 }, 100, sixSession, laterInSession).error, 'NOT ENOUGH CASH', 'open trades hold their cash');
+  assert.strictEqual(GameEngine.closeDayTrade(game, market, 'NESN.SW', { quantity: 100 }, 100, laterInSession).error, 'YOU ONLY HOLD 60');
+  assert.strictEqual(GameEngine.sell(game, market, 'NESN.SW', { fraction: 1 }, '2026-11-23', laterInSession).error, 'NOTHING TO SELL', 'day trades are not holdings');
 });
 
 test('saves: version 1 games become a Zürich player with metals in grams, file names are free', () => {

@@ -47,6 +47,12 @@
  *     costs (transfer tax, notary, land registry) when one is bought.
  * Cars, watches, art and houses are bought in whole units and sold through a
  * dealer, auction house or estate agent, who keeps a share of the sale price.
+ * Day trades (trade.intraday) are bought and sold at the simulated prices of
+ * game/intraday.js and live apart from the holdings: they pay stamp duty and
+ * count for the professional trader check, but get no dividends. A day trade
+ * still open when its market closes (trade.closesAt) is reverted: it never
+ * happened, so no cash moves and no fees are paid. Until it is closed or
+ * reverted, its cash is held and it counts in the net worth at what it cost.
  * Not modelled: interest on cash, the withholding taxes on dividends (Swiss
  * 35% refunded, foreign ones credited: the net effect is the income tax
  * above), the pension fund savings in the social contributions, imputed
@@ -472,7 +478,9 @@ const GameEngine = (() => {
   // entry per calendar day from the start date for the net worth chart.
   // moneyIn is the start cash plus what the player saved from the salary; the
   // benchmark puts the same money into the SMI on the same days.
-  function replay(game, market, untilDate) {
+  // `now` (optional ISO time) reverts the day trades of `untilDate` whose market
+  // has closed by then; without it they stay open. Earlier days' are always reverted.
+  function replay(game, market, untilDate, now) {
     let cash = game.startCash;
     let moneyIn = game.startCash;
     const positions = {};
@@ -498,11 +506,61 @@ const GameEngine = (() => {
     const yearVolume = {};
     const yearShortSales = {};
     let month = { salaryChf: 0, expensesChf: 0 };
+    // Day trade buys with units not sold yet: { trade, quantity, event }.
+    let openDayLots = [];
+    let dayTradeProfitChf = 0;
 
     const positionList = () => Object.keys(positions).map((symbol) => positions[symbol]);
     const allLots = () => positionList().reduce((lots, position) => lots.concat(position.lots), []);
     const mortgageBalance = () => allLots().reduce((sum, lot) => sum + lot.mortgageChf, 0);
-    const netWorthOn = (date) => cash + positionList().reduce((sum, position) => sum + positionValue(market, position, date), 0) - mortgageBalance();
+    const openDayAmountChf = () => openDayLots.reduce((sum, lot) => sum + lot.trade.amountChf * lot.quantity / lot.trade.quantity, 0);
+    const netWorthOn = (date) => cash + positionList().reduce((sum, position) => sum + positionValue(market, position, date), 0) + openDayAmountChf() - mortgageBalance();
+
+    const applyDayTrade = (trade, year) => {
+      feesPaid += trade.stampDutyChf;
+      yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
+      const event = Object.assign({ type: trade.side }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
+      events.push(event);
+      if (trade.side === 'buy') {
+        cash -= trade.amountChf + trade.stampDutyChf;
+        openDayLots.push({ trade: trade, quantity: trade.quantity, event: event });
+        return;
+      }
+      cash += trade.amountChf - trade.stampDutyChf;
+      // First in, first out; every buy it closes is a sale held under six months.
+      let toSell = trade.quantity;
+      let costChf = 0;
+      openDayLots.filter((lot) => lot.trade.symbol === trade.symbol).forEach((lot) => {
+        if (toSell <= EMPTY_QUANTITY) return;
+        const used = Math.min(lot.quantity, toSell);
+        costChf += (lot.trade.amountChf + lot.trade.stampDutyChf) * used / lot.trade.quantity;
+        lot.quantity -= used;
+        toSell -= used;
+        yearShortSales[year] = (yearShortSales[year] || 0) + 1;
+      });
+      openDayLots = openDayLots.filter((lot) => lot.quantity > EMPTY_QUANTITY);
+      event.profitChf = trade.amountChf - trade.stampDutyChf - costChf;
+      dayTradeProfitChf += event.profitChf;
+    };
+
+    // The units still open at the close are taken out as if never bought: cash, fees, volume and history.
+    const revertDayLots = (date, year) => {
+      openDayLots = openDayLots.filter((lot) => {
+        const closed = date < untilDate || (now != null && Date.parse(now) >= Date.parse(lot.trade.closesAt));
+        if (!closed) return true;
+        const share = lot.quantity / lot.trade.quantity;
+        cash += (lot.trade.amountChf + lot.trade.stampDutyChf) * share;
+        feesPaid -= lot.trade.stampDutyChf * share;
+        yearVolume[year] -= lot.trade.amountChf * share;
+        if (share >= 1 - EMPTY_QUANTITY) events.splice(events.indexOf(lot.event), 1);
+        else {
+          lot.event.quantity -= lot.quantity;
+          lot.event.amountChf -= lot.trade.amountChf * share;
+          lot.event.stampDutyChf -= lot.trade.stampDutyChf * share;
+        }
+        return false;
+      });
+    };
 
     for (let date = game.startDate; date <= untilDate; date = addDays(date, 1)) {
       if (date !== game.startDate) {
@@ -532,6 +590,7 @@ const GameEngine = (() => {
 
       while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
         const trade = trades[tradeIndex++];
+        if (trade.intraday) { applyDayTrade(trade, year); continue; }
         const dealerFeeChf = trade.dealerFeeChf || 0;
         const gainsTaxChf = trade.gainsTaxChf || 0;
         const purchaseCostsChf = trade.purchaseCostsChf || 0;
@@ -551,6 +610,7 @@ const GameEngine = (() => {
           mortgageRepaidChf: result.mortgageRepaidChf,
         }));
       }
+      revertDayLots(date, year);
 
       // Today's share of the month, with what is owned at the end of the day.
       const share = 1 / daysInMonth(date);
@@ -628,7 +688,24 @@ const GameEngine = (() => {
       expensesPaid: expensesPaid,
       dividendsReceived: dividendsReceived,
       trader: { status: ['private', 'review', 'risk'][failedRules], shortSales: shortSales, volumeMultiple: volumeMultiple },
+      dayTrades: openDayPositions(openDayLots),
+      dayTradeProfitChf: dayTradeProfitChf,
     };
+  }
+
+  // Open day trade units per symbol: amountChf at the buy prices, costChf with the stamp duty paid.
+  function openDayPositions(lots) {
+    const bySymbol = {};
+    lots.forEach((lot) => {
+      const share = lot.quantity / lot.trade.quantity;
+      const position = bySymbol[lot.trade.symbol] || (bySymbol[lot.trade.symbol] = {
+        symbol: lot.trade.symbol, class: lot.trade.class, name: lot.trade.name, quantity: 0, amountChf: 0, costChf: 0, closesAt: lot.trade.closesAt,
+      });
+      position.quantity += lot.quantity;
+      position.amountChf += lot.trade.amountChf * share;
+      position.costChf += (lot.trade.amountChf + lot.trade.stampDutyChf) * share;
+    });
+    return Object.keys(bySymbol).map((symbol) => bySymbol[symbol]);
   }
 
   // A recent quote for trading on `date`, or an error message.
@@ -644,7 +721,8 @@ const GameEngine = (() => {
   // 1, the share paid in cash; the rest is the mortgage). Returns { error }
   // when the order cannot be priced, else { trade, error (null when allowed),
   // cashChf, cashNeededChf, budgetBefore, budgetAfter, affordability }.
-  function previewBuy(game, market, asset, order, date) {
+  // `now` (optional) is passed to replay, so cash held by closed day trades is free again.
+  function previewBuy(game, market, asset, order, date, now) {
     const quote = tradeQuote(market, asset.symbol, date);
     if (quote.error) return quote;
     const quantity = order.quantity != null ? order.quantity : order.amountChf / quote.priceChf;
@@ -663,7 +741,7 @@ const GameEngine = (() => {
       trade.amortizationChf = Math.max(0, trade.mortgageChf - amountChf * FIRST_MORTGAGE_SHARE) / AMORTIZATION_MONTHS;
     }
 
-    const state = replay(game, market, date);
+    const state = replay(game, market, date, now);
     const positionsAfter = copyPositions(state.positions);
     applyTrade(positionsAfter, trade);
     const listAfter = Object.keys(positionsAfter).map((symbol) => positionsAfter[symbol]);
@@ -684,15 +762,15 @@ const GameEngine = (() => {
   }
 
   // The buy trade for `order` (see previewBuy), or { error }.
-  function buy(game, market, asset, order, date) {
-    const preview = previewBuy(game, market, asset, order, date);
+  function buy(game, market, asset, order, date, now) {
+    const preview = previewBuy(game, market, asset, order, date, now);
     if (!preview.trade) return { error: preview.error };
     return preview.error ? { error: preview.error } : preview.trade;
   }
 
   // The sell trade for `order` ({ fraction } of the holding, or { quantity }), or { error }.
-  function sell(game, market, symbol, order, date) {
-    const position = replay(game, market, date).positions.find((item) => item.symbol === symbol);
+  function sell(game, market, symbol, order, date, now) {
+    const position = replay(game, market, date, now).positions.find((item) => item.symbol === symbol);
     if (!position) return { error: 'NOTHING TO SELL' };
     const quote = tradeQuote(market, symbol, date);
     if (quote.error) return quote;
@@ -728,10 +806,48 @@ const GameEngine = (() => {
     };
   }
 
+  // A day trade buy at the simulated `priceChf` at `now` (ISO time), while `session` ({ opensAt, closesAt }, ISO) is
+  // open. `order` is { amountChf } or { quantity }. Returns the trade, or { error }.
+  function openDayTrade(game, market, asset, order, priceChf, session, now) {
+    if (isTangible(asset.class)) return { error: 'NOT FOR DAY TRADING' };
+    const nowMs = Date.parse(now);
+    if (!session || nowMs < Date.parse(session.opensAt) || nowMs >= Date.parse(session.closesAt)) return { error: 'MARKET CLOSED' };
+    if (!(priceChf > 0)) return { error: 'NO PRICE FOR THIS ASSET' };
+    const quantity = order.quantity != null ? order.quantity : order.amountChf / priceChf;
+    if (!(quantity > 0) || !isFinite(quantity)) return { error: order.quantity != null ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT' };
+    const amountChf = quantity * priceChf;
+    const date = now.slice(0, 10);
+    const trade = {
+      date: date, side: 'buy', intraday: true, at: now, closesAt: session.closesAt, symbol: asset.symbol, class: asset.class,
+      name: asset.name || asset.symbol, quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(asset),
+    };
+    if (amountChf + trade.stampDutyChf > replay(game, market, date, now).cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    return trade;
+  }
+
+  // The day trade sale of `order` ({ fraction } of the open units, or { quantity }) at the simulated `priceChf`
+  // at `now` (ISO time), before its market closes. Returns the trade, or { error }.
+  function closeDayTrade(game, market, symbol, order, priceChf, now) {
+    const date = now.slice(0, 10);
+    const position = replay(game, market, date, now).dayTrades.find((item) => item.symbol === symbol);
+    if (!position) return { error: 'NO OPEN DAY TRADE' };
+    if (Date.parse(now) >= Date.parse(position.closesAt)) return { error: 'MARKET CLOSED' };
+    if (!(priceChf > 0)) return { error: 'NO PRICE FOR THIS ASSET' };
+    const quantity = order.quantity != null ? order.quantity : position.quantity * Math.min(1, Math.max(0, order.fraction));
+    if (!(quantity > 0)) return { error: 'NOTHING TO SELL' };
+    if (quantity > position.quantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HOLD ' + position.quantity };
+    const amountChf = quantity * priceChf;
+    return {
+      date: date, side: 'sell', intraday: true, at: now, symbol: symbol, class: position.class, name: position.name,
+      quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: position.class }),
+    };
+  }
+
   return {
-    DIFFICULTIES, LOCATIONS, HOUSE_LOCATIONS, CAR_KM_PER_YEAR, CAR_MILEAGE_SHARE, MORTGAGE_INTEREST_RATE, MIN_DOWN_PAYMENT,
+    DIFFICULTIES, LOCATIONS, HOUSE_LOCATIONS, CAR_KM_PER_YEAR, CAR_MILEAGE_SHARE, MORTGAGE_INTEREST_RATE, MIN_DOWN_PAYMENT, MAX_QUOTE_AGE_DAYS,
     newGame, yearlySalary, incomeTax, isTangible, stampDutyRate, dealerFeeRate, housePurchaseCostRate, wealthTax, propertyGainsTax,
-    ownedYearlyChange, carMonthlyCosts, houseMonthlyCosts, monthlyBudget, replay, previewBuy, buy, sell, addDays, daysBetween,
+    ownedYearlyChange, carMonthlyCosts, houseMonthlyCosts, monthlyBudget, replay, previewBuy, buy, sell, openDayTrade, closeDayTrade,
+    addDays, daysBetween,
   };
 })();
 

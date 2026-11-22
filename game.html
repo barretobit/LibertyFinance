@@ -8,7 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=48" />
-    <link rel="stylesheet" href="game/game.css?v=14" />
+    <link rel="stylesheet" href="game/game.css?v=17" />
   </head>
   <body>
     <!-- ===== TOP NAV ===== -->
@@ -55,7 +55,8 @@
                 You start with cash in Swiss francs, a job and today's real market prices. Every month your salary comes in and your rent and
                 bills go out. Buy and sell stocks, ETFs, crypto, metals, cars, watches, art and homes, then come back every day to see how your
                 decisions did. Swiss rules apply: capital gains are tax free, stock and ETF trades pay stamp duty, and wealth tax is due on
-                31 December with your city's tariff.
+                31 December with your city's tariff. You can also day trade at simulated live prices while each market is open: close the
+                trade before the market closes, or it is reverted.
               </p>
               <div class="row mb-3">
                 <div class="col-12 col-md-6 mb-2">
@@ -84,6 +85,45 @@
               <div class="card-gta-body">
                 <div id="game-chart-empty" class="empty-state" style="display: none">YOUR CHART STARTS TOMORROW: IT NEEDS TWO DAYS TO DRAW A LINE.</div>
                 <div class="game-chart-wrap"><canvas id="game-chart"></canvas></div>
+              </div>
+            </div>
+
+            <div class="card-gta mb-4">
+              <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span>DAY TRADING</span>
+                <span class="ws-header-note">SIMULATED LIVE PRICES · CLOSE BEFORE THE MARKET CLOSES OR THE TRADE IS REVERTED</span>
+              </div>
+              <div class="card-gta-body">
+                <div class="row">
+                  <div class="col-12 col-xl-8 mb-3 mb-xl-0">
+                    <div class="row">
+                      <div class="col-12 col-md-4 mb-2">
+                        <label class="form-label" for="game-day-category">CATEGORY</label>
+                        <select id="game-day-category" class="form-select form-gta"></select>
+                      </div>
+                      <div class="col-12 col-md-8 mb-2">
+                        <label class="form-label" for="game-day-asset">ASSET</label>
+                        <select id="game-day-asset" class="form-select form-gta"></select>
+                      </div>
+                    </div>
+                    <div class="game-quote mb-2" id="game-day-quote" aria-live="off"></div>
+                    <div class="game-toggle game-day-zoom mb-2" role="group" aria-label="Chart zoom">
+                      <button class="game-toggle-btn" data-day-zoom="15M">15M</button>
+                      <button class="game-toggle-btn" data-day-zoom="1H">1H</button>
+                      <button class="game-toggle-btn" data-day-zoom="4H">4H</button>
+                      <button class="game-toggle-btn" data-day-zoom="DAY">DAY</button>
+                    </div>
+                    <div id="game-day-chart-empty" class="empty-state" style="display: none">THE CHART STARTS WHEN THE MARKET OPENS.</div>
+                    <div class="game-day-chart-wrap"><canvas id="game-day-chart"></canvas></div>
+                  </div>
+                  <div class="col-12 col-xl-4">
+                    <label class="form-label" for="game-day-amount">AMOUNT (CHF)</label>
+                    <input id="game-day-amount" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+                    <div class="game-preview mb-2" id="game-day-preview"></div>
+                    <button class="btn btn-gta w-100 mb-3" id="game-day-buy-btn">BUY AT THE LIVE PRICE</button>
+                    <div class="game-table-scroll" id="game-day-positions"></div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -140,6 +180,8 @@
               Game only, not tax advice. Salaries, income and wealth tax, rents and living costs are rough averages for each city (single
               person, no church tax). Market prices are real daily closes from Randata, converted to CHF with that day's exchange rate.
               Dividends are paid to you in cash. Car, watch, art and house prices are simulated around real prices, the same for every player.
+              Day trading prices are simulated too: a random walk from the last real close, twice as lively as the real market, the same for
+              every player. Markets keep their regular hours, without holidays or lunch breaks.
             </p>
           </div>
         </div>
@@ -234,9 +276,10 @@
     <script src="js/pages-wallstreet.js?v=45"></script>
 
     <!-- ===== GAME ===== -->
-    <script src="game/engine.js?v=9"></script>
+    <script src="game/engine.js?v=10"></script>
+    <script src="game/intraday.js?v=1"></script>
     <script src="game/tangibles.js?v=4"></script>
     <script src="game/saves.js?v=1"></script>
-    <script src="game/page.js?v=15"></script>
+    <script src="game/page.js?v=20"></script>
   </body>
 </html>

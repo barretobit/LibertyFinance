@@ -203,6 +203,47 @@
   position: relative;
   height: 320px;
 }
+.game-day-zoom {
+  max-width: 320px;
+}
+.game-day-chart-wrap {
+  position: relative;
+  height: 240px;
+}
+.game-day-price {
+  font-family: var(--font-title);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 1px;
+}
+.game-day-summary {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.game-day-pick {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.game-day-pick:hover .game-symbol,
+.game-day-pick:focus-visible .game-symbol {
+  text-decoration: underline;
+}
+.game-day-pick:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.table-gta tr.game-day-selected td {
+  background: var(--bg-card-hover);
+}
+#game-day-positions td.text-end {
+  white-space: nowrap;
+}
 
 .game-toggle {
   display: flex;
