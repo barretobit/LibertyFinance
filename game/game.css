@@ -49,9 +49,36 @@
   font-size: 12px;
 }
 
+/* Title left, player and market data line centered on the page, GAMES right */
+.game-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
 .game-player {
   color: var(--text-secondary);
   font-size: 13px;
+  letter-spacing: 1px;
+  text-align: center;
+}
+.game-header-games {
+  justify-self: end;
+}
+@media (max-width: 768px) {
+  .game-header {
+    grid-template-columns: 1fr auto;
+  }
+  .game-player {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: left;
+  }
+}
+.game-save-details {
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 1px;
 }
 .game-unit {
   width: auto;
@@ -158,6 +185,10 @@
 }
 .game-budget-total td {
   font-weight: 700;
+}
+.game-budget-note td {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .game-pos { color: #33ff33 !important; }

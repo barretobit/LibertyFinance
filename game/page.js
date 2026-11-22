@@ -51,6 +51,8 @@ const GamePage = {
   game: null,
   view: 'board',
   currency: 'CHF',
+  // Day of the last market data sync (Randata), null when there is no data.
+  marketDate: null,
   chart: null,
   buyTab: 'market',
   buyCategory: { market: 'STOCKS', tangible: 'PRECIOUS METALS' },
@@ -278,17 +280,30 @@ function gameRenderHeader() {
   document.getElementById('game-saves-btn').style.display = GamePage.saves.length ? '' : 'none';
   const select = document.getElementById('game-save');
   select.innerHTML = GamePage.saves.map((save) => {
-    const label = save.game.name + ' (' + GameEngine.DIFFICULTIES[save.game.difficulty].label + ', ' + GameEngine.LOCATIONS[save.game.location].label + ')';
+    const label = save.game.name + ' (' + GameEngine.LOCATIONS[save.game.location].label + ')';
     return '<option value="' + escapeHtml(save.file) + '">' + escapeHtml(label) + '</option>';
   }).join('');
   if (GamePage.saveFile) select.value = GamePage.saveFile;
   const folder = GameSaves.folderName();
   select.title = 'Saved as ' + (folder ? folder + '/' : '') + GameSaves.FOLDER + '/' + (GamePage.saveFile || '');
   document.getElementById('game-reset-btn').style.display = game && GamePage.view === 'board' ? '' : 'none';
-  document.getElementById('game-player').innerHTML = game && GamePage.view === 'board'
-    ? escapeHtml(game.name) + ' · ' + GameEngine.LOCATIONS[game.location].label + ' · ' + GameEngine.DIFFICULTIES[game.difficulty].label +
-      ' · SINCE ' + formatDate(game.startDate) + ' · GROSS SALARY CHF ' + GameEngine.yearlySalary(game.location, game.difficulty).toLocaleString('en-GB') + ' A YEAR'
+  document.getElementById('game-save-details').textContent = game
+    ? GameEngine.DIFFICULTIES[game.difficulty].label + ' · SINCE ' + formatDate(game.startDate)
     : '';
+  const today = todayIsoDate();
+  const parts = game && GamePage.view === 'board'
+    ? [escapeHtml(game.name), GameEngine.LOCATIONS[game.location].label, 'DAY ' + (GameEngine.daysBetween(game.startDate, today) + 1)]
+    : [];
+  parts.push(gameMarketDataAge(today));
+  const player = document.getElementById('game-player');
+  player.innerHTML = parts.join(' · ');
+  player.title = GamePage.marketDate ? 'Market data synced on ' + formatDate(GamePage.marketDate) : '';
+}
+
+function gameMarketDataAge(today) {
+  if (!GamePage.marketDate) return 'NO MARKET DATA';
+  const age = GameEngine.daysBetween(GamePage.marketDate, today);
+  return 'MARKET DATA FROM ' + (age <= 0 ? 'TODAY' : age === 1 ? '1 DAY AGO' : age + ' DAYS AGO');
 }
 
 function gameRenderStart() {
@@ -509,7 +524,9 @@ function gameRenderBudget(state, today) {
     '<tr class="' + (extraClass || '') + '"><td>' + escapeHtml(label) + (note ? '<span class="game-name">' + escapeHtml(note) + '</span>' : '') + '</td>' +
     '<td class="text-end text-nowrap">' + gameMoney(amountChf, today) + '</td></tr>';
   const heading = (label) => '<tr class="game-budget-heading"><td colspan="2">' + label + '</td></tr>';
-  const rows = [heading('INCOME')]
+  const yearlySalary = '<tr class="game-budget-note"><td colspan="2">GROSS SALARY CHF ' +
+    GameEngine.yearlySalary(GamePage.game.location, GamePage.game.difficulty).toLocaleString('en-GB') + ' A YEAR</td></tr>';
+  const rows = [heading('INCOME'), yearlySalary]
     .concat(budget.income.map((item) => line(item.label, item.amountChf)))
     .concat([line('TAKE HOME', budget.netSalaryChf, '', 'game-budget-total'), heading('EXPENSES')])
     .concat(budget.expenses.map((item) => line(item.label, -item.amountChf, item.note)))
@@ -837,12 +854,13 @@ async function gameBoot() {
     gameToast('COULD NOT MOVE YOUR OLD GAME TO A SAVE FILE: ' + (error.message || error));
   }
 
-  const syncLabel = document.getElementById('game-sync-label');
-  syncLabel.textContent = 'SYNCING MARKET DATA...';
+  const player = document.getElementById('game-player');
+  player.textContent = 'SYNCING MARKET DATA...';
   loading.textContent = 'SYNCING MARKET DATA INTO RESOURCES...';
   const result = await Randata.sync();
   const file = await Randata.readFile();
-  syncLabel.textContent = file.synced_date ? 'MARKET DATA: ' + formatDate(file.synced_date) : 'MARKET DATA: NO DATA';
+  GamePage.marketDate = file.synced_date || null;
+  gameRenderHeader();
   if (result && result.status === 'offline') gameToast('MARKET DATA OFFLINE');
 
   GamePage.market = gameBuildMarket(file, await Randata.readDividends());

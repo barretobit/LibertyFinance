@@ -81,12 +81,16 @@ body {
 }
 
 /* ===== LANDING ===== */
+/* Landing page and its modals only; the app pages use --radius from settings */
+:root {
+  --landing-radius: 6px;
+}
 #page-landing {
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: radial-gradient(ellipse at center, #0d1a0d 0%, #050505 70%);
+  background: radial-gradient(ellipse at center, #1a3f1a 0%, #0c1f0c 30%, #050505 70%);
   position: relative;
   overflow: hidden;
   text-align: center;
@@ -115,6 +119,9 @@ body {
 .landing-content {
   position: relative;
   z-index: 2;
+  width: 480px;
+  max-width: 92vw;
+  padding: 48px 0;
 }
 .landing-badge {
   font-family: var(--font-body);
@@ -125,7 +132,8 @@ body {
   opacity: 0.7;
 }
 .landing-title {
-  font-family: var(--font-title);
+  /* Kept in the plain sans-serif look rather than Oswald, by choice */
+  font-family: Arial, Helvetica, sans-serif;
   font-size: 72px;
   font-weight: 700;
   color: var(--accent);
@@ -141,19 +149,57 @@ body {
   font-size: 14px;
   color: var(--text-secondary);
   letter-spacing: 3px;
-  margin-bottom: 40px;
+  margin-bottom: 36px;
+}
+.landing-panel {
+  text-align: left;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--border-color);
+  border-radius: var(--landing-radius);
+}
+.landing-panel-header {
+  font-family: var(--font-title);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  letter-spacing: 3px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+.landing-panel-body {
+  padding: 18px;
 }
 .landing-status {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 11px;
   color: var(--text-secondary);
-  margin-bottom: 30px;
+  margin-bottom: 14px;
   letter-spacing: 2px;
+}
+/* Horizontal rule with a centered label, e.g. "OR" or a section name */
+.landing-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 14px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text-muted);
+}
+.landing-divider::before,
+.landing-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border-color);
+}
+.landing-section-label {
+  margin: 36px 0 14px;
 }
 .btn-enter {
   background: transparent;
   border: 2px solid var(--accent);
-  border-radius: 5px;
+  border-radius: var(--landing-radius);
   color: var(--accent);
   font-family: var(--font-title);
   font-size: 20px;
@@ -170,38 +216,47 @@ body {
   color: var(--bg-primary);
   box-shadow: 0 0 30px var(--accent-glow);
 }
+.btn-enter.primary {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+.btn-enter.primary:hover {
+  box-shadow: 0 0 30px var(--accent-glow);
+}
 .landing-footer {
   font-family: var(--font-body);
   font-size: 10px;
+  line-height: 1.6;
   color: var(--text-muted);
-  margin-top: 60px;
-  letter-spacing: 2px;
+  margin-top: 14px;
+  letter-spacing: 1px;
+  text-align: center;
 }
 
 .landing-actions {
   display: flex;
-  justify-content: center;
-  gap: 14px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin: 0 auto 22px;
-  width: 460px;
-  max-width: 92vw;
+}
+.landing-actions .btn-enter {
+  flex: 1;
 }
 
 .file-list {
-  width: 460px;
-  max-width: 92vw;
   max-height: 38vh;
   overflow-y: auto;
-  margin: 0 auto 24px;
+  margin: 0 0 14px;
   text-align: left;
   border: 1px solid var(--border-color);
-  border-radius: 5px;
+  border-radius: var(--landing-radius);
   background: rgba(0, 0, 0, 0.55);
 }
+.file-list:empty {
+  display: none;
+}
 .file-row:first-child {
-  border-top-left-radius: 5px;
-  border-top-right-radius: 5px;
+  border-top-left-radius: var(--landing-radius);
+  border-top-right-radius: var(--landing-radius);
 }
 .file-row {
   display: flex;
@@ -214,8 +269,8 @@ body {
 }
 .file-row:last-child {
   border-bottom: none;
-  border-bottom-left-radius: 5px;
-  border-bottom-right-radius: 5px;
+  border-bottom-left-radius: var(--landing-radius);
+  border-bottom-right-radius: var(--landing-radius);
 }
 .file-row:hover {
   background: var(--bg-card-hover);
@@ -250,7 +305,7 @@ body {
 .file-enter {
   background: transparent;
   border: 1px solid var(--accent);
-  border-radius: 5px;
+  border-radius: var(--landing-radius);
   color: var(--accent);
   font-family: var(--font-title);
   font-size: 12px;
@@ -271,50 +326,93 @@ body {
   font-size: 12px;
   color: var(--text-muted);
   letter-spacing: 2px;
-  margin-bottom: 24px;
+  text-align: center;
+  padding: 14px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--landing-radius);
+  margin-bottom: 14px;
 }
 .file-create {
   display: flex;
   gap: 10px;
-  justify-content: center;
   align-items: center;
-  width: 460px;
-  max-width: 92vw;
-  margin: 0 auto;
 }
+
+/* Pages that work without a profile (WALL STREET market view, VAULTY game) */
+.landing-market {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.landing-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  text-align: left;
+  text-decoration: none;
+  color: var(--accent);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--landing-radius);
+  transition: all 0.3s;
+}
+.landing-tile:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-glow);
+  box-shadow: 0 0 30px var(--accent-glow);
+}
+.landing-tile svg {
+  flex-shrink: 0;
+}
+.landing-tile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.landing-tile-title {
+  font-family: var(--font-title);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+.landing-tile-description {
+  font-family: var(--font-body);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+@media (max-width: 480px) {
+  .landing-market {
+    grid-template-columns: 1fr;
+  }
+}
+
 .landing-tutorial {
   display: flex;
   justify-content: center;
-  gap: 12px;
-  width: 460px;
-  max-width: 92vw;
-  margin: 14px auto 0;
+  align-items: center;
+  gap: 10px;
+  margin-top: 32px;
 }
-
-/* Standalone MARKET VIEW button row (guest access, no profile required).
-   Styled and spaced like the OPEN PROFILE FILE action, sitting on its own
-   line just above the HOW IT WORKS / VERSIONS row. */
-.landing-market {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  width: 460px;
-  max-width: 92vw;
-  margin: 24px auto 0;
-}
-.landing-tutorial .btn-enter.ghost {
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+.landing-link {
+  background: none;
+  border: none;
+  padding: 4px;
+  font-family: var(--font-body);
   font-size: 11px;
-  font-weight: 500;
   letter-spacing: 3px;
-  padding: 8px 16px;
-  text-shadow: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s;
 }
-.landing-tutorial .btn-enter.ghost:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-  box-shadow: none;
+.landing-link:hover {
+  color: var(--accent);
+}
+.landing-link-separator {
+  color: var(--text-muted);
 }
 
 /* ===== MAKE IT RAIN EASTER EGG ===== */
@@ -361,7 +459,7 @@ body {
   flex: 1;
   background: #0a0a0a;
   border: 1px solid var(--border-color);
-  border-radius: 5px;
+  border-radius: var(--landing-radius);
   color: var(--accent);
   font-family: var(--font-body);
   letter-spacing: 2px;
@@ -397,8 +495,12 @@ body {
   flex-direction: column;
   background: var(--bg-secondary);
   border: 1px solid var(--border-accent);
-  box-shadow: 0 0 60px var(--accent-glow), 0 0 120px rgba(0, 0, 0, 0.9);
+  box-shadow:
+    0 0 60px var(--accent-glow),
+    0 0 120px rgba(0, 0, 0, 0.9);
   position: relative;
+  border-radius: var(--landing-radius);
+  overflow: hidden;
 }
 .tutorial-dialog::before {
   content: "";
@@ -1839,7 +1941,7 @@ body {
   color: var(--text-primary);
 }
 .ws-outlook-value {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 24px;
 }
 .ws-outlook-note {
@@ -1885,7 +1987,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
   overflow: hidden;
 }
 /* 5 cards per row on desktop; cards only shrink in width, height stays equal. */
@@ -1941,7 +2045,7 @@ body {
   height: 15px;
 }
 .ws-tick-value {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 20px;
   color: var(--text-primary);
   letter-spacing: 1px;
@@ -1962,7 +2066,7 @@ body {
   gap: 8px;
 }
 .ws-tick-change {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 1px;
@@ -2041,9 +2145,16 @@ body {
   gap: 6px;
   padding-right: 6px;
 }
-.ws-stock-list::-webkit-scrollbar { width: 5px; }
-.ws-stock-list::-webkit-scrollbar-track { background: transparent; }
-.ws-stock-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+.ws-stock-list::-webkit-scrollbar {
+  width: 5px;
+}
+.ws-stock-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ws-stock-list::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
 .ws-stock-item {
   display: flex;
   justify-content: space-between;
@@ -2054,7 +2165,9 @@ body {
   border-radius: var(--radius);
   padding: 8px 10px;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 .ws-stock-item:hover {
   border-color: var(--border-accent);
@@ -2104,7 +2217,7 @@ body {
 .ws-stock-item-price {
   width: 108px;
   text-align: right;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 15px;
   color: var(--text-primary);
   white-space: nowrap;
@@ -2116,12 +2229,16 @@ body {
 .ws-stock-item-change {
   width: 74px;
   text-align: right;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 14px;
   white-space: nowrap;
 }
-.ws-stock-item-change.pos { color: #33ff33; }
-.ws-stock-item-change.neg { color: #ff3333; }
+.ws-stock-item-change.pos {
+  color: #33ff33;
+}
+.ws-stock-item-change.neg {
+  color: #ff3333;
+}
 .ws-stock-chart-title {
   display: flex;
   align-items: baseline;
@@ -2142,17 +2259,21 @@ body {
   letter-spacing: 1px;
 }
 .ws-stock-chart-price {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 18px;
   color: var(--text-primary);
   margin-left: auto;
 }
 .ws-stock-chart-change {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 13px;
 }
-.ws-stock-chart-change.pos { color: #33ff33; }
-.ws-stock-chart-change.neg { color: #ff3333; }
+.ws-stock-chart-change.pos {
+  color: #33ff33;
+}
+.ws-stock-chart-change.neg {
+  color: #ff3333;
+}
 
 /* Taller stock panel so the candlestick + volume chart has room to breathe. */
 .ws-overview-stock {
