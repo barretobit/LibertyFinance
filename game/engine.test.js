@@ -352,6 +352,28 @@ test('dividends: paid in cash to the units held before the ex-date, minus the ex
   assert.deepStrictEqual([event.symbol, event.quantity, event.perUnitChf, event.amountChf], ['NESN.SW', 10, 3, 30]);
 });
 
+test('dividends: reinvested while it is on, they buy more of the same after tax and stamp duty', () => {
+  const market = fakeMarket({ 'NESN.SW': { '2026-04-01': 100, '2026-04-17': 100 }, '^SSMI': { '2026-04-01': 10000 } }, {}, { 'NESN.SW': { '2026-04-20': 3, '2026-05-20': 3 } });
+  const game = newGame('medium', '2026-04-01');
+  game.trades.push(GameEngine.buy(game, market, swissStock, { quantity: 10 }, '2026-04-01'));
+  game.reinvestPeriods = [{ from: '2026-04-10', to: '2026-05-01' }];
+  const before = GameEngine.replay(game, market, '2026-04-19');
+  const after = GameEngine.replay(game, market, '2026-04-20');
+  const netChf = 30 - zurichDividendTax(0, 30);
+  assertNear(after.cash, before.cash, 'no cash left over');
+  assertNear(after.positions[0].quantity, 10 + netChf / 1.00075 / 100, 'more units');
+  const reinvested = after.events.find((event) => event.reinvested);
+  assert.deepStrictEqual([reinvested.type, reinvested.priceChf], ['buy', 100]);
+  assertNear(reinvested.stampDutyChf, netChf - netChf / 1.00075, 'duty on the buy');
+  // Turned off on 1 May: the May dividend is paid in cash.
+  const may = GameEngine.replay(game, market, '2026-05-20');
+  assert.strictEqual(may.events.filter((event) => event.reinvested).length, 1);
+  assert.ok(may.cash > GameEngine.replay(game, market, '2026-05-19').cash, 'paid in cash');
+  // Without a recent price it stays cash too.
+  game.reinvestPeriods = [{ from: '2026-04-10' }];
+  assert.strictEqual(GameEngine.replay(game, market, '2026-05-20').events.filter((event) => event.reinvested).length, 1, 'the April price is too old in May');
+});
+
 test('dividends: a buy on the ex-date gets nothing, a sale on the ex-date still gets it', () => {
   const market = fakeMarket({ 'NESN.SW': { '2026-04-01': 100 }, '^SSMI': { '2026-04-01': 10000 } }, {}, { 'NESN.SW': { '2026-04-20': 3 } });
   const lateBuyer = newGame('medium', '2026-04-01');
@@ -531,6 +553,359 @@ test('day trade: only while the market is open, with the cash at hand, never tan
   assert.strictEqual(GameEngine.openDayTrade(game, market, swissStock, { amountChf: 5000 }, 100, sixSession, laterInSession).error, 'NOT ENOUGH CASH', 'open trades hold their cash');
   assert.strictEqual(GameEngine.closeDayTrade(game, market, 'NESN.SW', { quantity: 100 }, 100, laterInSession).error, 'YOU ONLY HOLD 60');
   assert.strictEqual(GameEngine.sell(game, market, 'NESN.SW', { fraction: 1 }, '2026-11-23', laterInSession).error, 'NOTHING TO SELL', 'day trades are not holdings');
+});
+
+// NESN.SW closes at 100 before the game starts, then lower each day; bars after the trading date are the future.
+const orderMarket = (extraCloses = {}) => fakeMarket({
+  'NESN.SW': Object.assign({ '2026-11-20': 100, '2026-11-24': 95, '2026-11-25': 89, '2026-11-26': 85 }, extraCloses),
+  '^SSMI': { '2026-11-20': 10000 },
+});
+const limitBuy = (fields) => Object.assign({ side: 'buy', type: 'limit' }, fields);
+const stopLoss = (fields) => Object.assign({ side: 'sell', type: 'stop', fraction: 1 }, fields);
+
+test('orders: only at a level the price has not reached, with the cash to buy or something to sell', () => {
+  const market = orderMarket();
+  const game = newGame('hard', '2026-11-23');
+  const place = (asset, fields) => GameEngine.placeOrder(game, market, asset, fields, '2026-11-23', duringSession);
+  assert.strictEqual(place(swissStock, limitBuy({ priceChf: 100, amountChf: 1000 })).error, 'A LIMIT BUY MUST BE BELOW THE PRICE');
+  assert.strictEqual(place(swissStock, limitBuy({ priceChf: 90, amountChf: 0 })).error, 'ENTER AN AMOUNT');
+  assert.strictEqual(place(swissStock, limitBuy({ priceChf: 0, amountChf: 1000 })).error, 'ENTER A PRICE');
+  assert.strictEqual(place(swissStock, limitBuy({ priceChf: 90, amountChf: 10000 })).error, 'NOT ENOUGH CASH', 'stamp duty on top');
+  assert.strictEqual(place(swissStock, { side: 'buy', type: 'stop', priceChf: 110, quantity: 1 }).error, 'UNKNOWN ORDER');
+  assert.strictEqual(place(swissStock, stopLoss({ priceChf: 90 })).error, 'NOTHING TO SELL');
+  assert.strictEqual(place(swissStock, { side: 'sell', type: 'limit', short: true, priceChf: 110, quantity: 1 }).error, 'UNKNOWN ORDER', 'short limits are day orders');
+
+  const order = place(swissStock, limitBuy({ priceChf: 90, quantity: 10 }));
+  assert.deepStrictEqual(order, {
+    at: duringSession, date: '2026-11-23', symbol: 'NESN.SW', class: 'stock', name: 'Nestle', side: 'buy', type: 'limit', priceChf: 90, quantity: 10,
+    quoteDate: '2026-11-20',
+  });
+  game.trades.push(GameEngine.buy(game, market, swissStock, { quantity: 10 }, '2026-11-23'));
+  assert.strictEqual(place(swissStock, stopLoss({ priceChf: 100 })).error, 'A STOP-LOSS MUST BE BELOW THE PRICE');
+  assert.strictEqual(place(swissStock, { side: 'sell', type: 'limit', priceChf: 100, fraction: 1 }).error, 'A LIMIT SELL MUST BE ABOVE THE PRICE');
+  assert.strictEqual(place(swissStock, stopLoss({ priceChf: 90, fraction: 0 })).error, 'NOTHING TO SELL');
+  assert.strictEqual(place(swissStock, stopLoss({ priceChf: 90 })).fraction, 1);
+});
+
+test('orders: a regular order fills at the first newer close that reaches its level, never before its own day', () => {
+  const market = orderMarket();
+  const game = newGame('hard', '2026-11-23');
+  const buyOrder = GameEngine.placeOrder(game, market, swissStock, limitBuy({ priceChf: 90, amountChf: 1000 }), '2026-11-23', duringSession);
+  assert.strictEqual(GameEngine.orderFill(market, buyOrder, '2026-11-24'), null, '95 is above the limit');
+  assert.deepStrictEqual(GameEngine.orderFill(market, buyOrder, '2026-11-30'), { date: '2026-11-25', priceChf: 89 });
+  const bought = GameEngine.buy(game, market, buyOrder, buyOrder, '2026-11-25');
+  assert.deepStrictEqual([bought.date, bought.priceChf, bought.amountChf], ['2026-11-25', 89, 1000], 'the order itself is the buy order');
+  game.trades.push(bought);
+
+  const stop = GameEngine.placeOrder(game, market, swissStock, stopLoss({ priceChf: 86 }), '2026-11-25', '2026-11-25T10:00:00.000Z');
+  assert.strictEqual(stop.quoteDate, '2026-11-25');
+  assert.deepStrictEqual(GameEngine.orderFill(market, stop, '2026-11-30'), { date: '2026-11-26', priceChf: 85 });
+  const sold = GameEngine.sell(game, market, 'NESN.SW', stop, '2026-11-26');
+  assertNear(sold.quantity, 1000 / 89, 'all of it');
+  assert.strictEqual(sold.priceChf, 85);
+  const takeProfit = GameEngine.placeOrder(game, market, swissStock, { side: 'sell', type: 'limit', priceChf: 95, fraction: 0.5 }, '2026-11-25', '2026-11-25T10:00:00.000Z');
+  assert.strictEqual(GameEngine.orderFill(market, takeProfit, '2026-11-30'), null, 'never back at 95');
+
+  // A close that comes in late, dated before the order's day, still fills it, on the order's own day.
+  assert.deepStrictEqual(GameEngine.orderFill(orderMarket({ '2026-11-21': 85 }), buyOrder, '2026-11-23'), { date: '2026-11-23', priceChf: 85 });
+});
+
+test('trailing stop: follows the best close and sells when the price falls its trail from it', () => {
+  // Up to 120, then down: a 10% trail sells at the first close at or below 108.
+  const market = fakeMarket({
+    'NESN.SW': { '2026-11-20': 100, '2026-11-24': 110, '2026-11-25': 120, '2026-11-26': 112, '2026-11-27': 107 },
+    '^SSMI': { '2026-11-20': 10000 },
+  });
+  const game = newGame('hard', '2026-11-23');
+  game.trades.push(GameEngine.buy(game, market, swissStock, { quantity: 10 }, '2026-11-23'));
+  const place = (fields) => GameEngine.placeOrder(game, market, swissStock, fields, '2026-11-23', duringSession);
+  assert.strictEqual(place({ side: 'sell', type: 'trail', trailPercent: 1.5, fraction: 1 }).error, 'ENTER A TRAIL ABOVE 0% AND BELOW 100%');
+  assert.strictEqual(place({ side: 'buy', type: 'trail', trailPercent: 0.1, quantity: 1 }).error, 'UNKNOWN ORDER', 'it only closes something');
+  const trail = place({ side: 'sell', type: 'trail', trailPercent: 0.1, fraction: 1 });
+  assert.deepStrictEqual([trail.type, trail.referenceChf, trail.priceChf, trail.trailPercent], ['trail', 100, 90, 0.1]);
+  assert.strictEqual(GameEngine.orderFill(market, trail, '2026-11-26'), null, '112 is above 108');
+  assert.deepStrictEqual(GameEngine.orderFill(market, trail, '2026-11-30'), { date: '2026-11-27', priceChf: 107 });
+  const trigger = GameEngine.orderTrigger(trail);
+  GameEngine.newCloses(market, trail, '2026-11-26').forEach((close) => trigger(close.priceChf));
+  assertNear(trigger.level(), 108, 'the level now');
+
+  // On a shorted day trade it buys back when the price rises its trail from the lowest.
+  const buyback = GameEngine.orderTrigger({ side: 'buy', type: 'trail', trailPercent: 0.05, referenceChf: 100 });
+  assert.deepStrictEqual([90, 94, 94.5, 95].map((priceChf) => buyback(priceChf)), [false, false, true, true]);
+});
+
+test('day orders: fill at the first simulated step that reaches the level, only while the market is open', () => {
+  const opensMs = Date.parse(sixSession.opensAt);
+  const day = { session: sixSession, prices: [100, 101, 99, 98, 97, 102] };
+  const atOrBelow98 = (priceChf) => priceChf <= 98;
+  assert.deepStrictEqual(GameIntraday.firstStepReaching(day, opensMs, opensMs + 60000, atOrBelow98), { at: new Date(opensMs + 30000).toISOString(), priceChf: 98 });
+  assert.strictEqual(GameIntraday.firstStepReaching(day, opensMs + 30000, opensMs + 40000, atOrBelow98).priceChf, 97, 'only steps after the start');
+  assert.strictEqual(GameIntraday.firstStepReaching(day, opensMs, opensMs + 25000, atOrBelow98), null, 'not reached yet');
+
+  const { market, game } = dayTradeGame();
+  const placeDay = (fields, priceChf, now) => GameEngine.placeDayOrder(game, market, swissStock, fields, priceChf, sixSession, now);
+  assert.strictEqual(placeDay(limitBuy({ priceChf: 95, amountChf: 1000 }), 100, afterClose).error, 'MARKET CLOSED');
+  assert.strictEqual(placeDay(limitBuy({ priceChf: 101, amountChf: 1000 }), 100, duringSession).error, 'A LIMIT BUY MUST BE BELOW THE PRICE');
+  assert.strictEqual(placeDay(stopLoss({ priceChf: 95, lotAt: duringSession }), 100, duringSession).error, 'NO OPEN DAY TRADE');
+  assert.strictEqual(GameEngine.placeDayOrder(game, market, familyCar, limitBuy({ priceChf: 95, quantity: 1 }), 100, sixSession, duringSession).error, 'NO ORDERS FOR THIS ASSET');
+  const buyOrder = placeDay(limitBuy({ priceChf: 95, amountChf: 1000 }), 100, duringSession);
+  assert.deepStrictEqual([buyOrder.intraday, buyOrder.closesAt, buyOrder.date], [true, sixSession.closesAt, '2026-11-23']);
+
+  const filledAt = '2026-11-23T11:00:00.000Z';
+  const bought = GameEngine.openDayTrade(game, market, buyOrder, buyOrder, 94, sixSession, filledAt);
+  assertNear(bought.quantity, 1000 / 94, 'the order itself is the buy order');
+  game.trades.push(bought);
+  const stop = placeDay(stopLoss({ priceChf: 90, lotAt: filledAt }), 94, laterInSession);
+  assert.strictEqual(stop.lotAt, filledAt);
+  const sold = GameEngine.closeDayTrade(game, market, 'NESN.SW', stop, 89, '2026-11-23T15:00:00.000Z');
+  assertNear(sold.quantity, 1000 / 94, 'the whole day trade');
+  assert.strictEqual(sold.lotAt, filledAt);
+});
+
+test('short day trade: sold first and bought back, gains when the price falls, holds its amount as cash', () => {
+  const { market, game } = dayTradeGame();
+  const shortSale = GameEngine.openDayTrade(game, market, swissStock, { amountChf: 5000, short: true }, 100, sixSession, duringSession);
+  assert.deepStrictEqual([shortSale.side, shortSale.short, shortSale.quantity], ['sell', true, 50]);
+  game.trades.push(shortSale);
+  const open = GameEngine.replay(game, market, '2026-11-23', laterInSession);
+  assertNear(open.cash, 10000 - 5003.75, 'cash held while open');
+  assertNear(open.days[0].netWorth, 10000 - 3.75, 'net worth counts it at what it got');
+  assert.deepStrictEqual(open.dayTrades.map((item) => [item.short, item.quantity]), [[true, 50]]);
+
+  const buyback = GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1, lotAt: duringSession }, 90, laterInSession);
+  assert.deepStrictEqual([buyback.side, buyback.short, buyback.quantity], ['buy', true, 50]);
+  game.trades.push(buyback);
+  const state = GameEngine.replay(game, market, '2026-11-23', afterClose);
+  const profitChf = 5000 - 3.75 - 4500 - 4500 * 0.00075;
+  assertNear(state.cash, 10000 + profitChf, 'cash after the round trip');
+  assertNear(state.dayTradeProfitChf, profitChf, 'day trade profit');
+  assert.strictEqual(state.trader.status, 'review', 'a quick round trip');
+  const events = state.events.filter((event) => event.intraday);
+  assert.deepStrictEqual(events.map((event) => event.type), ['sell', 'buy']);
+  assertNear(events[1].cashChf, 2 * 5000 - 4500 - 4500 * 0.00075, 'the buyback gives back the amount held and the gain');
+
+  // Bought back higher, it loses; still open at the close, it is reverted like a buy.
+  const losing = dayTradeGame();
+  losing.game.trades.push(GameEngine.openDayTrade(losing.game, market, swissStock, { quantity: 10, short: true }, 100, sixSession, duringSession));
+  losing.game.trades.push(GameEngine.closeDayTrade(losing.game, market, 'NESN.SW', { quantity: 4, short: true }, 120, laterInSession));
+  const lost = GameEngine.replay(losing.game, market, '2026-11-23', afterClose);
+  assertNear(lost.dayTradeProfitChf, 400 - 0.3 - 480 - 480 * 0.00075, 'a loss on the 4 bought back');
+  assertNear(lost.cash, 10000 + lost.dayTradeProfitChf, 'the other 6 are reverted');
+});
+
+test('short day trade: closes keep buys and short sales apart, stop-losses on a short buy it back higher', () => {
+  const { market, game } = dayTradeGame();
+  const shortAt = '2026-11-23T09:00:00.000Z';
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { quantity: 10, short: true }, 100, sixSession, shortAt));
+  game.trades.push(GameEngine.openDayTrade(game, market, swissStock, { quantity: 20 }, 100, sixSession, duringSession));
+  assert.strictEqual(GameEngine.closeDayTrade(game, market, 'NESN.SW', { quantity: 15, short: true }, 100, laterInSession).error, 'YOU ONLY SHORTED 10');
+  assertNear(GameEngine.closeDayTrade(game, market, 'NESN.SW', { fraction: 1 }, 100, laterInSession).quantity, 20, 'without short, only the buy');
+
+  const placeDay = (fields) => GameEngine.placeDayOrder(game, market, swissStock, fields, 100, sixSession, laterInSession);
+  assert.strictEqual(placeDay({ side: 'buy', type: 'stop', priceChf: 95, fraction: 1, lotAt: shortAt }).error, 'A STOP-LOSS MUST BE ABOVE THE PRICE');
+  assert.strictEqual(placeDay({ side: 'sell', type: 'stop', priceChf: 95, fraction: 1, lotAt: shortAt }).error, 'NO OPEN DAY TRADE', 'a short is closed by buying');
+  assert.strictEqual(placeDay({ side: 'buy', type: 'stop', priceChf: 105, fraction: 1, lotAt: duringSession }).error, 'NO OPEN DAY TRADE', 'a buy is closed by selling');
+  const stop = placeDay({ side: 'buy', type: 'stop', priceChf: 105, fraction: 1, lotAt: shortAt });
+  assert.deepStrictEqual([stop.side, stop.type, stop.fraction, stop.lotAt], ['buy', 'stop', 1, shortAt]);
+  assert.ok(GameEngine.orderReached(stop, 106) && !GameEngine.orderReached(stop, 104), 'reached at or above');
+  const takeProfit = placeDay({ side: 'buy', type: 'limit', priceChf: 90, fraction: 1, lotAt: shortAt });
+  assert.strictEqual(takeProfit.fraction, 1, 'a limit buy on a short buys it back');
+  const filled = GameEngine.closeDayTrade(game, market, 'NESN.SW', stop, 106, '2026-11-23T15:00:00.000Z');
+  assert.deepStrictEqual([filled.side, filled.short, filled.quantity], ['buy', true, 10]);
+});
+
+test('short day trade: a limit order opens one at or above its level', () => {
+  const { market, game } = dayTradeGame();
+  const placeDay = (fields) => GameEngine.placeDayOrder(game, market, swissStock, fields, 100, sixSession, duringSession);
+  assert.strictEqual(placeDay({ side: 'sell', type: 'limit', short: true, priceChf: 100, amountChf: 1000 }).error, 'A LIMIT SELL MUST BE ABOVE THE PRICE');
+  assert.strictEqual(placeDay({ side: 'sell', type: 'limit', short: true, priceChf: 105, amountChf: 20000 }).error, 'NOT ENOUGH CASH', 'it holds its amount like a buy');
+  assert.strictEqual(placeDay({ side: 'sell', type: 'stop', short: true, priceChf: 95, amountChf: 1000 }).error, 'UNKNOWN ORDER');
+  const order = placeDay({ side: 'sell', type: 'limit', short: true, priceChf: 105, amountChf: 1050 });
+  assert.deepStrictEqual([order.side, order.short, order.amountChf, order.fraction], ['sell', true, 1050, undefined]);
+  assert.ok(GameEngine.orderReached(order, 106) && !GameEngine.orderReached(order, 104), 'reached at or above');
+  const shortSale = GameEngine.openDayTrade(game, market, order, order, 106, sixSession, laterInSession);
+  assert.deepStrictEqual([shortSale.side, shortSale.short], ['sell', true]);
+  assertNear(shortSale.quantity, 1050 / 106, 'the amount at the price reached');
+});
+
+test('lombard loan: cash against holdings, monthly interest, a margin call takes the cash first, then sells', () => {
+  // VOO (an ETF, 60% lending value) halves in March.
+  const market = fakeMarket({ VOO: { '2026-01-02': 500, '2026-03-02': 250 }, '^SSMI': { '2026-01-02': 10000 } });
+  const game = newGame('hard', '2026-01-02');
+  game.trades.push(GameEngine.buy(game, market, usEtf, { quantity: 10 }, '2026-01-02'));
+  assert.strictEqual(GameEngine.replay(game, market, '2026-01-02').lendingValueChf, 3000);
+  assert.strictEqual(GameEngine.loanTrade(game, market, 'borrow', 3500, '2026-01-02').error, 'MORE THAN YOUR HOLDINGS LET YOU BORROW');
+  assert.strictEqual(GameEngine.loanTrade(game, market, 'repay', 100, '2026-01-02').error, 'MORE THAN YOU OWE');
+  const borrowed = GameEngine.replay(game, market, '2026-01-02');
+  game.trades.push(GameEngine.loanTrade(game, market, 'borrow', 3000, '2026-01-02'));
+  const state = GameEngine.replay(game, market, '2026-01-02');
+  assertNear(state.cash - borrowed.cash, 3000, 'cash paid out');
+  assertNear(state.days[0].netWorth, borrowed.days[0].netWorth, 'net worth unchanged');
+  const january = GameEngine.replay(game, market, '2026-01-31').events.find((event) => event.type === 'month');
+  assertNear(january.lombardInterestChf, 3000 * 0.03 * 30 / 365, 'interest for 30 days');
+
+  // The drop halves the lending value to 1500: the cash pays the 1500 above it.
+  const march = GameEngine.replay(game, market, '2026-03-02');
+  const margin = march.events.find((event) => event.type === 'margin');
+  assert.ok(margin && margin.fromCashChf > 0, 'cash pays first');
+  assert.ok(march.loanChf <= march.lendingValueChf + 0.01, 'loan back within the lending value');
+
+  // With the borrowed cash spent too, holdings are sold.
+  const poor = newGame('hard', '2026-01-02');
+  poor.startCash = 5000;
+  poor.trades.push(GameEngine.buy(poor, market, usEtf, { quantity: 9.9 }, '2026-01-02'));
+  poor.trades.push(GameEngine.loanTrade(poor, market, 'borrow', 2900, '2026-01-02'));
+  poor.trades.push({ date: '2026-01-02', side: 'buy', symbol: 'VOO', class: 'etf', name: 'Vanguard S&P 500', quantity: 5.8, priceChf: 500, amountChf: 2900, stampDutyChf: 0 });
+  const called = GameEngine.replay(poor, market, '2026-03-02');
+  const sale = called.events.find((event) => event.marginCall);
+  assert.ok(sale && sale.type === 'sell', 'holdings sold');
+  assertNear(called.loanChf, called.lendingValueChf, 'sold just enough');
+
+  // Everything sold and the cash gone, the rest of the loan stays owed without a margin call line every day.
+  const crash = fakeMarket({ VOO: { '2026-01-02': 500, '2026-01-05': 100 }, '^SSMI': { '2026-01-02': 10000 } });
+  const broke = newGame('hard', '2026-01-02', 'geneva');
+  broke.startCash = 5000;
+  broke.trades.push({ date: '2026-01-02', side: 'buy', symbol: 'VOO', class: 'etf', name: 'VOO', quantity: 9.99, priceChf: 500, amountChf: 4995, stampDutyChf: 0 });
+  broke.trades.push({ date: '2026-01-02', side: 'borrow', amountChf: 2900 });
+  broke.trades.push({ date: '2026-01-02', side: 'buy', symbol: 'VOO', class: 'etf', name: 'VOO', quantity: 5.8, priceChf: 500, amountChf: 2900, stampDutyChf: 0 });
+  const owed = GameEngine.replay(broke, crash, '2026-01-20');
+  assert.strictEqual(owed.events.filter((event) => event.type === 'margin').length, 1);
+  assert.ok(owed.loanChf > 0 && owed.positions.length === 0, 'the rest is still owed');
+});
+
+test('short holdings: 150% collateral, borrow fee and dividends paid, a gain when bought back lower', () => {
+  const market = fakeMarket({ 'NESN.SW': { '2026-01-02': 100, '2026-02-02': 80 }, '^SSMI': { '2026-01-02': 10000 } }, {}, { 'NESN.SW': { '2026-01-20': 2 } });
+  const game = newGame('medium', '2026-01-02');
+  assert.strictEqual(GameEngine.openShort(game, market, familyCar, { quantity: 1 }, '2026-01-02').error, 'ONLY STOCKS AND ETFS CAN BE SHORTED');
+  assert.strictEqual(GameEngine.coverShort(game, market, 'NESN.SW', { fraction: 1 }, '2026-01-02').error, 'NOTHING TO BUY BACK');
+  const before = GameEngine.replay(game, market, '2026-01-02');
+  const shortSale = GameEngine.openShort(game, market, swissStock, { quantity: 100 }, '2026-01-02');
+  assert.deepStrictEqual([shortSale.side, shortSale.short, shortSale.amountChf], ['sell', true, 10000]);
+  game.trades.push(shortSale);
+  const open = GameEngine.replay(game, market, '2026-01-02');
+  assertNear(before.cash - open.cash, 5000 + 7.5, 'half the amount and the duty from the cash');
+  assertNear(open.days[0].netWorth, before.days[0].netWorth - 7.5, 'only the duty is lost');
+  assert.deepStrictEqual(open.shorts.map((short) => [short.symbol, short.quantity, short.heldChf, short.valueChf]), [['NESN.SW', 100, 15000, 10000]]);
+
+  const january = GameEngine.replay(game, market, '2026-01-31');
+  const paid = january.events.find((event) => event.type === 'dividend');
+  assert.deepStrictEqual([paid.short, paid.amountChf], [true, -200], 'the dividend goes to the lender');
+  assertNear(january.events.find((event) => event.type === 'month').borrowFeeChf, 10000 * 0.01 * 30 / 365, 'borrow fee for 30 days');
+
+  game.trades.push(GameEngine.coverShort(game, market, 'NESN.SW', { fraction: 1 }, '2026-02-02'));
+  const closed = GameEngine.replay(game, market, '2026-02-02');
+  const buyback = closed.events.find((event) => event.short && event.type === 'buy');
+  assertNear(buyback.profitChf, 10000 - 7.5 - 8000 - 6, 'sold at 100, bought back at 80, duty on both');
+  assertNear(buyback.cashChf, 15000 - 8000 - 6, 'the collateral back, less the buyback');
+  assert.strictEqual(closed.shorts.length, 0);
+  assert.strictEqual(closed.trader.status, 'review', 'a short counts as a quick sale');
+});
+
+test('short holdings: bought back by the bank once a rise eats into the collateral', () => {
+  const market = fakeMarket({ 'NESN.SW': { '2026-01-02': 100, '2026-01-05': 115, '2026-01-06': 121 }, '^SSMI': { '2026-01-02': 10000 } });
+  const game = newGame('medium', '2026-01-02');
+  game.trades.push(GameEngine.openShort(game, market, swissStock, { quantity: 10 }, '2026-01-02'));
+  assert.strictEqual(GameEngine.replay(game, market, '2026-01-05').shorts.length, 1, 'still held at +15%');
+  const called = GameEngine.replay(game, market, '2026-01-06');
+  assert.strictEqual(called.shorts.length, 0, 'bought back above +20%');
+  const buyback = called.events.find((event) => event.marginCall);
+  assert.deepStrictEqual([buyback.type, buyback.short, buyback.priceChf], ['buy', true, 121]);
+  assertNear(buyback.profitChf, 1000 - 0.75 - 1210 - 0.9075, 'the loss');
+});
+
+test('options: Black-Scholes prices, monthly expiries on the third Friday, strikes around the price', () => {
+  assert.ok(Math.abs(GameEngine.optionPrice('call', 100, 100, 1, 0.2) - 7.9656) < 0.0001, 'at the money for a year at 20%');
+  assertNear(GameEngine.optionPrice('call', 110, 100, 0.5, 0.3) - GameEngine.optionPrice('put', 110, 100, 0.5, 0.3), 10, 'put-call parity');
+  assert.strictEqual(GameEngine.optionPrice('put', 80, 100, 0, 0.3), 20, 'at expiry, what exercising pays');
+  const chain = GameEngine.optionChain(orderMarket(), swissStock, '2026-11-23');
+  assert.deepStrictEqual(chain.expiries, ['2026-12-18', '2027-01-15', '2027-02-19'], 'not November: under a week away');
+  assert.deepStrictEqual(chain.strikes, [80, 85, 90, 95, 100, 105, 110, 115, 120]);
+  assert.strictEqual(chain.volatility, 0.25, 'the default without market.volatility');
+});
+
+// NESN.SW at 100 when the game starts, then at the close of the December expiry.
+const optionMarket = (expiryPrice) => fakeMarket({ 'NESN.SW': { '2026-11-20': 100, '2026-12-18': expiryPrice }, '^SSMI': { '2026-11-20': 10000 } });
+const option = (fields) => Object.assign({ expiry: '2026-12-18', quantity: 10 }, fields);
+
+test('options: a bought call costs its premium and pays out in cash after expiry', () => {
+  const market = optionMarket(120);
+  const game = newGame('medium', '2026-11-23');
+  assert.strictEqual(GameEngine.openOption(game, market, familyCar, option({ kind: 'call', strike: 100 }), '2026-11-23', duringSession).error,
+    'OPTIONS ARE FOR STOCKS AND ETFS ONLY');
+  assert.strictEqual(GameEngine.openOption(game, market, swissStock, option({ kind: 'call', strike: 101 }), '2026-11-23', duringSession).error, 'PICK A STRIKE');
+  const before = GameEngine.replay(game, market, '2026-11-23');
+  const call = GameEngine.openOption(game, market, swissStock, option({ kind: 'call', strike: 100 }), '2026-11-23', duringSession);
+  assert.deepStrictEqual([call.side, call.option.written, call.at], ['buy', false, duringSession]);
+  assertNear(call.priceChf, GameEngine.optionPrice('call', 100, 100, 25 / 365, 0.25), 'priced now');
+  game.trades.push(call);
+  const open = GameEngine.replay(game, market, '2026-11-23');
+  assertNear(before.cash - open.cash, call.amountChf, 'premium paid');
+  assertNear(open.days[0].netWorth, before.days[0].netWorth, 'worth what it cost');
+  assert.strictEqual(open.options.length, 1);
+
+  const onExpiry = GameEngine.replay(game, market, '2026-12-18');
+  assert.strictEqual(onExpiry.options.length, 1, 'still open on its expiry day');
+  const after = GameEngine.replay(game, market, '2026-12-19');
+  const expiry = after.events.find((event) => event.type === 'expiry');
+  assert.strictEqual(expiry.cashChf, 200, '10 units, 20 above the strike');
+  assertNear(expiry.profitChf, 200 - call.amountChf, 'gain after the premium');
+  assert.strictEqual(after.options.length, 0);
+});
+
+test('options: covered calls lock their units and deliver them, cash-secured puts hold cash and buy', () => {
+  const market = optionMarket(120);
+  const game = newGame('medium', '2026-11-23');
+  const writeCall = (quantity) => GameEngine.openOption(game, market, swissStock, option({ kind: 'call', strike: 110, written: true, quantity: quantity }), '2026-11-23', duringSession);
+  assert.strictEqual(writeCall(10).error, 'NOT ENOUGH UNITS TO COVER THE CALL');
+  game.trades.push(GameEngine.buy(game, market, swissStock, { quantity: 10 }, '2026-11-23'));
+  const call = writeCall(10);
+  assert.strictEqual(call.side, 'sell', 'written: sold');
+  game.trades.push(call);
+  assert.strictEqual(writeCall(1).error, 'NOT ENOUGH UNITS TO COVER THE CALL', 'units cover one call only');
+  assert.strictEqual(GameEngine.sell(game, market, 'NESN.SW', { fraction: 1 }, '2026-11-23').error, 'ALL UNITS COVER WRITTEN CALLS');
+  const assigned = GameEngine.replay(game, market, '2026-12-19');
+  assert.strictEqual(assigned.positions.length, 0, 'units delivered at the strike');
+  const delivery = assigned.events.find((event) => event.assigned);
+  assert.deepStrictEqual([delivery.type, delivery.quantity, delivery.priceChf], ['sell', 10, 110]);
+  assertNear(assigned.events.find((event) => event.type === 'expiry').profitChf, call.amountChf - 100, 'premium kept, 10 above the strike given up');
+
+  const putGame = newGame('medium', '2026-11-23');
+  const putMarket = optionMarket(80);
+  const put = GameEngine.openOption(putGame, putMarket, swissStock, option({ kind: 'put', strike: 90, written: true }), '2026-11-23', duringSession);
+  putGame.trades.push(put);
+  const held = GameEngine.replay(putGame, putMarket, '2026-11-23');
+  assertNear(GameEngine.replay(newGame('medium', '2026-11-23'), putMarket, '2026-11-23').cash - held.cash, 900 - put.amountChf, 'strike times units held, premium received');
+  const bought = GameEngine.replay(putGame, putMarket, '2026-12-19');
+  assert.deepStrictEqual(bought.positions.map((position) => [position.symbol, position.quantity, position.lots[0].priceChf]), [['NESN.SW', 10, 90]]);
+});
+
+test('options: closed early at their price now, a written one bought back', () => {
+  const market = fakeMarket({ 'NESN.SW': { '2026-11-20': 100, '2026-12-01': 100 }, '^SSMI': { '2026-11-20': 10000 } });
+  const game = newGame('medium', '2026-11-23');
+  const put = GameEngine.openOption(game, market, swissStock, option({ kind: 'put', strike: 95 }), '2026-11-23', duringSession);
+  game.trades.push(put);
+  const sale = GameEngine.closeOption(game, market, duringSession, { fraction: 0.5 }, '2026-12-01', '2026-12-01T10:00:00.000Z');
+  assert.deepStrictEqual([sale.side, sale.optionAt, sale.quantity], ['sell', duringSession, 5]);
+  assertNear(sale.priceChf, GameEngine.optionPrice('put', 100, 95, 17 / 365, 0.25), 'less time left, worth less');
+  game.trades.push(sale);
+  const state = GameEngine.replay(game, market, '2026-12-01');
+  assert.strictEqual(state.options[0].quantity, 5);
+  assertNear(state.events.find((event) => event.optionAt).profitChf, (sale.priceChf - put.priceChf) * 5, 'time decay lost');
+  assert.strictEqual(GameEngine.closeOption(game, market, 'nope', { fraction: 1 }, '2026-12-01').error, 'NO OPEN OPTION');
+});
+
+test('replay: a close with nothing open to close is skipped, never cash from nothing or a crash', () => {
+  const market = fakeMarket({ 'NESN.SW': { '2026-11-20': 100 }, '^SSMI': { '2026-11-20': 10000 } });
+  const game = newGame('medium', '2026-11-23');
+  const before = GameEngine.replay(game, market, '2026-11-24');
+  const trade = { date: '2026-11-23', symbol: 'NESN.SW', class: 'stock', name: 'Nestle', quantity: 10, priceChf: 100, amountChf: 1000, stampDutyChf: 0.75 };
+  game.trades.push(Object.assign({ side: 'sell', intraday: true, at: duringSession }, trade));
+  game.trades.push(Object.assign({ side: 'buy', short: true }, trade));
+  game.trades.push(Object.assign({ side: 'sell', at: duringSession, optionAt: 'gone', option: { kind: 'call', strike: 100, expiry: '2026-12-18', written: false, volatility: 0.2 } }, trade));
+  const after = GameEngine.replay(game, market, '2026-11-24');
+  assert.strictEqual(after.cash, before.cash);
+  assert.strictEqual(after.events.length, before.events.length, 'no history');
+  assert.strictEqual(after.trader.volumeMultiple, 0, 'no volume');
 });
 
 test('saves: version 1 games become a Zürich player with metals in grams, file names are free', () => {

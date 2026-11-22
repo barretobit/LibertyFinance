@@ -40,6 +40,16 @@ const GAME_BUY_CATEGORIES = {
       groupOf: (asset) => asset.group.replace(/^.*: /, ''), byPrice: true,
     }))),
 };
+// Options are on stocks and ETFs.
+const GAME_OPTION_CATEGORIES = GAME_BUY_CATEGORIES.market.filter((category) => category.label === 'STOCKS' || category.label === 'ETFS');
+// The strategies of the options tab: the option each opens and what it means for the player.
+const GAME_OPTION_STRATEGIES = {
+  'buy-call': { kind: 'call', written: false, note: 'THE RIGHT TO BUY AT THE STRIKE: GAINS WHAT THE PRICE ENDS ABOVE IT, LOSES AT MOST THE PREMIUM.' },
+  'buy-put': { kind: 'put', written: false, note: 'THE RIGHT TO SELL AT THE STRIKE: GAINS WHAT THE PRICE ENDS BELOW IT, LOSES AT MOST THE PREMIUM.' },
+  'protective-put': { kind: 'put', written: false, protective: true, note: 'A PUT ON UNITS YOU HOLD: INSURANCE THAT PAYS WHAT THE PRICE ENDS BELOW THE STRIKE.' },
+  'covered-call': { kind: 'call', written: true, note: 'SELLS A CALL ON UNITS YOU HOLD: YOU KEEP THE PREMIUM, BUT YOUR UNITS GO AT THE STRIKE IF THE PRICE ENDS ABOVE IT.' },
+  'secured-put': { kind: 'put', written: true, note: 'SELLS A PUT WITH CASH SET ASIDE: YOU KEEP THE PREMIUM, BUT BUY THE UNITS AT THE STRIKE IF THE PRICE ENDS BELOW IT.' },
+};
 // Who takes the cut when a tangible is sold.
 const GAME_SELLER_LABELS = { car: 'DEALER', watch: 'DEALER', art: 'AUCTION HOUSE', house: 'ESTATE AGENT' };
 
@@ -68,6 +78,20 @@ const GamePage = {
   dayZoom: '1H',
   // Day trades are bought by 'amount' (CHF) or 'quantity' (units).
   dayMode: 'amount',
+  // The buy dialog and the day trading panel buy 'now' or place a 'limit' order.
+  buyKind: 'now',
+  // The buy dialog buys ('long') or shorts a stock or ETF ('short').
+  buyDirection: 'long',
+  dayKind: 'now',
+  // The day trading panel buys ('long') or sells short ('short').
+  dayDirection: 'long',
+  // The options tab's strategy (a GAME_OPTION_STRATEGIES key) and category.
+  optionStrategy: 'buy-call',
+  optionCategory: 'STOCKS',
+  // What the sell order dialog is for: { symbol, lotAt (an open day trade's buy, else null), type, fraction }.
+  sellOrder: null,
+  // True while reached orders are being saved as trades.
+  settlingOrders: false,
 };
 // Day trading chart zooms: how much time the chart shows, null for the whole session.
 const GAME_DAY_ZOOMS = { '15M': 15 * 60000, '1H': 60 * 60000, '4H': 4 * 60 * 60000, DAY: null };
@@ -143,9 +167,17 @@ function gameBuildMarket(file, dividends) {
   };
   // Every daily close on or before `date`, oldest first, in the quote currency: for the day trading volatility.
   const closes = (symbol, date) => (data[symbol] || []).filter((bar) => bar.date <= date && bar.close != null).map((bar) => bar.close);
+  // The yearly volatility of the daily closes up to `date`, for pricing options; a day's closes never change, so it is kept.
+  const volatilities = new Map();
+  const volatility = (symbol, date) => {
+    const key = symbol + '|' + date;
+    if (!volatilities.has(key)) volatilities.set(key, GameIntraday.dailyVolatility(closes(symbol, date)) * Math.sqrt(252));
+    return volatilities.get(key);
+  };
   return {
     quote: quote,
     closes: closes,
+    volatility: volatility,
     benchmark: (date) => { const benchmarkQuote = quote(GAME_BENCHMARK_SYMBOL, date); return benchmarkQuote ? benchmarkQuote.priceChf : null; },
     benchmarkDividendYield: GAME_BENCHMARK_DIVIDEND_YIELD,
     dividend: dividend,
@@ -349,12 +381,14 @@ function gameRenderStart() {
 function gameRenderStats(state, today) {
   const days = state.days;
   const last = days[days.length - 1];
-  const previous = days.length > 1 ? days[days.length - 2] : null;
+  // The first day is measured from the start cash, so its trades show up in TODAY too.
+  const startCash = GamePage.game.startCash;
+  const previous = days.length > 1 ? days[days.length - 2] : { netWorth: startCash, moneyIn: startCash };
   const invested = state.positions.reduce((sum, position) => sum + position.valueChf, 0) + state.dayTrades.reduce((sum, position) => sum + position.amountChf, 0);
   const totalChange = last.moneyIn > 0 ? last.netWorth / last.moneyIn - 1 : null;
   const benchmarkChange = last.benchmark != null && last.moneyIn > 0 ? last.benchmark / last.moneyIn - 1 : null;
   // Salary and bills paid today are not a gain or a loss.
-  const dayChange = previous ? (last.netWorth - previous.netWorth) - (last.moneyIn - previous.moneyIn) : 0;
+  const dayChange = (last.netWorth - previous.netWorth) - (last.moneyIn - previous.moneyIn);
   const traderText = { private: 'PRIVATE INVESTOR', review: 'UNDER REVIEW', risk: 'PRO TRADER RISK' }[state.trader.status];
   const traderTitle = 'This year: ' + state.trader.shortSales + ' sale(s) held under 6 months, trade volume ' +
     state.trader.volumeMultiple.toFixed(1) + 'x your wealth at the start of the year (limit 5x).';
@@ -380,19 +414,21 @@ function gameRenderStats(state, today) {
   document.getElementById('game-money').innerHTML = group('MONEY', [
     stat('INVESTED', gameMoney(invested, today)),
     stat('MORTGAGES', state.mortgageChf > 0 ? '-' + gameMoney(state.mortgageChf, today) : gameMoney(0, today), state.mortgageChf > 0 ? 'game-neg' : ''),
+    stat('LOMBARD LOAN', state.loanChf > 0 ? '-' + gameMoney(state.loanChf, today) : gameMoney(0, today), state.loanChf > 0 ? 'game-neg' : ''),
     stat('MONEY PUT IN', gameMoney(last.moneyIn, today), '', 'Your start cash plus what you saved from your salary after expenses.'),
   ]);
   // Saved per month is in the budget table beside this card.
   document.getElementById('game-costs').innerHTML = group('SINCE YOU STARTED', [
     stat('DIVIDENDS', gameMoney(state.dividendsReceived, today), '', 'Dividends paid to you before income tax. The tax on them is in the taxes paid.'),
-    stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '', 'Wealth tax, income tax on dividends, property gains tax, stamp duty, purchase costs and dealer cuts.'),
+    stat('TAXES &amp; FEES PAID', gameMoney(state.taxesPaid + state.feesPaid, today), '',
+      'Wealth tax, income tax on dividends, property gains tax, stamp duty, purchase costs, dealer cuts and Lombard interest.'),
     stat('EXPENSES PAID', gameMoney(state.expensesPaid, today)),
     stat('TAX STATUS THIS YEAR', traderText, 'game-trader-' + state.trader.status, traderTitle),
   ]);
 }
 
 // The board's tabs; the open one is kept in the URL hash so a reload stays on it.
-const GAME_TABS = ['overview', 'portfolio', 'day-trading', 'budget', 'history'];
+const GAME_TABS = ['overview', 'portfolio', 'day-trading', 'options', 'budget', 'history'];
 function gameShowTab(tab) {
   const open = GAME_TABS.includes(tab) ? tab : 'overview';
   history.replaceState(null, '', '#' + open);
@@ -441,6 +477,10 @@ function gameRenderChart(state) {
 
 function gameRenderHoldings(state, today) {
   const container = document.getElementById('game-holdings');
+  const reinvesting = GameEngine.reinvestsOn(GamePage.game, today);
+  const reinvestButton = document.getElementById('game-reinvest-btn');
+  reinvestButton.textContent = 'DIVIDENDS: ' + (reinvesting ? 'REINVEST' : 'CASH');
+  reinvestButton.setAttribute('aria-pressed', String(reinvesting));
   if (!state.positions.length) {
     container.innerHTML = '<div class="empty-state">NO HOLDINGS YET. BUY SOMETHING.</div>';
     return;
@@ -463,7 +503,8 @@ function gameRenderHoldings(state, today) {
     // Whole units for cars, watches, art and houses: sell one at a time, never half a car.
     const partialSell = GameEngine.isTangible(position.class)
       ? '<button class="btn btn-gta btn-sm game-sell" data-symbol="' + symbol + '" data-quantity="1">SELL 1</button> '
-      : '<button class="btn btn-gta btn-sm game-sell" data-symbol="' + symbol + '" data-fraction="0.5">SELL 50%</button> ';
+      : '<button class="btn btn-gta btn-sm game-sell-order" data-symbol="' + symbol + '">ORDER</button> ' +
+        '<button class="btn btn-gta btn-sm game-sell" data-symbol="' + symbol + '" data-fraction="0.5">SELL 50%</button> ';
     const mortgage = position.mortgageChf > 0 ? '<br><small class="game-neg">MORTGAGE -' + gameMoney(position.mortgageChf, today) + '</small>' : '';
     return '<tr><td><span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + gameHoldingDetail(position) + '</span></td>' +
       '<td class="text-end">' + gameHoldingQuantity(position) + '</td>' +
@@ -488,6 +529,34 @@ function gameRenderHoldings(state, today) {
   container.querySelectorAll('.game-sell').forEach((button) => {
     const order = button.dataset.quantity ? { quantity: Number(button.dataset.quantity) } : { fraction: Number(button.dataset.fraction) };
     button.onclick = () => gameTrade(GameEngine.sell(GamePage.game, GamePage.market, button.dataset.symbol, order, todayIsoDate(), new Date().toISOString()));
+  });
+  container.querySelectorAll('.game-sell-order').forEach((button) => {
+    button.onclick = () => gameOpenSellOrder(button.dataset.symbol, null);
+  });
+}
+
+// The short holdings under the holdings table: what each would gain or lose if bought back at the last close.
+function gameRenderShorts(state, today) {
+  const container = document.getElementById('game-shorts');
+  if (!state.shorts.length) { container.innerHTML = ''; return; }
+  container.innerHTML = '<table class="table-gta w-100 mt-3"><thead><tr><th>SHORTS · ' + state.shorts.length + '</th><th class="text-end">QUANTITY</th>' +
+    '<th class="text-end">PRICE</th><th class="text-end">TO BUY BACK</th><th class="text-end">P&amp;L</th><th></th></tr></thead><tbody>' +
+    state.shorts.map((short) => {
+      const symbol = escapeHtml(short.symbol);
+      const profitChf = short.soldChf - short.dutyChf - short.valueChf * (1 + GameEngine.stampDutyRate(short));
+      const buybackPriceChf = short.heldChf / GameEngine.SHORT_MAINTENANCE / short.quantity;
+      return '<tr><td><span class="game-symbol">' + escapeHtml(short.name) + '</span><span class="game-name">' + symbol + ' · <span class="game-neg">SHORT</span></span></td>' +
+        '<td class="text-end">' + gameQuantityWithUnit(short, short.quantity) + '</td>' +
+        '<td class="text-end">' + gameMoney(short.valueChf / short.quantity, today) + '<br><small class="game-dim">SOLD AT ' + gameMoney(short.priceChf, today) + '</small></td>' +
+        '<td class="text-end">' + gameMoney(short.valueChf, today) + '<br><small class="game-dim">BANK BUYS BACK AT ' + gameMoney(buybackPriceChf, today) + '</small></td>' +
+        '<td class="text-end ' + gameSignClass(profitChf) + '">' + gameSignedMoney(profitChf, today) + '<br><small>' + gamePercent(profitChf / short.soldChf) + '</small></td>' +
+        '<td class="text-end text-nowrap"><button class="btn btn-gta btn-sm game-cover" data-symbol="' + symbol + '" data-fraction="0.5">BUY BACK 50%</button> ' +
+        '<button class="btn btn-gta btn-sm btn-danger-del game-cover" data-symbol="' + symbol + '" data-fraction="1">BUY BACK ALL</button></td></tr>';
+    }).join('') + '</tbody></table><p class="game-note">THE SALE AMOUNT AND HALF OF IT AGAIN ARE HELD AS COLLATERAL. A ' +
+    gameRate(GameEngine.SHORT_BORROW_FEE_RATE) + ' BORROW FEE IS PAID EVERY MONTH, AND THE DIVIDENDS GO TO THE LENDER.</p>';
+  container.querySelectorAll('.game-cover').forEach((button) => {
+    button.onclick = () => gameTrade(GameEngine.coverShort(GamePage.game, GamePage.market, button.dataset.symbol, { fraction: Number(button.dataset.fraction) },
+      todayIsoDate(), new Date().toISOString()));
   });
 }
 
@@ -545,6 +614,21 @@ function gameRenderPortfolioCharts(state, today) {
   })));
 }
 
+// The Lombard loan card: what the holdings let you borrow, what is owed and its interest.
+function gameRenderLoan(state, today) {
+  const rate = GameEngine.LOMBARD_INTEREST_RATE;
+  const ratios = GameEngine.LOMBARD_LOAN_TO_VALUE;
+  document.getElementById('game-loan-note').textContent = gameRate(rate) + ' A YEAR';
+  const availableChf = Math.max(0, state.lendingValueChf - state.loanChf);
+  document.getElementById('game-loan').innerHTML = gamePreviewTable([
+    ['LENDING VALUE', gameMoney(state.lendingValueChf, today)],
+    ['YOU OWE', '<span class="' + (state.loanChf > 0 ? 'game-neg' : '') + '">' + gameMoney(state.loanChf, today) + '</span>'],
+    ['YOU CAN BORROW', gameMoney(availableChf, today)],
+    ['INTEREST A MONTH', gameMoney(state.loanChf * rate / 12, today)],
+  ]) + '<div class="game-dim mt-1">THE BANK LENDS ' + gameRate(ratios.stock) + ' OF YOUR STOCKS, ' + gameRate(ratios.etf) + ' OF YOUR ETFS AND ' +
+    gameRate(ratios.metal) + ' OF YOUR METALS. IF PRICES FALL AND YOU OWE MORE THAN THAT, YOUR CASH PAYS IT DOWN FIRST, THEN YOUR HOLDINGS ARE SOLD.</div>';
+}
+
 function gameRenderBudget(state, today) {
   const budget = state.budget;
   document.getElementById('game-budget-title').textContent = 'MONTHLY BUDGET · ' + GameEngine.LOCATIONS[GamePage.game.location].label;
@@ -579,21 +663,48 @@ function gameRenderHistory(state) {
     }
     if (event.type === 'dividend') {
       const cashChange = event.amountChf - event.taxChf;
-      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-dividend">DIVIDEND</span></td>' +
+      // A short pays the dividend to the lender of its units, without tax.
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-dividend">DIVIDEND' + (event.short ? ' PAID' : '') + '</span></td>' +
         '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
         '<td class="text-end">' + gameQuantityWithUnit(event, event.quantity) + ' × ' + gameMoney(event.perUnitChf, event.date) + '</td>' +
-        '<td class="text-end">INCOME TAX ' + gameMoney(event.taxChf, event.date) + '</td>' +
+        '<td class="text-end">' + (event.short ? 'TO THE LENDER' : 'INCOME TAX ' + gameMoney(event.taxChf, event.date)) + '</td>' +
         '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
     }
+    if (event.type === 'expiry') {
+      const option = event.option;
+      const inTheMoney = option.kind === 'call' ? event.spotChf > option.strike : event.spotChf < option.strike;
+      const result = !inTheMoney ? (option.written ? 'WORTHLESS, PREMIUM KEPT' : 'WORTHLESS') : option.written ? 'ASSIGNED AT THE STRIKE' : 'PAID OUT';
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-month">OPTION ENDED</span></td>' +
+        '<td><span class="game-symbol">' + escapeHtml(event.name) + ' ' + gameOptionContract(option, event.date) + '</span><span class="game-name">' +
+          (option.written ? 'WRITTEN' : 'BOUGHT') + ' · CLOSE ' + gameMoney(event.spotChf, event.date) + '</span></td>' +
+        '<td class="text-end">' + gameQuantity(event.quantity) + ' UNITS · ' + result + '</td>' +
+        '<td class="text-end"><span class="' + gameSignClass(event.profitChf) + '">P&amp;L ' + gameSignedMoney(event.profitChf, event.date) + '</span></td>' +
+        '<td class="text-end ' + gameSignClass(event.cashChf) + '">' + gameSignedMoney(event.cashChf, event.date) + '</td></tr>';
+    }
+    if (event.type === 'borrow' || event.type === 'repay') {
+      const cashChange = event.type === 'borrow' ? event.amountChf : -event.amountChf;
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-month">LOMBARD ' + event.type.toUpperCase() + '</span></td>' +
+        '<td colspan="3">' + (event.type === 'borrow' ? 'BORROWED AGAINST YOUR HOLDINGS' : 'PAID BACK') + '</td>' +
+        '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
+    }
+    if (event.type === 'margin') {
+      return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-tax">MARGIN CALL</span></td>' +
+        '<td colspan="3">LOAN ABOVE THE LENDING VALUE: ' + gameMoney(event.fromCashChf, event.date) + ' PAID FROM CASH' +
+        (event.fromSalesChf > 0 ? ', ' + gameMoney(event.fromSalesChf, event.date) + ' FROM SELLING HOLDINGS' : '') + '</td>' +
+        '<td class="text-end game-neg">-' + gameMoney(event.fromCashChf, event.date) + '</td></tr>';
+    }
     if (event.type === 'month') {
-      const cashChange = event.salaryChf - event.expensesChf - event.amortizationChf;
+      const cashChange = event.salaryChf - event.expensesChf - event.amortizationChf - (event.lombardInterestChf || 0) - (event.borrowFeeChf || 0);
       const parts = ['SALARY ' + gameSignedMoney(event.salaryChf, event.date), 'EXPENSES -' + gameMoney(event.expensesChf, event.date)];
       if (event.amortizationChf > 0) parts.push('MORTGAGE PAYBACK -' + gameMoney(event.amortizationChf, event.date));
+      if (event.lombardInterestChf > 0) parts.push('LOMBARD INTEREST -' + gameMoney(event.lombardInterestChf, event.date));
+      if (event.borrowFeeChf > 0) parts.push('BORROW FEE ON SHORTS -' + gameMoney(event.borrowFeeChf, event.date));
       return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-month">MONTH</span></td>' +
         '<td colspan="3">' + parts.join(' · ') + '</td><td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
     }
-    const cashChange = event.type === 'buy'
-      ? -(event.amountChf - event.mortgageChf + event.stampDutyChf + event.purchaseCostsChf)
+    // A short sale holds its amount like a buy; a closed day trade carries its own cash change.
+    const cashChange = event.cashChf != null ? event.cashChf
+      : event.type === 'buy' || event.short ? -(event.amountChf - event.mortgageChf + event.stampDutyChf + event.purchaseCostsChf)
       : event.amountChf - event.stampDutyChf - event.dealerFeeChf - event.gainsTaxChf - event.mortgageRepaidChf;
     const fees = [];
     if (event.stampDutyChf) fees.push('DUTY ' + gameMoney(event.stampDutyChf, event.date));
@@ -603,9 +714,14 @@ function gameRenderHistory(state) {
     if (event.gainsTaxChf) fees.push('GAINS TAX ' + gameMoney(event.gainsTaxChf, event.date));
     if (event.profitChf != null) fees.push('<span class="' + gameSignClass(event.profitChf) + '">P&amp;L ' + gameSignedMoney(event.profitChf, event.date) + '</span>');
     if (event.mortgageRepaidChf) fees.push('MORTGAGE PAID BACK ' + gameMoney(event.mortgageRepaidChf, event.date));
+    const orderType = { limit: 'LIMIT ', stop: 'STOP ', trail: 'TRAILING STOP ' }[event.orderType] || '';
+    const action = event.option ? (event.optionAt ? 'CLOSE ' : event.option.written ? 'WRITE ' : 'BUY ') + event.option.kind.toUpperCase()
+      : event.short ? (event.type === 'sell' ? 'SHORT' : 'BUY BACK') : event.type.toUpperCase();
     return '<tr><td>' + formatDate(event.date) + (event.at ? ' ' + gameClock(event.at) : '') + '</td><td><span class="game-badge game-badge-' + event.type + '">' +
-      (event.intraday ? 'DAY ' : '') + event.type.toUpperCase() + '</span></td>' +
-      '<td><span class="game-symbol">' + escapeHtml(event.name) + '</span><span class="game-name">' + gameClassLabel(event) + '</span></td>' +
+      (event.intraday ? 'DAY ' : '') + (event.reinvested ? 'DIVIDEND ' : '') + (event.marginCall ? 'MARGIN CALL ' : '') + (event.assigned ? 'ASSIGNED ' : '') +
+      orderType + action + '</span></td>' +
+      '<td><span class="game-symbol">' + escapeHtml(event.name) + (event.option ? ' ' + gameOptionContract(event.option, event.date) : '') + '</span>' +
+      '<span class="game-name">' + gameClassLabel(event) + (event.option ? ' · ENDS ' + formatDate(event.option.expiry) : '') + '</span></td>' +
       '<td class="text-end">' + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, event.date) + '</td>' +
       '<td class="text-end">' + (fees.length ? fees.join('<br>') : '—') + '</td>' +
       '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
@@ -745,6 +861,61 @@ function gameRenderPreview(asset, today) {
   return !preview.error;
 }
 
+// The preview of a short sale being typed, at the last close; returns whether it can be made.
+function gameRenderShortPreview(asset, today) {
+  const container = document.getElementById('game-preview');
+  const order = gameOrder(asset);
+  const quote = GamePage.market.quote(asset.symbol, today);
+  const byQuantity = order.quantity != null;
+  if (!quote || !((byQuantity ? order.quantity : order.amountChf) > 0)) {
+    container.innerHTML = '<span class="game-dim">' + (byQuantity ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT') + ' TO SEE THE COSTS</span>';
+    return false;
+  }
+  const trade = GameEngine.openShort(GamePage.game, GamePage.market, asset, order, today, new Date().toISOString());
+  const amountChf = byQuantity ? order.quantity * quote.priceChf : order.amountChf;
+  const dutyRate = GameEngine.stampDutyRate(asset);
+  const rows = [
+    ['PRICE PER UNIT', gameMoney(quote.priceChf, today)],
+    byQuantity ? ['AMOUNT SHORTED', gameMoney(amountChf, today)] : ['QUANTITY', gameQuantityWithUnit(asset, amountChf / quote.priceChf)],
+  ];
+  if (dutyRate) rows.push(['STAMP DUTY ' + gameRate(dutyRate), gameMoney(amountChf * dutyRate, today)]);
+  rows.push(['COLLATERAL HELD', gameMoney(amountChf * GameEngine.SHORT_COLLATERAL, today)]);
+  rows.push(['<strong>CASH NEEDED</strong>', '<strong>' + gameMoney(amountChf * (GameEngine.SHORT_COLLATERAL - 1 + dutyRate), today) + '</strong>']);
+  rows.push(['BORROW FEE A MONTH', gameMoney(amountChf * GameEngine.SHORT_BORROW_FEE_RATE / 12, today)]);
+  rows.push(['BOUGHT BACK BY THE BANK AT', gameMoney(quote.priceChf * GameEngine.SHORT_COLLATERAL / GameEngine.SHORT_MAINTENANCE, today)]);
+  container.innerHTML = gamePreviewTable(rows) +
+    '<div class="game-dim mt-1">SELLS UNITS YOU BORROW: YOU GAIN WHAT THE PRICE FALLS AND LOSE WHAT IT RISES. YOU PAY THE DIVIDENDS TO THE LENDER. ' +
+    'THE SALE AMOUNT AND THE CASH ABOVE ARE HELD UNTIL YOU BUY BACK.</div>' +
+    (trade.error ? '<div class="game-neg game-preview-error">' + escapeHtml(trade.error) + '</div>' : '');
+  return !trade.error;
+}
+
+// The limit buy typed in the buy dialog, as GameEngine.placeOrder fields.
+function gameLimitFields(asset) {
+  return Object.assign({ side: 'buy', type: 'limit', priceChf: Number(document.getElementById('game-limit').value) }, gameOrder(asset));
+}
+
+// The preview of the limit buy being typed, at its limit price; returns whether it can be placed.
+function gameRenderLimitPreview(asset, today) {
+  const container = document.getElementById('game-preview');
+  const fields = asset && gameLimitFields(asset);
+  const byQuantity = !!fields && fields.quantity != null;
+  if (!fields || !(fields.priceChf > 0) || !((byQuantity ? fields.quantity : fields.amountChf) > 0)) {
+    container.innerHTML = '<span class="game-dim">ENTER A LIMIT PRICE AND ' + (gameBuyMode(asset) === 'quantity' ? 'A QUANTITY' : 'AN AMOUNT') + '</span>';
+    return false;
+  }
+  const order = GameEngine.placeOrder(GamePage.game, GamePage.market, asset, fields, today, new Date().toISOString());
+  const amountChf = byQuantity ? fields.quantity * fields.priceChf : fields.amountChf;
+  const dutyChf = amountChf * GameEngine.stampDutyRate(asset);
+  const rows = [byQuantity ? ['AMOUNT AT THE LIMIT', gameMoney(amountChf, today)] : ['QUANTITY AT THE LIMIT', gameQuantityWithUnit(asset, amountChf / fields.priceChf)]];
+  if (dutyChf) rows.push(['STAMP DUTY ' + gameRate(GameEngine.stampDutyRate(asset)), gameMoney(dutyChf, today)]);
+  rows.push(['<strong>CASH NEEDED AT THE LIMIT</strong>', '<strong>' + gameMoney(amountChf + dutyChf, today) + '</strong>']);
+  container.innerHTML = gamePreviewTable(rows) +
+    '<div class="game-dim mt-1">BUYS AT THE FIRST NEW CLOSE AT OR BELOW THE LIMIT, IF YOU HAVE THE CASH THEN. OPEN UNTIL IT FILLS OR YOU CANCEL IT.</div>' +
+    (order.error ? '<div class="game-neg game-preview-error">' + escapeHtml(order.error) + '</div>' : '');
+  return !order.error;
+}
+
 // Fills a category list from `categoryList` (one tab of GAME_BUY_CATEGORIES) and the asset list of the
 // `chosenLabel` category, or the first one, keeping the picked asset.
 function gameFillAssetLists(categorySelect, assetSelect, categoryList, chosenLabel, today) {
@@ -782,6 +953,17 @@ function gameRenderBuyForm(state) {
   const unit = asset ? gameUnit(asset) : '';
   document.getElementById('game-amount-label').textContent = mode === 'amount' ? 'AMOUNT (CHF)'
     : preciousMetal ? 'QUANTITY' : 'QUANTITY (' + (unit || 'UNITS') + ')';
+  // Only stocks and ETFs can be shorted, at the last close; cars, watches, art and houses are bought now only.
+  const canShort = !!asset && (asset.class === 'stock' || asset.class === 'etf');
+  const short = canShort && GamePage.buyDirection === 'short';
+  const limit = !wholeUnits && !short && GamePage.buyKind === 'limit';
+  document.getElementById('game-direction-toggle').style.display = canShort ? '' : 'none';
+  document.querySelectorAll('[data-buy-direction]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.buyDirection === (short ? 'short' : 'long'))));
+  document.getElementById('game-kind-toggle').style.display = wholeUnits || short ? 'none' : '';
+  document.querySelectorAll('[data-buy-kind]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.buyKind === (limit ? 'limit' : 'now'))));
+  document.getElementById('game-limit-wrap').style.display = limit ? '' : 'none';
+  document.getElementById('game-limit-label').textContent = 'LIMIT PRICE (CHF' + (unit ? ' PER ' + (unit === 'G' ? 'GRAM' : unit) : '') + ')';
+  document.getElementById('game-buy-btn').textContent = short ? 'SHORT' : limit ? 'PLACE LIMIT ORDER' : 'BUY';
 
   const quote = asset && GamePage.market.quote(asset.symbol, today);
   document.getElementById('game-quote').innerHTML = !quote ? 'NO PRICE'
@@ -790,7 +972,7 @@ function gameRenderBuyForm(state) {
   document.getElementById('game-details').innerHTML = !asset || !quote ? '' : '<table class="w-100 game-details-table"><tbody>' +
     gameAssetDetails(asset, state, quote.priceChf, today).map((row) => '<tr><th>' + row[0] + '</th><td>' + row[1] +
       (row[2] ? '<span class="game-details-note">' + row[2] + '</span>' : '') + '</td></tr>').join('') + '</tbody></table>';
-  document.getElementById('game-buy-btn').disabled = !gameRenderPreview(asset, today);
+  document.getElementById('game-buy-btn').disabled = !(short ? gameRenderShortPreview(asset, today) : limit ? gameRenderLimitPreview(asset, today) : gameRenderPreview(asset, today));
 }
 
 function gameRender() {
@@ -808,10 +990,16 @@ function gameRender() {
   gameRenderChart(state);
   gameRenderBuyForm(state);
   gameRenderDayTrading(state, today);
+  gameRenderOptionsForm(state);
+  gameRenderOptions(state, today);
   gameRenderHoldings(state, today);
+  gameRenderShorts(state, today);
   gameRenderPortfolioCharts(state, today);
+  gameRenderLoan(state, today);
   gameRenderBudget(state, today);
   gameRenderHistory(state);
+  gameRenderOrders(today);
+  gameSettleOrders();
 }
 
 async function gameTrade(trade) {
@@ -825,9 +1013,20 @@ async function gameTrade(trade) {
     gameToast('COULD NOT SAVE, TRADE CANCELLED: ' + (error.message || error));
     return;
   }
-  gameToast((trade.intraday ? 'DAY TRADE: ' : '') + (trade.side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name);
-  if (trade.side === 'buy' && !trade.intraday) bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
+  if (trade.side === 'borrow' || trade.side === 'repay') gameToast((trade.side === 'borrow' ? 'BORROWED ' : 'PAID BACK ') + gameMoney(trade.amountChf));
+  else {
+    gameToast((trade.intraday ? 'DAY TRADE: ' : '') + gameTradeVerb(trade) + ' ' + (trade.option
+      ? gameQuantity(trade.quantity) + ' ' + trade.option.kind.toUpperCase() + 'S ON ' + trade.name : gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name));
+  }
+  if (!trade.intraday) bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
   gameRender();
+}
+
+// 'BOUGHT' or 'SOLD'; for a short 'SHORTED' or 'BOUGHT BACK'; for an option also 'WROTE'.
+function gameTradeVerb(trade) {
+  if (trade.option) return trade.optionAt ? (trade.option.written ? 'BOUGHT BACK' : 'SOLD') : (trade.option.written ? 'WROTE' : 'BOUGHT');
+  if (trade.short) return trade.side === 'sell' ? 'SHORTED' : 'BOUGHT BACK';
+  return trade.side === 'buy' ? 'BOUGHT' : 'SOLD';
 }
 
 // ---------- Day trading ----------
@@ -884,24 +1083,26 @@ function gameRenderDayTrading(state, today) {
   document.getElementById('game-day-summary').innerHTML = 'CLOSED DAY TRADES, ALL TIME <span class="' + gameSignClass(profitChf) + '">' +
     gameSignedMoney(profitChf, today) + '</span>';
   if (!state.dayTrades.length) {
-    container.innerHTML = '<div class="game-dim">NO OPEN DAY TRADES. PICK AN ASSET WHOSE MARKET IS OPEN AND BUY IT ABOVE.</div>';
+    container.innerHTML = '<div class="game-dim">NO OPEN DAY TRADES. PICK AN ASSET WHOSE MARKET IS OPEN AND BUY OR SHORT IT ABOVE.</div>';
   } else {
     // Price, value, P&L and time left are filled in every second by gameDayTick.
     container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>ASSET</th><th class="text-end">QUANTITY</th><th class="text-end">PRICE</th>' +
       '<th class="text-end">VALUE</th><th class="text-end">P&amp;L</th><th class="text-end">CLOSES IN</th><th></th></tr></thead><tbody>' +
-      // One row per buy, so the same asset bought at different prices shows each buy; a close sells from that buy only.
+      // One row per buy or short sale, so the same asset traded at different prices shows each; a close closes that one only.
       state.dayTrades.map((position) => {
         const symbol = escapeHtml(position.symbol);
         const at = escapeHtml(position.at);
         const unit = gameUnit(position);
         return '<tr data-day-row="' + symbol + '" data-day-lot="' + at + '"><td><button type="button" class="game-day-pick" data-symbol="' + symbol + '">' +
-          '<span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + symbol + ' · BOUGHT ' + gameClock(position.at) + '</span></button></td>' +
+          '<span class="game-symbol">' + escapeHtml(position.name) + '</span><span class="game-name">' + symbol + ' · ' +
+          (position.short ? '<span class="game-neg">SHORTED</span> ' : 'BOUGHT ') + gameClock(position.at) + '</span></button></td>' +
           '<td class="text-end">' + gameQuantityWithUnit(position, position.quantity) + '</td>' +
-          '<td class="text-end"><span data-day-cell="price"></span><br><small class="game-dim">PAID ' +
+          '<td class="text-end"><span data-day-cell="price"></span><br><small class="game-dim">' + (position.short ? 'SOLD AT ' : 'PAID ') +
             gameMoney(position.priceChf, today) + (unit ? ' / ' + unit : '') + '</small></td>' +
           '<td class="text-end" data-day-cell="value"></td><td class="text-end" data-day-cell="profit"></td>' +
           '<td class="text-end"><span data-day-cell="closes"></span><br><small class="game-dim">AT ' + gameClock(position.closesAt) + '</small></td>' +
-          '<td class="text-end text-nowrap"><button class="btn btn-gta btn-sm game-day-close" data-lot="' + at + '" data-fraction="0.5">CLOSE 50%</button> ' +
+          '<td class="text-end text-nowrap"><button class="btn btn-gta btn-sm game-day-order" data-symbol="' + symbol + '" data-lot="' + at + '">ORDER</button> ' +
+          '<button class="btn btn-gta btn-sm game-day-close" data-lot="' + at + '" data-fraction="0.5">CLOSE 50%</button> ' +
           '<button class="btn btn-gta btn-sm btn-danger-del game-day-close" data-lot="' + at + '" data-fraction="1">CLOSE ALL</button></td></tr>';
       }).join('') + '</tbody></table><p class="game-note">P&amp;L if you close now, after stamp duty. Still open when its market closes, a trade is reverted.</p>';
     container.querySelectorAll('.game-day-close').forEach((button) => {
@@ -915,6 +1116,9 @@ function gameRenderDayTrading(state, today) {
     });
     container.querySelectorAll('.game-day-pick').forEach((button) => {
       button.onclick = () => gameDaySelect(button.dataset.symbol);
+    });
+    container.querySelectorAll('.game-day-order').forEach((button) => {
+      button.onclick = () => gameOpenSellOrder(button.dataset.symbol, button.dataset.lot);
     });
   }
   GamePage.dayChartKey = '';
@@ -973,7 +1177,7 @@ function gameRenderDayChart(day, nowMs, today) {
   const points = [...indexes].sort((first, second) => first - second).map((index) => ({ x: opensMs + index * stepMs, y: day.prices[index] * scale }));
   const markers = (side) => tradesShown.filter((event) => event.type === side).map((event) => ({
     x: tradeX(event), y: event.priceChf * scale,
-    text: (side === 'buy' ? 'BOUGHT ' : 'SOLD ') + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, today),
+    text: gameTradeVerb(event) + ' ' + gameQuantityWithUnit(event, event.quantity) + ' @ ' + gameMoney(event.priceChf, today),
   }));
   const sideColors = { buy: '#00a5ff', sell: '#ffcc00' };
   // A small solid dot on the exact price, ringed in the background color so it stands out from the line.
@@ -1059,6 +1263,8 @@ function gameDayTick() {
   const nowMs = Date.now();
   const today = new Date(nowMs).toISOString().slice(0, 10);
   if (today !== GamePage.dayDate || GamePage.dayState.dayTrades.some((position) => nowMs >= Date.parse(position.closesAt))) { gameRender(); return; }
+  // The live price moves every step, so day orders are checked every second.
+  if ((GamePage.game.orders || []).some((order) => order.intraday)) gameSettleOrders();
 
   const asset = gameDayAsset();
   const day = asset ? gameTradingDay(asset, today) : null;
@@ -1094,23 +1300,40 @@ function gameDayTick() {
   document.querySelectorAll('[data-day-preset]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.dayPreset) === value)));
   const assetUnit = asset ? gameUnit(asset) : '';
   document.getElementById('game-day-amount-label').textContent = byQuantity ? 'QUANTITY' + (assetUnit ? ' (' + assetUnit + ')' : '') : 'AMOUNT (CHF)';
+  // A limit order is previewed at its limit price: a buy below the live price, a short sale above it.
+  const short = GamePage.dayDirection === 'short';
+  const limit = GamePage.dayKind === 'limit';
+  const limitChf = Number(document.getElementById('game-day-limit').value);
+  const atLimit = limit ? ' AT THE LIMIT' : '';
+  document.querySelectorAll('[data-day-direction]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.dayDirection === GamePage.dayDirection)));
+  document.querySelectorAll('[data-day-kind]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.dayKind === GamePage.dayKind)));
+  document.getElementById('game-day-limit-wrap').style.display = limit ? '' : 'none';
+  document.getElementById('game-day-limit-label').textContent = 'LIMIT PRICE (CHF' + (assetUnit ? ' PER ' + assetUnit : '') + ')';
+  document.getElementById('game-day-buy-btn').textContent = limit ? 'PLACE LIMIT ORDER' : short ? 'SHORT AT THE LIVE PRICE' : 'BUY AT THE LIVE PRICE';
   const preview = document.getElementById('game-day-preview');
   let canBuy = false;
   if (!open) preview.innerHTML = '<span class="game-dim">THE MARKET IS CLOSED</span>';
-  else if (!(value > 0)) preview.innerHTML = '<span class="game-dim">' + (byQuantity ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT') + ' TO SEE THE COSTS</span>';
-  else {
-    const priceChf = GameIntraday.priceAt(day, nowMs);
+  else if (!(value > 0) || (limit && !(limitChf > 0))) {
+    preview.innerHTML = '<span class="game-dim">' + (limit ? 'ENTER A LIMIT PRICE AND ' : 'ENTER ') + (byQuantity ? 'A QUANTITY' : 'AN AMOUNT') + ' TO SEE THE COSTS</span>';
+  } else {
+    const livePriceChf = GameIntraday.priceAt(day, nowMs);
+    const priceChf = limit ? limitChf : livePriceChf;
     const amountChf = byQuantity ? value * priceChf : value;
     const dutyChf = amountChf * GameEngine.stampDutyRate(asset);
     const cashLeftChf = GamePage.dayState.cash - amountChf - dutyChf;
-    canBuy = cashLeftChf >= -0.005;
-    const rows = [byQuantity ? ['AMOUNT', gameMoney(amountChf, today)] : ['QUANTITY', gameQuantityWithUnit(asset, amountChf / priceChf)]];
+    const limitReached = limit && GameEngine.orderReached({ side: short ? 'sell' : 'buy', type: 'limit', priceChf: limitChf }, livePriceChf);
+    const error = limitReached ? (short ? 'A LIMIT SHORT MUST BE ABOVE THE PRICE' : 'A LIMIT BUY MUST BE BELOW THE PRICE')
+      : cashLeftChf < -0.005 ? 'NOT ENOUGH CASH' : '';
+    canBuy = !error;
+    const rows = [byQuantity ? ['AMOUNT' + atLimit, gameMoney(amountChf, today)] : ['QUANTITY' + atLimit, gameQuantityWithUnit(asset, amountChf / priceChf)]];
     if (dutyChf) rows.push(['STAMP DUTY ' + gameRate(GameEngine.stampDutyRate(asset)), gameMoney(dutyChf, today)]);
-    rows.push(['<strong>CASH NEEDED</strong>', '<strong>' + gameMoney(amountChf + dutyChf, today) + '</strong>']);
-    rows.push(['CASH LEFT', '<span class="' + (canBuy ? '' : 'game-neg') + '">' + gameMoney(cashLeftChf, today) + '</span>']);
-    preview.innerHTML = '<table class="w-100 game-preview-table"><tbody>' +
-      rows.map((row) => '<tr><td>' + row[0] + '</td><td class="text-end">' + row[1] + '</td></tr>').join('') + '</tbody></table>' +
-      (canBuy ? '' : '<div class="game-neg game-preview-error">NOT ENOUGH CASH</div>');
+    rows.push(['<strong>' + (short ? 'CASH HELD' : 'CASH NEEDED') + atLimit + '</strong>', '<strong>' + gameMoney(amountChf + dutyChf, today) + '</strong>']);
+    rows.push(['CASH LEFT', '<span class="' + (cashLeftChf < -0.005 ? 'game-neg' : '') + '">' + gameMoney(cashLeftChf, today) + '</span>']);
+    const notes = [];
+    if (short) notes.push('SELLS UNITS YOU DO NOT OWN: YOU GAIN WHAT THE PRICE FALLS BEFORE YOU BUY THEM BACK, AND LOSE WHAT IT RISES. THE CASH IS HELD UNTIL THEN.');
+    if (limit) notes.push((short ? 'SHORTS AT THE FIRST LIVE PRICE AT OR ABOVE' : 'BUYS AT THE FIRST LIVE PRICE AT OR BELOW') + ' THE LIMIT, IF YOU HAVE THE CASH THEN. ENDS AT THE CLOSE.');
+    preview.innerHTML = gamePreviewTable(rows) + notes.map((note) => '<div class="game-dim mt-1">' + note + '</div>').join('') +
+      (error ? '<div class="game-neg game-preview-error">' + error + '</div>' : '');
   }
   document.getElementById('game-day-buy-btn').disabled = !canBuy;
 
@@ -1122,7 +1345,9 @@ function gameDayTick() {
     if (!positionDay || !row) return;
     const priceChf = GameIntraday.priceAt(positionDay, nowMs);
     const valueChf = position.quantity * priceChf;
-    const profitChf = valueChf * (1 - GameEngine.stampDutyRate(position)) - position.costChf;
+    // A short gains what it got (its amount less the duty paid) minus the buyback with its duty.
+    const dutyRate = GameEngine.stampDutyRate(position);
+    const profitChf = position.short ? 2 * position.amountChf - position.costChf - valueChf * (1 + dutyRate) : valueChf * (1 - dutyRate) - position.costChf;
     const positionUnit = gameUnit(position);
     row.querySelector('[data-day-cell="price"]').textContent = gameMoney(priceChf, today) + (positionUnit ? ' / ' + positionUnit : '');
     row.querySelector('[data-day-cell="value"]').textContent = gameMoney(valueChf, today);
@@ -1131,6 +1356,351 @@ function gameDayTick() {
     profitCell.className = 'text-end ' + gameSignClass(profitChf);
     profitCell.innerHTML = gameSignedMoney(profitChf, today) + '<br><small>' + gamePercent(profitChf / position.costChf) + '</small>';
   });
+}
+
+// ---------- Options ----------
+
+function gameOptionAsset() {
+  return GamePage.assets.find((item) => item.symbol === document.getElementById('game-option-asset').value);
+}
+
+// 'CALL 65.00' with the strike in the display currency.
+function gameOptionContract(option, date) {
+  return option.kind.toUpperCase() + ' ' + gameMoney(option.strike, date);
+}
+
+// The option the form describes, as GameEngine.openOption's order.
+function gameOptionOrder() {
+  const strategy = GAME_OPTION_STRATEGIES[GamePage.optionStrategy];
+  return {
+    kind: strategy.kind, written: strategy.written, expiry: document.getElementById('game-option-expiry').value,
+    strike: Number(document.getElementById('game-option-strike').value), quantity: Number(document.getElementById('game-option-quantity').value),
+  };
+}
+
+// The new option form: the chosen stock's expiries and strikes, and what the option costs or brings in.
+function gameRenderOptionsForm(state) {
+  const now = new Date().toISOString();
+  const today = now.slice(0, 10);
+  if (!state) state = GameEngine.replay(GamePage.game, GamePage.market, today, now);
+  const strategy = GAME_OPTION_STRATEGIES[GamePage.optionStrategy];
+  document.querySelectorAll('[data-option-strategy]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.optionStrategy === GamePage.optionStrategy)));
+  document.getElementById('game-option-strategy-note').textContent = strategy.note;
+  gameFillAssetLists(document.getElementById('game-option-category'), document.getElementById('game-option-asset'), GAME_OPTION_CATEGORIES, GamePage.optionCategory, today);
+  const asset = gameOptionAsset();
+  const chain = asset ? GameEngine.optionChain(GamePage.market, asset, today) : { error: 'PICK A STOCK' };
+  const quote = document.getElementById('game-option-quote');
+  const preview = document.getElementById('game-option-preview');
+  const button = document.getElementById('game-option-btn');
+  button.textContent = (strategy.written ? 'SELL THE ' : 'BUY THE ') + strategy.kind.toUpperCase();
+  button.disabled = true;
+  if (chain.error) { quote.textContent = chain.error; preview.innerHTML = ''; return; }
+
+  // The lists are rebuilt for another stock, day or strategy; a strategy picks its usual strike: at the price, above it
+  // for a covered call, below it for a protective or cash-secured put.
+  const expirySelect = document.getElementById('game-option-expiry');
+  const strikeSelect = document.getElementById('game-option-strike');
+  const listKey = [asset.symbol, today, GamePage.optionStrategy, GamePage.currency].join('|');
+  if (strikeSelect.dataset.key !== listKey) {
+    strikeSelect.dataset.key = listKey;
+    const expiry = expirySelect.value;
+    expirySelect.innerHTML = chain.expiries.map((item) => '<option value="' + item + '">' + formatDate(item) + '</option>').join('');
+    if (chain.expiries.includes(expiry)) expirySelect.value = expiry;
+    strikeSelect.innerHTML = chain.strikes.map((item) => '<option value="' + item + '">' + gameMoney(item, today) + '</option>').join('');
+    const nearest = chain.strikes.reduce((best, item) => (Math.abs(item - chain.priceChf) < Math.abs(best - chain.priceChf) ? item : best));
+    const above = chain.strikes.find((item) => item > chain.priceChf);
+    const below = chain.strikes.filter((item) => item < chain.priceChf).pop();
+    strikeSelect.value = String(strategy.written && strategy.kind === 'call' ? above || nearest : strategy.kind === 'put' && strategy.written || strategy.protective ? below || nearest : nearest);
+  }
+  const position = state.positions.find((item) => item.symbol === asset.symbol);
+  quote.innerHTML = 'LAST CLOSE ' + gameMoney(chain.priceChf, today) + ' · VOLATILITY ' + gameRate(Number(chain.volatility.toFixed(3))) + ' A YEAR' +
+    (position ? '<br><span class="game-dim">YOU HOLD ' + gameQuantity(position.quantity) + ' UNITS</span>' : '');
+
+  const order = gameOptionOrder();
+  if (!(order.quantity > 0)) {
+    preview.innerHTML = '<span class="game-dim">ENTER THE UNITS' + (strategy.protective || strategy.written && strategy.kind === 'call' ? ', UP TO THE UNITS YOU HOLD' : '') + '</span>';
+    return;
+  }
+  const trade = GameEngine.openOption(GamePage.game, GamePage.market, asset, order, today, now);
+  const premiumChf = GameEngine.optionPrice(order.kind, chain.priceChf, order.strike, GameEngine.daysBetween(today, order.expiry) / 365, chain.volatility);
+  const totalChf = premiumChf * order.quantity;
+  const breakEvenChf = order.kind === 'call' ? order.strike + premiumChf : order.strike - premiumChf;
+  const rows = [
+    ['PREMIUM PER UNIT', gameMoney(premiumChf, today)],
+    ['<strong>' + (order.written ? 'YOU GET' : 'YOU PAY') + '</strong>', '<strong>' + gameMoney(totalChf, today) + '</strong>'],
+    ['BREAK-EVEN AT', gameMoney(breakEvenChf, today)],
+    ['DAYS LEFT', String(GameEngine.daysBetween(today, order.expiry))],
+  ];
+  if (order.written && order.kind === 'put') rows.push(['CASH HELD UNTIL IT ENDS', gameMoney(order.strike * order.quantity, today)]);
+  if (order.written && order.kind === 'call') rows.push(['UNITS LOCKED UNTIL IT ENDS', gameQuantity(order.quantity)]);
+  if (strategy.protective && !position) rows.push(['<span class="game-neg">YOU HOLD NONE</span>', 'A PLAIN PUT THEN']);
+  preview.innerHTML = gamePreviewTable(rows) + '<div class="game-dim mt-1">IT ENDS AT THE CLOSE OF ' + formatDate(order.expiry) +
+    (order.written ? '. IN THE MONEY THEN, THE UNITS CHANGE HANDS AT THE STRIKE.' : ', PAYING WHAT IT IS IN THE MONEY IN CASH.') + '</div>' +
+    (trade.error ? '<div class="game-neg game-preview-error">' + escapeHtml(trade.error) + '</div>' : '');
+  button.disabled = !!trade.error;
+}
+
+// The open options with their value at the last close; each can be closed early at that price.
+function gameRenderOptions(state, today) {
+  const container = document.getElementById('game-options');
+  if (!state.options.length) {
+    container.innerHTML = '<div class="game-dim">NO OPEN OPTIONS. PICK A STRATEGY AND A STOCK ON THE LEFT.</div>';
+    return;
+  }
+  container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>OPTION</th><th class="text-end">UNITS</th><th class="text-end">PRICE</th>' +
+    '<th class="text-end">P&amp;L</th><th class="text-end">ENDS</th><th></th></tr></thead><tbody>' +
+    state.options.map((option) => {
+      const at = escapeHtml(option.at);
+      const profitChf = (option.written ? option.premiumChf - option.priceChf : option.priceChf - option.premiumChf) * option.quantity;
+      const held = option.written ? (option.kind === 'put' ? 'CASH HELD ' + gameMoney(option.heldChf, today) : 'COVERED BY YOUR UNITS') : 'BOUGHT';
+      return '<tr><td><span class="game-symbol">' + escapeHtml(option.name) + ' ' + gameOptionContract(option, today) + '</span>' +
+        '<span class="game-name">' + escapeHtml(option.symbol) + ' · ' + (option.written ? '<span class="game-neg">WRITTEN</span> · ' + held : held) + '</span></td>' +
+        '<td class="text-end">' + gameQuantity(option.quantity) + '</td>' +
+        '<td class="text-end">' + gameMoney(option.priceChf, today) + '<br><small class="game-dim">' + (option.written ? 'GOT ' : 'PAID ') + gameMoney(option.premiumChf, today) + '</small></td>' +
+        '<td class="text-end ' + gameSignClass(profitChf) + '">' + gameSignedMoney(profitChf, today) + '</td>' +
+        '<td class="text-end">' + formatDate(option.expiry) + '<br><small class="game-dim">' + Math.max(0, GameEngine.daysBetween(today, option.expiry)) + ' DAYS</small></td>' +
+        '<td class="text-end text-nowrap"><button class="btn btn-gta btn-sm game-option-close" data-option="' + at + '" data-fraction="0.5">CLOSE 50%</button> ' +
+        '<button class="btn btn-gta btn-sm btn-danger-del game-option-close" data-option="' + at + '" data-fraction="1">CLOSE ALL</button></td></tr>';
+    }).join('') + '</tbody></table><p class="game-note">P&amp;L AT THE LAST CLOSE. CLOSING SELLS A BOUGHT OPTION BACK, OR BUYS A WRITTEN ONE BACK, AT THAT PRICE.</p>';
+  container.querySelectorAll('.game-option-close').forEach((button) => {
+    button.onclick = () => gameTrade(GameEngine.closeOption(GamePage.game, GamePage.market, button.dataset.option, { fraction: Number(button.dataset.fraction) },
+      todayIsoDate(), new Date().toISOString()));
+  });
+}
+
+// ---------- Orders ----------
+
+// 'LIMIT BUY', 'LIMIT SELL', 'LIMIT SHORT', 'STOP-LOSS' or 'TRAILING STOP'.
+function gameOrderLabel(order) {
+  if (order.type === 'stop') return 'STOP-LOSS';
+  return order.type === 'trail' ? 'TRAILING STOP' : 'LIMIT ' + (order.short ? 'SHORT' : order.side.toUpperCase());
+}
+
+// An order's level now: its price, or for a trailing stop how far it has followed the price since it was placed.
+function gameOrderLevel(order, nowMs) {
+  if (order.type !== 'trail') return order.priceChf;
+  const trigger = GameEngine.orderTrigger(order);
+  if (!order.intraday) GameEngine.newCloses(GamePage.market, order, new Date(nowMs).toISOString().slice(0, 10)).forEach((close) => trigger(close.priceChf));
+  const day = order.intraday && gameTradingDay(order, order.date);
+  if (day) day.prices.slice(GameIntraday.stepAt(day, Date.parse(order.at)) + 1, GameIntraday.stepAt(day, nowMs) + 1).forEach(trigger);
+  return trigger.level();
+}
+
+// When an order fills (GameEngine.orderReached): 'AT OR BELOW' or 'AT OR ABOVE' its price.
+function gameOrderCondition(order) {
+  return (order.type === 'limit') === (order.side === 'buy') ? 'AT OR BELOW' : 'AT OR ABOVE';
+}
+
+// A cost preview of [label, value] rows.
+function gamePreviewTable(rows) {
+  return '<table class="w-100 game-preview-table"><tbody>' +
+    rows.map((row) => '<tr><td>' + row[0] + '</td><td class="text-end">' + row[1] + '</td></tr>').join('') + '</tbody></table>';
+}
+
+// Writes the game; if that fails, the lists in `before` ({ orders, trades }) are put back, so the page matches the file.
+async function gameSaveOrUndo(before, failText) {
+  try {
+    await gameWriteCurrent();
+    return true;
+  } catch (error) {
+    Object.assign(GamePage.game, before);
+    gameToast(failText + ': ' + (error.message || error));
+    return false;
+  }
+}
+
+// Keeps an order from GameEngine.placeOrder or placeDayOrder in the save; returns whether it was placed.
+async function gamePlaceOrder(order) {
+  if (order.error) { gameToast(order.error); return false; }
+  const before = { orders: GamePage.game.orders || [] };
+  GamePage.game.orders = before.orders.concat(order);
+  if (!(await gameSaveOrUndo(before, 'COULD NOT SAVE, ORDER NOT PLACED'))) return false;
+  gameToast(gameOrderLabel(order) + ' PLACED: ' + order.name + ' ' + gameOrderCondition(order) + ' ' + gameMoney(order.priceChf));
+  gameRender();
+  return true;
+}
+
+async function gameCancelOrder(at) {
+  const before = { orders: GamePage.game.orders };
+  GamePage.game.orders = before.orders.filter((order) => order.at !== at);
+  if (!(await gameSaveOrUndo(before, 'COULD NOT SAVE, ORDER STILL OPEN'))) return;
+  gameToast('ORDER CANCELLED');
+  gameRender();
+}
+
+// Open orders whose price was reached become their trades, earliest first, at the price that reached it. Orders that
+// cannot trade any more are dropped: one whose holding or day trade is gone (quietly), a day order after its close,
+// or a fill the rules refuse, such as a buy without the cash. Reads the last render's replay (GamePage.dayState).
+async function gameSettleOrders() {
+  const game = GamePage.game;
+  const state = GamePage.dayState;
+  if (!game || !state || !(game.orders || []).length || GamePage.settlingOrders) return;
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const kept = [];
+  const fills = [];
+  const messages = [];
+  game.orders.forEach((order) => {
+    if (!order.intraday) {
+      // Only a close that comes in late could fill a sell after its holding was sold by hand, so that one is dropped first.
+      if (order.side === 'sell' && !state.positions.some((position) => position.symbol === order.symbol)) return;
+      const fill = GameEngine.orderFill(GamePage.market, order, now.slice(0, 10));
+      if (fill) fills.push({ order: order, time: fill.date });
+      else kept.push(order);
+      return;
+    }
+    // An order closing a day trade (lotAt) is checked even when that trade is gone: the page may have been closed
+    // when the price was reached.
+    const day = gameTradingDay(order, order.date);
+    const fill = day && GameIntraday.firstStepReaching(day, Date.parse(order.at), Math.min(nowMs, Date.parse(order.closesAt) - 1), GameEngine.orderTrigger(order));
+    if (fill) fills.push({ order: order, time: fill.at, priceChf: fill.priceChf, session: day.session });
+    else if (order.lotAt && !state.dayTrades.some((lot) => lot.at === order.lotAt)) return;
+    else if (nowMs < Date.parse(order.closesAt)) kept.push(order);
+    else messages.push(gameOrderLabel(order) + ' ' + order.name + ' ENDED AT THE CLOSE');
+  });
+  if (kept.length === game.orders.length) return;
+
+  const before = { orders: game.orders, trades: game.trades.slice() };
+  game.orders = kept;
+  fills.sort((first, second) => (first.time < second.time ? -1 : first.time > second.time ? 1 : 0)).forEach((fill, index) => {
+    const order = fill.order;
+    // The order is its own asset and order for the trade. Day orders reached at the same step get their own
+    // millisecond, so each day trade keeps its own time.
+    const at = fill.session && new Date(Date.parse(fill.time) + index).toISOString();
+    const market = GamePage.market;
+    let trade;
+    if (!fill.session) trade = order.side === 'buy' ? GameEngine.buy(game, market, order, order, fill.time, now) : GameEngine.sell(game, market, order.symbol, order, fill.time, now);
+    else if (order.lotAt) trade = GameEngine.closeDayTrade(game, market, order.symbol, order, fill.priceChf, at);
+    else trade = GameEngine.openDayTrade(game, market, order, order, fill.priceChf, fill.session, at);
+    if (trade.error) { messages.push(gameOrderLabel(order) + ' ' + order.name + ' DROPPED: ' + trade.error); return; }
+    trade.orderType = order.type;
+    game.trades.push(trade);
+    messages.push(gameOrderLabel(order) + ': ' + gameTradeVerb(trade) + ' ' + gameQuantityWithUnit(trade, trade.quantity) + ' ' + trade.name);
+  });
+  GamePage.settlingOrders = true;
+  const saved = await gameSaveOrUndo(before, 'COULD NOT SAVE THE FILLED ORDERS');
+  GamePage.settlingOrders = false;
+  if (!saved) return;
+  if (messages.length) gameToast(messages.join(' · '));
+  gameRender();
+}
+
+// The open orders: regular ones on the portfolio tab, day orders on the day trading tab, each with a cancel button.
+function gameRenderOrders(today) {
+  const orders = GamePage.game.orders || [];
+  [
+    ['game-orders', false, 'NO OPEN ORDERS. PICK LIMIT ORDER IN THE BUY DIALOG, OR ORDER ON A HOLDING FOR A STOP-LOSS OR LIMIT SELL.'],
+    ['game-day-orders', true, 'NO OPEN DAY ORDERS. PICK LIMIT ORDER ABOVE, OR ORDER ON AN OPEN DAY TRADE FOR A STOP-LOSS OR TAKE PROFIT.'],
+  ].forEach(([containerId, intraday, emptyText]) => {
+    const container = document.getElementById(containerId);
+    const list = orders.filter((order) => !!order.intraday === intraday);
+    if (!list.length) { container.innerHTML = '<div class="game-dim">' + emptyText + '</div>'; return; }
+    container.innerHTML = '<table class="table-gta w-100"><thead><tr><th>PLACED</th><th>ORDER</th><th>ASSET</th><th class="text-end">PRICE</th>' +
+      '<th class="text-end">SIZE</th><th></th></tr></thead><tbody>' + list.map((order) => {
+        const unit = gameUnit(order);
+        const size = order.fraction != null
+          ? (order.fraction >= 1 ? 'ALL' : Math.round(order.fraction * 100) + '%') + (order.lotAt ? ' OF THE ' + gameClock(order.lotAt) + (order.side === 'buy' ? ' SHORT' : ' BUY') : '')
+          : order.quantity != null ? gameQuantityWithUnit(order, order.quantity) : gameMoney(order.amountChf, today);
+        return '<tr><td>' + (intraday ? gameClock(order.at) + '<br><small class="game-dim">ENDS ' + gameClock(order.closesAt) + '</small>' : formatDate(order.date)) + '</td>' +
+          '<td><span class="game-badge game-badge-' + order.side + '">' + gameOrderLabel(order) + '</span></td>' +
+          '<td><span class="game-symbol">' + escapeHtml(order.name) + '</span><span class="game-name">' + escapeHtml(order.symbol) + '</span></td>' +
+          '<td class="text-end">' + (order.type === 'trail' ? 'TRAILS ' + gameRate(order.trailPercent) + ' · ' : '') + gameOrderCondition(order) + ' ' +
+            gameMoney(gameOrderLevel(order, Date.now()), today) + (unit ? ' / ' + unit : '') + '</td>' +
+          '<td class="text-end">' + size + '</td>' +
+          '<td class="text-end"><button class="btn btn-gta btn-sm btn-danger-del game-order-cancel" data-order="' + escapeHtml(order.at) + '">CANCEL</button></td></tr>';
+      }).join('') + '</tbody></table>';
+    container.querySelectorAll('.game-order-cancel').forEach((button) => {
+      button.onclick = () => gameCancelOrder(button.dataset.order);
+    });
+  });
+}
+
+// The holding, or the open day trade (GamePage.sellOrder.lotAt), the sell order dialog is for; undefined once it is gone.
+function gameSellOrderTarget() {
+  const choice = GamePage.sellOrder;
+  return choice.lotAt ? GamePage.dayState.dayTrades.find((lot) => lot.at === choice.lotAt)
+    : GamePage.dayState.positions.find((position) => position.symbol === choice.symbol);
+}
+
+// The dialog's order: a sale, or for a short day trade a buyback.
+function gameSellOrderFields() {
+  const choice = GamePage.sellOrder;
+  // The one number is the price, or for a trailing stop the trail in percent.
+  const value = Number(document.getElementById('game-order-price').value);
+  const fields = { side: choice.short ? 'buy' : 'sell', type: choice.type, fraction: choice.fraction };
+  if (choice.type === 'trail') fields.trailPercent = value / 100;
+  else fields.priceChf = value;
+  if (choice.lotAt) fields.lotAt = choice.lotAt;
+  return fields;
+}
+
+// The dialog's order from the rules, against the last close or, for a day trade, the live price: the order, or { error }.
+function gameSellOrderResult(target, nowMs) {
+  const now = new Date(nowMs).toISOString();
+  if (!GamePage.sellOrder.lotAt) return GameEngine.placeOrder(GamePage.game, GamePage.market, target, gameSellOrderFields(), now.slice(0, 10), now);
+  const day = gameTradingDay(target, now.slice(0, 10));
+  return day ? GameEngine.placeDayOrder(GamePage.game, GamePage.market, target, gameSellOrderFields(), GameIntraday.priceAt(day, nowMs), day.session, now)
+    : { error: 'MARKET CLOSED' };
+}
+
+function gameOpenSellOrder(symbol, lotAt) {
+  const shortLot = !!lotAt && GamePage.dayState.dayTrades.some((lot) => lot.at === lotAt && lot.short);
+  GamePage.sellOrder = { symbol: symbol, lotAt: lotAt || null, short: shortLot, type: 'stop', fraction: 1 };
+  document.getElementById('game-order-price').value = '';
+  gameRenderSellOrder();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('game-order-modal')).show();
+}
+
+// The sell order dialog: the price now, and what the order sells when.
+function gameRenderSellOrder() {
+  const choice = GamePage.sellOrder;
+  const target = gameSellOrderTarget();
+  const nowMs = Date.now();
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  document.getElementById('game-order-title').textContent = choice.lotAt ? 'DAY TRADE ORDER' : 'SELL ORDER';
+  document.querySelectorAll('[data-order-type]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.orderType === choice.type)));
+  document.getElementById('game-order-limit-btn').textContent = choice.short ? 'LIMIT BUY' : 'LIMIT SELL';
+  document.querySelectorAll('[data-order-fraction]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.orderFraction) === choice.fraction)));
+  const quote = document.getElementById('game-order-quote');
+  const preview = document.getElementById('game-order-preview');
+  const button = document.getElementById('game-order-btn');
+  const day = target && choice.lotAt ? gameTradingDay(target, today) : null;
+  const lastClose = target && !choice.lotAt ? GamePage.market.quote(target.symbol, today) : null;
+  const priceNowChf = day ? GameIntraday.priceAt(day, nowMs) : lastClose ? lastClose.priceChf : null;
+  if (!target || !priceNowChf) {
+    quote.textContent = target ? 'NO PRICE NOW' : 'NOTHING LEFT TO SELL';
+    preview.innerHTML = '';
+    button.disabled = true;
+    return;
+  }
+  const unit = gameUnit(target);
+  const perUnit = unit ? ' / ' + unit : '';
+  const fields = gameSellOrderFields();
+  const trail = choice.type === 'trail';
+  document.getElementById('game-order-price-label').textContent = trail ? 'TRAIL (%)'
+    : (choice.short ? 'BUY BACK ' : 'SELL ') + gameOrderCondition(fields) + ' (CHF' + (unit ? ' PER ' + unit : '') + ')';
+  quote.innerHTML = '<span class="game-symbol">' + escapeHtml(target.name) + '</span> ' +
+    (choice.lotAt ? (choice.short ? 'SHORTED ' : 'BOUGHT ') + gameClock(choice.lotAt) + ' · LIVE PRICE ' : 'LAST CLOSE ') + gameMoney(priceNowChf, today) + perUnit;
+  if (!((trail ? fields.trailPercent : fields.priceChf) > 0)) {
+    preview.innerHTML = '<span class="game-dim">' + (trail ? 'ENTER HOW FAR IT TRAILS, IN %' : 'ENTER A PRICE') + '</span>';
+    button.disabled = true;
+    return;
+  }
+  const result = gameSellOrderResult(target, nowMs);
+  const quantity = target.quantity * choice.fraction;
+  // A trailing stop starts at its trail from the price now.
+  const levelChf = trail ? priceNowChf * (choice.short ? 1 + fields.trailPercent : 1 - fields.trailPercent) : fields.priceChf;
+  const priceName = choice.lotAt ? 'LIVE PRICE' : 'CLOSE';
+  preview.innerHTML = gamePreviewTable([
+    [choice.short ? 'BUYS BACK' : 'SELLS', gameQuantityWithUnit(target, quantity) + (choice.fraction < 1 ? ' (50%)' : ' (ALL)')],
+    trail ? ['WHEN THE ' + priceName, (choice.short ? 'RISES ' : 'FALLS ') + gameRate(fields.trailPercent) + ' FROM ITS ' + (choice.short ? 'LOWEST' : 'HIGHEST') + ' SINCE NOW']
+      : ['WHEN THE ' + priceName + ' IS', gameOrderCondition(fields) + ' ' + gameMoney(levelChf, today) + perUnit],
+    [trail ? 'LEVEL NOW' : 'FROM NOW', trail ? gameMoney(levelChf, today) + perUnit + ', MOVING WITH THE PRICE' : gamePercent(levelChf / priceNowChf - 1)],
+    [choice.short ? 'COST AT THAT PRICE' : 'VALUE AT THAT PRICE', gameMoney(quantity * levelChf, today)],
+  ]) + '<div class="game-dim mt-1">' + (choice.lotAt ? 'ENDS AT THE CLOSE IF THE PRICE IS NOT REACHED.'
+    : 'OPEN UNTIL IT FILLS OR YOU CANCEL IT. A CLOSE CAN JUMP PAST YOUR PRICE: IT THEN SELLS AT THAT CLOSE.') + '</div>' +
+    (result.error ? '<div class="game-neg game-preview-error">' + escapeHtml(result.error) + '</div>' : '');
+  button.disabled = !!result.error;
 }
 
 // ---------- Boot ----------
@@ -1147,6 +1717,28 @@ function gameBindControls() {
   gameShowTab(location.hash.slice(1));
   window.addEventListener('hashchange', () => gameShowTab(location.hash.slice(1)));
 
+  ['borrow', 'repay'].forEach((side) => {
+    document.getElementById('game-' + side + '-btn').onclick = () => {
+      const amountChf = Number(document.getElementById('game-loan-amount').value);
+      const trade = GameEngine.loanTrade(GamePage.game, GamePage.market, side, amountChf, todayIsoDate(), new Date().toISOString());
+      if (!trade.error) document.getElementById('game-loan-amount').value = '';
+      gameTrade(trade);
+    };
+  });
+  // Dividends from today on are reinvested, or paid in cash again; earlier ones stay as they were.
+  document.getElementById('game-reinvest-btn').onclick = async () => {
+    const game = GamePage.game;
+    const today = todayIsoDate();
+    const before = { reinvestPeriods: game.reinvestPeriods || [] };
+    const periods = before.reinvestPeriods.map((period) => Object.assign({}, period));
+    if (GameEngine.reinvestsOn(game, today)) periods[periods.length - 1].to = today;
+    else periods.push({ from: today });
+    game.reinvestPeriods = periods;
+    if (await gameSaveOrUndo(before, 'COULD NOT SAVE')) {
+      gameToast(GameEngine.reinvestsOn(game, today) ? 'DIVIDENDS ARE REINVESTED FROM TODAY' : 'DIVIDENDS ARE PAID IN CASH FROM TODAY');
+      gameRender();
+    }
+  };
   document.getElementById('game-open-buy').onclick = () => {
     gameRenderBuyForm();
     bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).show();
@@ -1162,10 +1754,51 @@ function gameBindControls() {
   document.querySelectorAll('[data-buy-mode]').forEach((button) => {
     button.onclick = () => { GamePage.buyMode = button.dataset.buyMode; gameRenderBuyForm(); };
   });
-  document.getElementById('game-buy-btn').onclick = () => {
+  document.querySelectorAll('[data-buy-kind]').forEach((button) => {
+    button.onclick = () => { GamePage.buyKind = button.dataset.buyKind; gameRenderBuyForm(); };
+  });
+  document.getElementById('game-limit').oninput = () => gameRenderBuyForm();
+  document.querySelectorAll('[data-buy-direction]').forEach((button) => {
+    button.onclick = () => { GamePage.buyDirection = button.dataset.buyDirection; gameRenderBuyForm(); };
+  });
+
+  document.querySelectorAll('[data-option-strategy]').forEach((button) => {
+    button.onclick = () => { GamePage.optionStrategy = button.dataset.optionStrategy; gameRenderOptionsForm(); };
+  });
+  document.getElementById('game-option-category').onchange = (event) => { GamePage.optionCategory = event.target.value; gameRenderOptionsForm(); };
+  ['game-option-asset', 'game-option-expiry', 'game-option-strike'].forEach((id) => { document.getElementById(id).onchange = () => gameRenderOptionsForm(); });
+  document.getElementById('game-option-quantity').oninput = () => gameRenderOptionsForm();
+  document.getElementById('game-option-btn').onclick = () => {
+    const asset = gameOptionAsset();
+    if (!asset) { gameToast('PICK A STOCK'); return; }
+    gameTrade(GameEngine.openOption(GamePage.game, GamePage.market, asset, gameOptionOrder(), todayIsoDate(), new Date().toISOString()));
+  };
+  document.getElementById('game-buy-btn').onclick = async () => {
     const asset = gameSelectedAsset();
     if (!asset) { gameToast('PICK AN ASSET'); return; }
+    if (GamePage.buyDirection === 'short' && (asset.class === 'stock' || asset.class === 'etf')) {
+      gameTrade(GameEngine.openShort(GamePage.game, GamePage.market, asset, gameOrder(asset), todayIsoDate(), new Date().toISOString()));
+      return;
+    }
+    if (GamePage.buyKind === 'limit' && !GameEngine.isTangible(asset.class)) {
+      const order = GameEngine.placeOrder(GamePage.game, GamePage.market, asset, gameLimitFields(asset), todayIsoDate(), new Date().toISOString());
+      if (await gamePlaceOrder(order)) bootstrap.Modal.getOrCreateInstance(document.getElementById('game-buy-modal')).hide();
+      return;
+    }
     gameTrade(GameEngine.buy(GamePage.game, GamePage.market, asset, gameOrder(asset), todayIsoDate(), new Date().toISOString()));
+  };
+
+  document.querySelectorAll('[data-order-type]').forEach((button) => {
+    button.onclick = () => { GamePage.sellOrder.type = button.dataset.orderType; gameRenderSellOrder(); };
+  });
+  document.querySelectorAll('[data-order-fraction]').forEach((button) => {
+    button.onclick = () => { GamePage.sellOrder.fraction = Number(button.dataset.orderFraction); gameRenderSellOrder(); };
+  });
+  document.getElementById('game-order-price').oninput = () => gameRenderSellOrder();
+  document.getElementById('game-order-btn').onclick = async () => {
+    const target = gameSellOrderTarget();
+    const order = target ? gameSellOrderResult(target, Date.now()) : { error: 'NOTHING LEFT TO SELL' };
+    if (await gamePlaceOrder(order)) bootstrap.Modal.getOrCreateInstance(document.getElementById('game-order-modal')).hide();
   };
 
   document.getElementById('game-day-category').onchange = (event) => {
@@ -1186,14 +1819,29 @@ function gameBindControls() {
   document.querySelectorAll('[data-day-preset]').forEach((button) => {
     button.onclick = () => { dayAmountInput.value = button.dataset.dayPreset; gameDayTick(); };
   });
+  document.querySelectorAll('[data-day-kind]').forEach((button) => {
+    button.onclick = () => { GamePage.dayKind = button.dataset.dayKind; gameDayTick(); };
+  });
+  document.querySelectorAll('[data-day-direction]').forEach((button) => {
+    button.onclick = () => { GamePage.dayDirection = button.dataset.dayDirection; gameDayTick(); };
+  });
+  document.getElementById('game-day-limit').oninput = () => gameDayTick();
   document.getElementById('game-day-buy-btn').onclick = () => {
     const asset = gameDayAsset();
     if (!asset) { gameToast('PICK AN ASSET'); return; }
     const now = new Date().toISOString();
     const day = gameTradingDay(asset, now.slice(0, 10));
     const value = Number(dayAmountInput.value);
-    gameTrade(day ? GameEngine.openDayTrade(GamePage.game, GamePage.market, asset, GamePage.dayMode === 'quantity' ? { quantity: value } : { amountChf: value },
-      GameIntraday.priceAt(day, Date.parse(now)), day.session, now) : { error: 'MARKET CLOSED' });
+    const short = GamePage.dayDirection === 'short';
+    const order = Object.assign(GamePage.dayMode === 'quantity' ? { quantity: value } : { amountChf: value }, short ? { short: true } : {});
+    if (!day) { gameToast('MARKET CLOSED'); return; }
+    const priceChf = GameIntraday.priceAt(day, Date.parse(now));
+    if (GamePage.dayKind === 'limit') {
+      const fields = Object.assign({ side: short ? 'sell' : 'buy', type: 'limit', priceChf: Number(document.getElementById('game-day-limit').value) }, order);
+      gamePlaceOrder(GameEngine.placeDayOrder(GamePage.game, GamePage.market, asset, fields, priceChf, day.session, now));
+      return;
+    }
+    gameTrade(GameEngine.openDayTrade(GamePage.game, GamePage.market, asset, order, priceChf, day.session, now));
   };
 
   const savesDialog = () => bootstrap.Modal.getOrCreateInstance(document.getElementById('game-saves-modal'));

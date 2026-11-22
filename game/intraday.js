@@ -152,9 +152,20 @@ const GameIntraday = (() => {
     return !!daySession && nowMs >= Date.parse(daySession.opensAt) && nowMs < Date.parse(daySession.closesAt);
   }
 
+  // The first step after the one at `fromMs`, up to the one at `toMs`, whose price passes `reached(priceChf)`:
+  // { at (ISO time the step starts), priceChf }, or null.
+  function firstStepReaching(day, fromMs, toMs, reached) {
+    const opensMs = Date.parse(day.session.opensAt);
+    const lastStep = stepAt(day, toMs);
+    for (let step = stepAt(day, fromMs) + 1; step <= lastStep; step++) {
+      if (reached(day.prices[step])) return { at: new Date(opensMs + step * STEP_SECONDS * 1000).toISOString(), priceChf: day.prices[step] };
+    }
+    return null;
+  }
+
   return {
     STEP_SECONDS, VOLATILITY_MULTIPLIER, MARKETS,
-    marketOf, session, currentOrNextSession, stepCount, dailyVolatility, tradingDay, stepAt, priceAt, isOpen,
+    marketOf, session, currentOrNextSession, stepCount, dailyVolatility, tradingDay, stepAt, priceAt, isOpen, firstStepReaching,
   };
 })();
 

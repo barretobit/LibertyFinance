@@ -8,7 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&family=Press+Start+2P&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=48" />
-    <link rel="stylesheet" href="game/game.css?v=19" />
+    <link rel="stylesheet" href="game/game.css?v=20" />
   </head>
   <body>
     <!-- ===== TOP NAV ===== -->
@@ -81,6 +81,7 @@
               <button class="game-toggle-btn" role="tab" id="game-tab-overview" aria-controls="game-panel-overview" data-game-tab="overview">OVERVIEW</button>
               <button class="game-toggle-btn" role="tab" id="game-tab-portfolio" aria-controls="game-panel-portfolio" data-game-tab="portfolio">PORTFOLIO</button>
               <button class="game-toggle-btn" role="tab" id="game-tab-day-trading" aria-controls="game-panel-day-trading" data-game-tab="day-trading">DAY TRADING</button>
+              <button class="game-toggle-btn" role="tab" id="game-tab-options" aria-controls="game-panel-options" data-game-tab="options">OPTIONS</button>
               <button class="game-toggle-btn" role="tab" id="game-tab-budget" aria-controls="game-panel-budget" data-game-tab="budget">BUDGET &amp; TAXES</button>
               <button class="game-toggle-btn" role="tab" id="game-tab-history" aria-controls="game-panel-history" data-game-tab="history">HISTORY</button>
             </div>
@@ -121,13 +122,30 @@
                   <div class="card-gta h-100 mb-0">
                     <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
                       <span>HOLDINGS</span>
-                      <button class="btn btn-gta btn-sm" id="game-open-buy">BUY</button>
+                      <div class="d-flex gap-2">
+                        <button class="btn btn-gta btn-sm" id="game-reinvest-btn" title="Dividends are paid in cash, or reinvested in the same asset after income tax"></button>
+                        <button class="btn btn-gta btn-sm" id="game-open-buy">BUY</button>
+                      </div>
                     </div>
-                    <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div></div>
+                    <div class="card-gta-body game-table-scroll"><div id="game-holdings"></div><div id="game-shorts"></div></div>
                   </div>
                 </div>
                 <div class="col-12 col-xl-4 mb-4">
                   <div class="d-flex flex-column gap-4">
+                    <div class="card-gta mb-0">
+                      <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
+                        <span>LOMBARD LOAN</span><span class="ws-header-note" id="game-loan-note"></span>
+                      </div>
+                      <div class="card-gta-body">
+                        <div id="game-loan" class="mb-2"></div>
+                        <label class="form-label" for="game-loan-amount">AMOUNT (CHF)</label>
+                        <input id="game-loan-amount" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+                        <div class="d-flex gap-2">
+                          <button class="btn btn-gta btn-sm flex-fill" id="game-borrow-btn">BORROW</button>
+                          <button class="btn btn-gta btn-sm flex-fill" id="game-repay-btn">REPAY</button>
+                        </div>
+                      </div>
+                    </div>
                     <div class="card-gta mb-0">
                       <div class="card-gta-header d-flex justify-content-between align-items-center gap-2">
                         <span>WEIGHTS</span><span class="ws-header-note">SHARE OF HOLDINGS</span>
@@ -142,6 +160,12 @@
                     </div>
                   </div>
                 </div>
+              </div>
+              <div class="card-gta mb-4">
+                <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <span>OPEN ORDERS</span><span class="ws-header-note">FILL AT THE FIRST NEW CLOSE THAT REACHES THEIR PRICE</span>
+                </div>
+                <div class="card-gta-body game-table-scroll"><div id="game-orders"></div></div>
               </div>
             </div>
 
@@ -181,8 +205,16 @@
                 </div>
                 <div class="col-12 col-xl-4 mb-4">
                   <div class="card-gta h-100 mb-0">
-                    <div class="card-gta-header">BUY</div>
+                    <div class="card-gta-header">TRADE</div>
                     <div class="card-gta-body">
+                      <div class="game-toggle mb-2" role="group" aria-label="Bet on a rise or a fall">
+                        <button class="game-toggle-btn" data-day-direction="long">BUY</button>
+                        <button class="game-toggle-btn" data-day-direction="short">SHORT</button>
+                      </div>
+                      <div class="game-toggle mb-2" role="group" aria-label="When to trade">
+                        <button class="game-toggle-btn" data-day-kind="now">NOW</button>
+                        <button class="game-toggle-btn" data-day-kind="limit">LIMIT ORDER</button>
+                      </div>
                       <div class="game-toggle mb-3" role="group" aria-label="Buy by">
                         <button class="game-toggle-btn" data-day-mode="amount">AMOUNT</button>
                         <button class="game-toggle-btn" data-day-mode="quantity">QUANTITY</button>
@@ -197,6 +229,10 @@
                         <button class="game-toggle-btn" data-day-preset="1000">1K</button>
                         <button class="game-toggle-btn" data-day-preset="10000">10K</button>
                       </div>
+                      <div id="game-day-limit-wrap" style="display: none">
+                        <label class="form-label" for="game-day-limit" id="game-day-limit-label">LIMIT PRICE (CHF)</label>
+                        <input id="game-day-limit" class="form-control form-gta mb-3" type="number" min="0" step="any" inputmode="decimal" />
+                      </div>
                       <div class="game-preview mb-3" id="game-day-preview"></div>
                       <button class="btn btn-gta w-100" id="game-day-buy-btn">BUY AT THE LIVE PRICE</button>
                     </div>
@@ -209,6 +245,60 @@
                   <span class="ws-header-note" id="game-day-summary"></span>
                 </div>
                 <div class="card-gta-body game-table-scroll"><div id="game-day-positions"></div></div>
+              </div>
+              <div class="card-gta mb-4">
+                <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <span>OPEN DAY ORDERS</span><span class="ws-header-note">FILL AT THE FIRST LIVE PRICE THAT REACHES THEIR PRICE · END AT THE CLOSE</span>
+                </div>
+                <div class="card-gta-body game-table-scroll"><div id="game-day-orders"></div></div>
+              </div>
+            </div>
+
+            <!-- ===== OPTIONS ===== -->
+            <div id="game-panel-options" role="tabpanel" aria-labelledby="game-tab-options">
+              <div class="row">
+                <div class="col-12 col-xl-4 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header">NEW OPTION</div>
+                    <div class="card-gta-body">
+                      <div class="game-toggle game-toggle-wrap mb-3" role="group" aria-label="Strategy">
+                        <button class="game-toggle-btn" data-option-strategy="buy-call">BUY CALL</button>
+                        <button class="game-toggle-btn" data-option-strategy="buy-put">BUY PUT</button>
+                        <button class="game-toggle-btn" data-option-strategy="protective-put">PROTECTIVE PUT</button>
+                        <button class="game-toggle-btn" data-option-strategy="covered-call">COVERED CALL</button>
+                        <button class="game-toggle-btn" data-option-strategy="secured-put">CASH-SECURED PUT</button>
+                      </div>
+                      <div class="game-dim mb-3" id="game-option-strategy-note"></div>
+                      <label class="form-label" for="game-option-category">CATEGORY</label>
+                      <select id="game-option-category" class="form-select form-gta mb-2"></select>
+                      <label class="form-label" for="game-option-asset">STOCK OR ETF</label>
+                      <select id="game-option-asset" class="form-select form-gta mb-2"></select>
+                      <div class="game-quote mb-2" id="game-option-quote"></div>
+                      <div class="row">
+                        <div class="col-6 mb-2">
+                          <label class="form-label" for="game-option-expiry">EXPIRY</label>
+                          <select id="game-option-expiry" class="form-select form-gta"></select>
+                        </div>
+                        <div class="col-6 mb-2">
+                          <label class="form-label" for="game-option-strike">STRIKE (CHF)</label>
+                          <select id="game-option-strike" class="form-select form-gta"></select>
+                        </div>
+                      </div>
+                      <label class="form-label" for="game-option-quantity">UNITS</label>
+                      <input id="game-option-quantity" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+                      <div class="game-preview mb-3" id="game-option-preview"></div>
+                      <button class="btn btn-gta w-100" id="game-option-btn">BUY</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-12 col-xl-8 mb-4">
+                  <div class="card-gta h-100 mb-0">
+                    <div class="card-gta-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                      <span>OPEN OPTIONS</span><span class="ws-header-note">PRICED WITH BLACK-SCHOLES FROM THE STOCK'S VOLATILITY · ONE OPTION PER UNIT</span>
+                    </div>
+                    <div class="card-gta-body game-table-scroll"><div id="game-options"></div></div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -264,6 +354,14 @@
             <select id="game-asset" class="form-select form-gta mb-3"></select>
             <div class="game-quote mb-2" id="game-quote"></div>
             <div class="game-details mb-3" id="game-details"></div>
+            <div class="game-toggle mb-2" role="group" aria-label="Bet on a rise or a fall" id="game-direction-toggle">
+              <button class="game-toggle-btn" data-buy-direction="long">BUY</button>
+              <button class="game-toggle-btn" data-buy-direction="short">SHORT</button>
+            </div>
+            <div class="game-toggle mb-2" role="group" aria-label="When to buy" id="game-kind-toggle">
+              <button class="game-toggle-btn" data-buy-kind="now">NOW</button>
+              <button class="game-toggle-btn" data-buy-kind="limit">LIMIT ORDER</button>
+            </div>
             <div class="game-toggle mb-2" role="group" aria-label="Buy by" id="game-mode-toggle">
               <button class="game-toggle-btn" data-buy-mode="amount">AMOUNT</button>
               <button class="game-toggle-btn" data-buy-mode="quantity">QUANTITY</button>
@@ -276,12 +374,44 @@
                 <option value="kg">KILOS</option>
               </select>
             </div>
+            <div id="game-limit-wrap" style="display: none">
+              <label class="form-label" for="game-limit" id="game-limit-label">LIMIT PRICE (CHF)</label>
+              <input id="game-limit" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+            </div>
             <div id="game-down-wrap" style="display: none">
               <label class="form-label" for="game-down">DOWN PAYMENT (%, AT LEAST 20)</label>
               <input id="game-down" class="form-control form-gta mb-2" type="number" min="20" max="100" step="1" value="20" inputmode="numeric" />
             </div>
             <div class="game-preview mb-3" id="game-preview"></div>
             <button class="btn btn-gta w-100" id="game-buy-btn">BUY</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SELL ORDER DIALOG ===== -->
+    <div class="modal fade" id="game-order-modal" tabindex="-1" aria-labelledby="game-order-title" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content modal-gta">
+          <div class="modal-header">
+            <h5 class="modal-title" id="game-order-title">SELL ORDER</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="game-quote mb-3" id="game-order-quote"></div>
+            <div class="game-toggle mb-3" role="group" aria-label="Order type">
+              <button class="game-toggle-btn" data-order-type="stop">STOP-LOSS</button>
+              <button class="game-toggle-btn" data-order-type="trail">TRAILING STOP</button>
+              <button class="game-toggle-btn" data-order-type="limit" id="game-order-limit-btn">LIMIT SELL</button>
+            </div>
+            <label class="form-label" for="game-order-price" id="game-order-price-label">PRICE (CHF)</label>
+            <input id="game-order-price" class="form-control form-gta mb-2" type="number" min="0" step="any" inputmode="decimal" />
+            <div class="game-toggle mb-3" role="group" aria-label="How much to close">
+              <button class="game-toggle-btn" data-order-fraction="0.5">50%</button>
+              <button class="game-toggle-btn" data-order-fraction="1">ALL</button>
+            </div>
+            <div class="game-preview mb-3" id="game-order-preview"></div>
+            <button class="btn btn-gta w-100" id="game-order-btn">PLACE ORDER</button>
           </div>
         </div>
       </div>
@@ -333,10 +463,10 @@
     <script src="js/pages-wallstreet.js?v=45"></script>
 
     <!-- ===== GAME ===== -->
-    <script src="game/engine.js?v=11"></script>
-    <script src="game/intraday.js?v=1"></script>
+    <script src="game/engine.js?v=15"></script>
+    <script src="game/intraday.js?v=2"></script>
     <script src="game/tangibles.js?v=4"></script>
     <script src="game/saves.js?v=1"></script>
-    <script src="game/page.js?v=28"></script>
+    <script src="game/page.js?v=33"></script>
   </body>
 </html>

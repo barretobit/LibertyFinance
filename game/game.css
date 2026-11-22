@@ -268,6 +268,13 @@
   color: var(--accent);
   box-shadow: 0 0 8px var(--accent-glow);
 }
+/* Many choices: two or three to a row. */
+.game-toggle-wrap {
+  flex-wrap: wrap;
+}
+.game-toggle-wrap .game-toggle-btn {
+  flex: 1 1 30%;
+}
 
 /* Board tabs: larger toggle buttons that wrap onto more rows on narrow screens. */
 .game-tabs {

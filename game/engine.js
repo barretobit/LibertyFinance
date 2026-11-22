@@ -29,11 +29,28 @@
  *     an expense; the part above two thirds of the price is paid back
  *     (amortized) within 15 years. A new mortgage must pass the banks'
  *     affordability check.
+ *   - A Lombard loan (trades with side 'borrow' or 'repay') lends cash against
+ *     stocks, ETFs and metals, up to a share of their value. Its interest is
+ *     paid at the end of each month. A loan above that lending value is paid
+ *     down by the cash first, then by selling holdings (a margin call).
+ *   - Stocks and ETFs can be shorted (trades with short: true, a 'sell' to
+ *     open, a 'buy' to buy back). The sale amount and half of it again from
+ *     the cash are held as collateral; a borrow fee is paid monthly on the
+ *     value shorted, and every dividend goes to the lender. Once the units
+ *     are worth more than the collateral allows, they are bought back.
+ *   - Options on stocks and ETFs (trades with an `option`): calls and puts,
+ *     bought, or written when covered (a call by units held, a put by cash).
+ *     They are priced with Black-Scholes and end the day after their expiry
+ *     at its close: a bought one pays out in cash, a written one in the money
+ *     is assigned, delivering or buying the units at the strike. Options pay
+ *     no stamp duty; their premiums count as trading volume.
  * Swiss rules modelled for a private investor:
  *   - Capital gains on movable assets are tax free.
  *   - Dividends are income: each one is paid in cash to the units held at the
  *     end of the day before its ex-dividend day, and the income tax it adds on
  *     top of the salary and the year's earlier dividends is taken at once.
+ *     While reinvesting (game.reinvestPeriods), what is left after the tax
+ *     buys more of the same at that day's price.
  *   - Securities transfer stamp duty on every stock and ETF trade:
  *     0.075% for Swiss securities, 0.15% for foreign ones. Crypto and
  *     physical precious metals pay none.
@@ -49,10 +66,20 @@
  * dealer, auction house or estate agent, who keeps a share of the sale price.
  * Day trades (trade.intraday) are bought and sold at the simulated prices of
  * game/intraday.js and live apart from the holdings: they pay stamp duty and
- * count for the professional trader check, but get no dividends. A day trade
+ * count for the professional trader check, but get no dividends. A short day
+ * trade (trade.short) is sold first and bought back later, so it gains when
+ * the price falls; it holds its sale amount as cash, like a buy, and loses
+ * more than that if the price more than doubles. A day trade
  * still open when its market closes (trade.closesAt) is reverted: it never
  * happened, so no cash moves and no fees are paid. Until it is closed or
  * reverted, its cash is held and it counts in the net worth at what it cost.
+ * Orders (game.orders) wait for a price: a limit buys at or below its level
+ * and sells at or above it, a stop-loss sells at or below it. A regular order
+ * fills at the first newer daily close that reaches its level and stays open
+ * until then; a day order fills at the first simulated price that reaches it
+ * and ends at its market's close. The page turns a reached order into a
+ * normal trade (trade.orderType), so the replay never sees orders. Their cash
+ * is not held: a buy that cannot be paid when it fills is dropped.
  * Not modelled: interest on cash, the withholding taxes on dividends (Swiss
  * 35% refunded, foreign ones credited: the net effect is the income tax
  * above), the pension fund savings in the social contributions, imputed
@@ -202,6 +229,25 @@ const GameEngine = (() => {
     { width: Infinity, rate: 0.40 },
   ];
 
+  // shortcut: one Lombard rate and flat loan-to-value ratios per asset class, roughly what Swiss private banks lend;
+  // refresh them by hand when they drift.
+  const LOMBARD_INTEREST_RATE = 0.03;
+  const LOMBARD_LOAN_TO_VALUE = { stock: 0.5, etf: 0.6, metal: 0.5 };
+
+  // Short sales of stocks and ETFs: the bank keeps the sale amount plus half of it again from the cash as collateral,
+  // and buys the units back once that collateral falls under 125% of their value, after a rise of 20%.
+  // shortcut: one flat borrow fee for every stock; real fees run from about 0.25% to far more for hard to borrow names.
+  const SHORT_COLLATERAL = 1.5;
+  const SHORT_MAINTENANCE = 1.25;
+  const SHORT_BORROW_FEE_RATE = 0.01;
+
+  // Options on stocks and ETFs: monthly expiries (third Friday) for the next three months, strikes from 80% to 120% of
+  // the price, priced with Black-Scholes from the stock's volatility (market.volatility, yearly) at the time of the trade.
+  // shortcut: no bid-ask spread, no interest rate (CHF rates are near zero) and no dividends in the price; add them when they matter.
+  const OPTION_EXPIRY_COUNT = 3;
+  const OPTION_STRIKE_STEPS = [0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2];
+  const DEFAULT_VOLATILITY = 0.25;
+
   const SHORT_HOLDING_DAYS = 183;
   const MAX_VOLUME_MULTIPLE = 5;
   // A trade needs a price no older than this, so delisted or stale assets cannot be traded.
@@ -240,7 +286,7 @@ const GameEngine = (() => {
     const name = String(options.name || '').trim().slice(0, 40) || 'PLAYER';
     return {
       version: 2, name: name, location: options.location, difficulty: options.difficulty,
-      startCash: level.startCash, startDate: options.startDate, trades: [],
+      startCash: level.startCash, startDate: options.startDate, trades: [], orders: [],
     };
   }
 
@@ -466,6 +512,54 @@ const GameEngine = (() => {
     return { mortgageRepaidChf: mortgageRepaidChf, shortSales: shortSales };
   }
 
+  // The standard normal distribution, from the Abramowitz-Stegun approximation of erf (error under 1.5e-7).
+  function normalCdf(value) {
+    const t = 1 / (1 + 0.3275911 * Math.abs(value) / Math.SQRT2);
+    const erf = 1 - t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-value * value / 2);
+    return value >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+  }
+
+  // The Black-Scholes price of one unit of a European call or put, without interest or dividends. At or after expiry
+  // (`years` <= 0) it is what exercising pays.
+  function optionPrice(kind, spotChf, strikeChf, years, volatility) {
+    const intrinsicChf = kind === 'call' ? Math.max(0, spotChf - strikeChf) : Math.max(0, strikeChf - spotChf);
+    if (!(years > 0) || !(volatility > 0)) return intrinsicChf;
+    const spread = volatility * Math.sqrt(years);
+    const upper = (Math.log(spotChf / strikeChf) + spread * spread / 2) / spread;
+    const lower = upper - spread;
+    return kind === 'call' ? spotChf * normalCdf(upper) - strikeChf * normalCdf(lower) : strikeChf * normalCdf(-lower) - spotChf * normalCdf(-upper);
+  }
+
+  function optionYears(date, expiry) {
+    return daysBetween(date, expiry) / 365;
+  }
+
+  // The third Friday of a month, monthIndex 0 for January (later ones roll into the next years).
+  function thirdFriday(year, monthIndex) {
+    const firstWeekday = new Date(Date.UTC(year, monthIndex, 1)).getUTCDay();
+    return new Date(Date.UTC(year, monthIndex, 1 + (5 - firstWeekday + 7) % 7 + 14)).toISOString().slice(0, 10);
+  }
+
+  // What can be traded on a stock or ETF on `date`: the next expiries at least a week away, strikes around the last close
+  // rounded to a power of ten under 5% of it, and the volatility options are priced with. { error } without a recent price.
+  function optionChain(market, asset, date) {
+    const quote = tradeQuote(market, asset.symbol, date);
+    if (quote.error) return quote;
+    const year = Number(date.slice(0, 4));
+    const monthIndex = Number(date.slice(5, 7)) - 1;
+    const expiries = [0, 1, 2, 3, 4].map((offset) => thirdFriday(year, monthIndex + offset)).filter((expiry) => daysBetween(date, expiry) >= 7)
+      .slice(0, OPTION_EXPIRY_COUNT);
+    const tick = Math.pow(10, Math.floor(Math.log10(quote.priceChf * 0.05)));
+    const strikes = [...new Set(OPTION_STRIKE_STEPS.map((step) => Number((Math.round(quote.priceChf * step / tick) * tick).toFixed(10))))];
+    const volatility = market.volatility ? market.volatility(asset.symbol, date) : DEFAULT_VOLATILITY;
+    return { priceChf: quote.priceChf, expiries: expiries, strikes: strikes, volatility: volatility };
+  }
+
+  // Whether dividends paid on `date` are reinvested: game.reinvestPeriods holds { from, to (excluded, none while on) }.
+  function reinvestsOn(game, date) {
+    return (game.reinvestPeriods || []).some((period) => period.from <= date && (!period.to || date < period.to));
+  }
+
   function copyPositions(list) {
     const positions = {};
     list.forEach((position) => {
@@ -505,42 +599,265 @@ const GameEngine = (() => {
     const yearStartWealth = {};
     const yearVolume = {};
     const yearShortSales = {};
-    let month = { salaryChf: 0, expensesChf: 0 };
-    // Day trade buys with units not sold yet: { trade, quantity, event }.
+    const newMonth = () => ({ salaryChf: 0, expensesChf: 0, lombardInterestChf: 0, borrowFeeChf: 0 });
+    let month = newMonth();
+    // Day trades with units not closed yet, a buy or a short sale each: { trade, quantity, event }.
     let openDayLots = [];
     let dayTradeProfitChf = 0;
+    let loanChf = 0;
+    // Short holdings by symbol: { symbol, class, name, lots: [{ date, quantity, priceChf, heldChf, dutyChf }] }.
+    const shorts = {};
+    // Open options, one per opening trade: { at, symbol, class, name, kind, strike, expiry, written, volatility,
+    // quantity, premiumChf (per unit), heldChf (the cash securing a written put) }.
+    let options = [];
 
     const positionList = () => Object.keys(positions).map((symbol) => positions[symbol]);
-    const allLots = () => positionList().reduce((lots, position) => lots.concat(position.lots), []);
+    const allLots = () => positionList().flatMap((position) => position.lots);
     const mortgageBalance = () => allLots().reduce((sum, lot) => sum + lot.mortgageChf, 0);
     const openDayAmountChf = () => openDayLots.reduce((sum, lot) => sum + lot.trade.amountChf * lot.quantity / lot.trade.quantity, 0);
-    const netWorthOn = (date) => cash + positionList().reduce((sum, position) => sum + positionValue(market, position, date), 0) + openDayAmountChf() - mortgageBalance();
+    const shortList = () => Object.keys(shorts).map((symbol) => shorts[symbol]);
+    const lotSum = (lots, key) => lots.reduce((sum, lot) => sum + lot[key], 0);
+    const shortPriceOn = (short, date) => {
+      const quote = market.quote(short.symbol, date);
+      return quote ? quote.priceChf : short.lots[short.lots.length - 1].priceChf;
+    };
+    // A short is worth its collateral minus what buying the units back would cost.
+    const shortsWorthOn = (date) => shortList().reduce((sum, short) =>
+      sum + lotSum(short.lots, 'heldChf') - lotSum(short.lots, 'quantity') * shortPriceOn(short, date), 0);
+    // A bought option is worth its price, a written one owes it; a written put also holds its cash.
+    const optionsWorthOn = (date) => options.reduce((sum, option) => {
+      const quote = market.quote(option.symbol, date);
+      const priceChf = quote ? optionPrice(option.kind, quote.priceChf, option.strike, optionYears(date, option.expiry), option.volatility) : option.premiumChf;
+      return sum + (option.written ? -priceChf : priceChf) * option.quantity + option.heldChf;
+    }, 0);
+    const netWorthOn = (date) => cash + positionList().reduce((sum, position) => sum + positionValue(market, position, date), 0) + openDayAmountChf() +
+      shortsWorthOn(date) + optionsWorthOn(date) - mortgageBalance() - loanChf;
 
     const applyDayTrade = (trade, year) => {
+      // A buy opens a long trade, a short sale (trade.short) a short one; both hold their amount and pay the duty.
+      const opens = trade.side === (trade.short ? 'sell' : 'buy');
+      // A close closes the trade named by trade.lotAt, else first in, first out. With nothing open to close (a save
+      // edited by hand) it is skipped, so it cannot make cash out of nothing.
+      const closing = opens ? [] : openDayLots.filter((lot) => lot.trade.symbol === trade.symbol && !!lot.trade.short === !!trade.short &&
+        (!trade.lotAt || lot.trade.at === trade.lotAt));
+      if (!opens && !closing.length) return;
       feesPaid += trade.stampDutyChf;
       yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
       const event = Object.assign({ type: trade.side }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
       events.push(event);
-      if (trade.side === 'buy') {
+      if (opens) {
         cash -= trade.amountChf + trade.stampDutyChf;
         openDayLots.push({ trade: trade, quantity: trade.quantity, event: event });
         return;
       }
-      cash += trade.amountChf - trade.stampDutyChf;
-      // The buy named by trade.lotAt, else first in, first out; every buy it closes is a sale held under six months.
-      let toSell = trade.quantity;
-      let costChf = 0;
-      openDayLots.filter((lot) => lot.trade.symbol === trade.symbol && (!trade.lotAt || lot.trade.at === trade.lotAt)).forEach((lot) => {
-        if (toSell <= EMPTY_QUANTITY) return;
-        const used = Math.min(lot.quantity, toSell);
-        costChf += (lot.trade.amountChf + lot.trade.stampDutyChf) * used / lot.trade.quantity;
+      // Every trade it closes is a sale held under six months.
+      let toClose = trade.quantity;
+      let openedChf = 0;
+      let openingDutyChf = 0;
+      closing.forEach((lot) => {
+        if (toClose <= EMPTY_QUANTITY) return;
+        const used = Math.min(lot.quantity, toClose);
+        openedChf += lot.trade.amountChf * used / lot.trade.quantity;
+        openingDutyChf += lot.trade.stampDutyChf * used / lot.trade.quantity;
         lot.quantity -= used;
-        toSell -= used;
+        toClose -= used;
         yearShortSales[year] = (yearShortSales[year] || 0) + 1;
       });
       openDayLots = openDayLots.filter((lot) => lot.quantity > EMPTY_QUANTITY);
-      event.profitChf = trade.amountChf - trade.stampDutyChf - costChf;
+      // A sale gets its price. Buying back a short gives back the amount held plus what the short sale got, minus the buyback.
+      const cashChf = trade.short ? 2 * openedChf - trade.amountChf - trade.stampDutyChf : trade.amountChf - trade.stampDutyChf;
+      cash += cashChf;
+      event.cashChf = cashChf;
+      event.profitChf = trade.short ? openedChf - openingDutyChf - trade.amountChf - trade.stampDutyChf
+        : trade.amountChf - trade.stampDutyChf - openedChf - openingDutyChf;
       dayTradeProfitChf += event.profitChf;
+    };
+
+    // A trade of the holdings: units, cash, fees, taxes, the trader check and its line in the history.
+    const applyHoldingTrade = (trade, year) => {
+      const dealerFeeChf = trade.dealerFeeChf || 0;
+      const gainsTaxChf = trade.gainsTaxChf || 0;
+      const purchaseCostsChf = trade.purchaseCostsChf || 0;
+      const mortgageChf = trade.mortgageChf || 0;
+      const result = applyTrade(positions, trade);
+      feesPaid += trade.stampDutyChf + dealerFeeChf + purchaseCostsChf;
+      taxesPaid += gainsTaxChf;
+      if (!isTangible(trade.class)) {
+        yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
+        yearShortSales[year] = (yearShortSales[year] || 0) + result.shortSales;
+      }
+      if (trade.side === 'buy') cash -= trade.amountChf - mortgageChf + trade.stampDutyChf + purchaseCostsChf;
+      else cash += trade.amountChf - trade.stampDutyChf - dealerFeeChf - gainsTaxChf - result.mortgageRepaidChf;
+      events.push(Object.assign({ type: trade.side }, trade, {
+        dealerFeeChf: dealerFeeChf, gainsTaxChf: gainsTaxChf, purchaseCostsChf: purchaseCostsChf, mortgageChf: mortgageChf,
+        mortgageRepaidChf: result.mortgageRepaidChf,
+      }));
+    };
+
+    // A short sale of a holding, or its buyback, first in, first out; every buyback counts as a quick sale. A buyback
+    // with nothing shorted (a save edited by hand) is skipped.
+    const applyShortTrade = (trade, year) => {
+      if (trade.side === 'buy' && !shorts[trade.symbol]) return;
+      feesPaid += trade.stampDutyChf;
+      yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
+      const event = Object.assign({ type: trade.side }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
+      events.push(event);
+      const short = shorts[trade.symbol] || (shorts[trade.symbol] = { symbol: trade.symbol, class: trade.class, name: trade.name, lots: [] });
+      if (trade.side === 'sell') {
+        const heldChf = trade.amountChf * SHORT_COLLATERAL;
+        // The bank keeps the sale amount; the cash adds the rest of the collateral and the duty.
+        event.cashChf = -(heldChf - trade.amountChf + trade.stampDutyChf);
+        cash += event.cashChf;
+        short.lots.push({ date: trade.date, quantity: trade.quantity, priceChf: trade.priceChf, heldChf: heldChf, dutyChf: trade.stampDutyChf });
+        return;
+      }
+      let toClose = trade.quantity;
+      let heldBackChf = 0;
+      let soldChf = 0;
+      let openingDutyChf = 0;
+      while (toClose > EMPTY_QUANTITY && short.lots.length) {
+        const lot = short.lots[0];
+        const used = Math.min(lot.quantity, toClose);
+        const share = used / lot.quantity;
+        heldBackChf += lot.heldChf * share;
+        soldChf += lot.priceChf * used;
+        openingDutyChf += lot.dutyChf * share;
+        lot.heldChf -= lot.heldChf * share;
+        lot.dutyChf -= lot.dutyChf * share;
+        lot.quantity -= used;
+        toClose -= used;
+        yearShortSales[year] = (yearShortSales[year] || 0) + 1;
+        if (lot.quantity <= EMPTY_QUANTITY) short.lots.shift();
+      }
+      if (!short.lots.length) delete shorts[trade.symbol];
+      event.cashChf = heldBackChf - trade.amountChf - trade.stampDutyChf;
+      cash += event.cashChf;
+      event.profitChf = soldChf - openingDutyChf - trade.amountChf - trade.stampDutyChf;
+    };
+    // Once the collateral of a short falls under SHORT_MAINTENANCE times the value of its units, they are bought back.
+    const callShorts = (date, year) => {
+      shortList().forEach((short) => {
+        const quote = market.quote(short.symbol, date);
+        const quantity = lotSum(short.lots, 'quantity');
+        if (!quote || lotSum(short.lots, 'heldChf') >= SHORT_MAINTENANCE * quantity * quote.priceChf) return;
+        const amountChf = quantity * quote.priceChf;
+        applyShortTrade({
+          date: date, side: 'buy', short: true, marginCall: true, symbol: short.symbol, class: short.class, name: short.name,
+          quantity: quantity, priceChf: quote.priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(short),
+        }, year);
+      });
+    };
+
+    // An option trade: buying or writing one opens it, the opposite trade on the same option (trade.optionAt) closes it;
+    // one closing an option that is not open (a save edited by hand) is skipped. Options pay no stamp duty; their
+    // premiums count as trading volume.
+    const applyOptionTrade = (trade, year) => {
+      const option = trade.option;
+      const open = trade.optionAt && options.find((item) => item.at === trade.optionAt);
+      if (trade.optionAt && !open) return;
+      yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
+      const event = Object.assign({ type: trade.side }, trade, { stampDutyChf: 0, dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
+      events.push(event);
+      if (!trade.optionAt) {
+        // A written put holds its strike times the units as cash until it ends.
+        const heldChf = option.written && option.kind === 'put' ? option.strike * trade.quantity : 0;
+        event.cashChf = (option.written ? trade.amountChf : -trade.amountChf) - heldChf;
+        cash += event.cashChf;
+        options.push({
+          at: trade.at, symbol: trade.symbol, class: trade.class, name: trade.name, kind: option.kind, strike: option.strike, expiry: option.expiry,
+          written: option.written, volatility: option.volatility, quantity: trade.quantity, premiumChf: trade.priceChf, heldChf: heldChf,
+        });
+        return;
+      }
+      const share = Math.min(1, trade.quantity / open.quantity);
+      const releasedChf = open.heldChf * share;
+      event.cashChf = (option.written ? -trade.amountChf : trade.amountChf) + releasedChf;
+      cash += event.cashChf;
+      event.profitChf = (option.written ? open.premiumChf - trade.priceChf : trade.priceChf - open.premiumChf) * trade.quantity;
+      open.heldChf -= releasedChf;
+      open.quantity -= trade.quantity;
+      options = options.filter((item) => item.quantity > EMPTY_QUANTITY);
+    };
+    // The day after its expiry an option ends at that day's close. A bought one pays what exercising it is worth in cash.
+    // A written call that ends above its strike delivers the units at the strike (cash for any no longer held); a written
+    // put gives its cash back and, below its strike, buys the units at the strike with it.
+    const expireOptions = (date, year) => {
+      options.filter((option) => option.expiry < date).forEach((option) => {
+        const quote = market.quote(option.symbol, option.expiry);
+        const spotChf = quote ? quote.priceChf : option.strike;
+        const payoutChf = optionPrice(option.kind, spotChf, option.strike, 0, 0) * option.quantity;
+        const event = {
+          type: 'expiry', date: date, symbol: option.symbol, class: option.class, name: option.name, option: option, quantity: option.quantity,
+          spotChf: spotChf, profitChf: (option.written ? -1 : 1) * (payoutChf - option.premiumChf * option.quantity),
+        };
+        events.push(event);
+        let cashChf = option.written ? option.heldChf : payoutChf;
+        cash += cashChf;
+        // Assigned, a written option's units change hands at the strike.
+        if (option.written && payoutChf > 0) {
+          const held = positions[option.symbol] ? positions[option.symbol].quantity : 0;
+          const quantity = option.kind === 'put' ? option.quantity : Math.min(option.quantity, held);
+          if (quantity > EMPTY_QUANTITY) {
+            const amountChf = option.strike * quantity;
+            const trade = {
+              date: date, side: option.kind === 'put' ? 'buy' : 'sell', assigned: true, symbol: option.symbol, class: option.class, name: option.name,
+              quantity: quantity, priceChf: option.strike, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(option),
+            };
+            applyHoldingTrade(trade, year);
+            cashChf += trade.side === 'buy' ? -amountChf - trade.stampDutyChf : amountChf - trade.stampDutyChf;
+          }
+          // A call on units no longer held is settled in cash.
+          const missingChf = (spotChf - option.strike) * (option.quantity - quantity);
+          cash -= missingChf;
+          cashChf -= missingChf;
+        }
+        event.cashChf = cashChf;
+      });
+      options = options.filter((option) => option.expiry >= date);
+    };
+
+    // The Lombard loan: borrowing pays out cash, repaying takes it back.
+    const applyLoan = (trade) => {
+      const signedChf = trade.side === 'borrow' ? trade.amountChf : -trade.amountChf;
+      loanChf += signedChf;
+      cash += signedChf;
+      events.push({ type: trade.side, date: trade.date, amountChf: trade.amountChf });
+    };
+    const lendingValueOn = (date) => positionList().reduce((sum, position) =>
+      sum + positionValue(market, position, date) * (LOMBARD_LOAN_TO_VALUE[position.class] || 0), 0);
+    // A loan above the lending value is paid down by the cash first, then by selling the same share of every pledged
+    // holding at that day's close, just enough to bring the loan back to the lending value of what is left.
+    const callLoan = (date, year) => {
+      if (loanChf <= 0) return;
+      const excessChf = loanChf - lendingValueOn(date);
+      if (excessChf <= 0.005) return;
+      const fromCashChf = Math.min(Math.max(0, cash), excessChf);
+      loanChf -= fromCashChf;
+      cash -= fromCashChf;
+      let fromSalesChf = 0;
+      const lendingChf = lendingValueOn(date);
+      if (loanChf - lendingChf > 0.005) {
+        const pledged = positionList().filter((position) => LOMBARD_LOAN_TO_VALUE[position.class] > 0 && market.quote(position.symbol, date));
+        // Selling a share f of each brings in f times their value after duty and lowers the lending value by f times it.
+        const afterDutyChf = pledged.reduce((sum, position) => sum + positionValue(market, position, date) * (1 - stampDutyRate(position)), 0);
+        const fraction = Math.min(1, (loanChf - lendingChf) / (afterDutyChf - lendingChf));
+        pledged.forEach((position) => {
+          const priceChf = market.quote(position.symbol, date).priceChf;
+          const quantity = position.quantity * fraction;
+          const amountChf = quantity * priceChf;
+          const stampDutyChf = amountChf * stampDutyRate(position);
+          applyHoldingTrade({
+            date: date, side: 'sell', symbol: position.symbol, class: position.class, name: position.name, marginCall: true,
+            quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: stampDutyChf,
+          }, year);
+          fromSalesChf += amountChf - stampDutyChf;
+        });
+        fromSalesChf = Math.min(fromSalesChf, loanChf);
+        loanChf -= fromSalesChf;
+        cash -= fromSalesChf;
+      }
+      // With no cash and nothing left to sell, nothing happens, and the history stays quiet.
+      if (fromCashChf + fromSalesChf > 0.005) events.push({ type: 'margin', date: date, fromCashChf: fromCashChf, fromSalesChf: fromSalesChf, loanChf: loanChf });
     };
 
     // The units still open at the close are taken out as if never bought: cash, fees, volume and history.
@@ -585,32 +902,50 @@ const GameEngine = (() => {
             type: 'dividend', date: date, symbol: position.symbol, class: position.class, name: position.name,
             quantity: position.quantity, perUnitChf: perUnitChf, amountChf: amountChf, taxChf: taxChf,
           });
+          // Reinvested, the dividend after tax buys more of the same at that day's price, stamp duty included; without a
+          // recent price it stays cash.
+          const quote = reinvestsOn(game, date) && tradeQuote(market, position.symbol, date);
+          if (!quote || quote.error || !(amountChf > taxChf)) return;
+          const dutyRate = stampDutyRate(position);
+          const reinvestedChf = (amountChf - taxChf) / (1 + dutyRate);
+          const trade = {
+            date: date, side: 'buy', symbol: position.symbol, class: position.class, name: position.name, reinvested: true,
+            quantity: reinvestedChf / quote.priceChf, priceChf: quote.priceChf, amountChf: reinvestedChf, stampDutyChf: reinvestedChf * dutyRate,
+          };
+          applyTrade(positions, trade);
+          cash -= amountChf - taxChf;
+          feesPaid += trade.stampDutyChf;
+          yearVolume[year] = (yearVolume[year] || 0) + reinvestedChf;
+          events.push(Object.assign({ type: 'buy' }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 }));
+        });
+        // A short pays the dividend to the lender of its units.
+        shortList().forEach((short) => {
+          const perUnitChf = market.dividend(short.symbol, date);
+          if (!(perUnitChf > 0)) return;
+          const quantity = lotSum(short.lots, 'quantity');
+          cash -= perUnitChf * quantity;
+          events.push({
+            type: 'dividend', short: true, date: date, symbol: short.symbol, class: short.class, name: short.name,
+            quantity: quantity, perUnitChf: perUnitChf, amountChf: -perUnitChf * quantity, taxChf: 0,
+          });
         });
       }
 
+      expireOptions(date, year);
       while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
         const trade = trades[tradeIndex++];
-        if (trade.intraday) { applyDayTrade(trade, year); continue; }
-        const dealerFeeChf = trade.dealerFeeChf || 0;
-        const gainsTaxChf = trade.gainsTaxChf || 0;
-        const purchaseCostsChf = trade.purchaseCostsChf || 0;
-        const mortgageChf = trade.mortgageChf || 0;
-        const countsAsSecurity = !isTangible(trade.class);
-        const result = applyTrade(positions, trade);
-        feesPaid += trade.stampDutyChf + dealerFeeChf + purchaseCostsChf;
-        taxesPaid += gainsTaxChf;
-        if (countsAsSecurity) {
-          yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
-          yearShortSales[year] = (yearShortSales[year] || 0) + result.shortSales;
-        }
-        if (trade.side === 'buy') cash -= trade.amountChf - mortgageChf + trade.stampDutyChf + purchaseCostsChf;
-        else cash += trade.amountChf - trade.stampDutyChf - dealerFeeChf - gainsTaxChf - result.mortgageRepaidChf;
-        events.push(Object.assign({ type: trade.side }, trade, {
-          dealerFeeChf: dealerFeeChf, gainsTaxChf: gainsTaxChf, purchaseCostsChf: purchaseCostsChf, mortgageChf: mortgageChf,
-          mortgageRepaidChf: result.mortgageRepaidChf,
-        }));
+        if (trade.intraday) applyDayTrade(trade, year);
+        else if (trade.side === 'borrow' || trade.side === 'repay') applyLoan(trade);
+        else if (trade.option) applyOptionTrade(trade, year);
+        else if (trade.short) applyShortTrade(trade, year);
+        else applyHoldingTrade(trade, year);
       }
       revertDayLots(date, year);
+      callLoan(date, year);
+      callShorts(date, year);
+      month.lombardInterestChf += loanChf * LOMBARD_INTEREST_RATE / daysInYear(year);
+      month.borrowFeeChf += shortList().reduce((sum, short) => sum + lotSum(short.lots, 'quantity') * shortPriceOn(short, date), 0) *
+        SHORT_BORROW_FEE_RATE / daysInYear(year);
 
       // Today's share of the month, with what is owned at the end of the day.
       const share = 1 / daysInMonth(date);
@@ -628,14 +963,19 @@ const GameEngine = (() => {
           amortizationChf += paid;
         });
         const savingsChf = month.salaryChf - month.expensesChf;
-        cash += savingsChf - amortizationChf;
+        // Lombard interest and borrow fees are costs of investing, not of living, so they are not taken from the money put in.
+        cash += savingsChf - amortizationChf - month.lombardInterestChf - month.borrowFeeChf;
+        feesPaid += month.lombardInterestChf + month.borrowFeeChf;
         moneyIn += savingsChf;
         salaryReceived += month.salaryChf;
         expensesPaid += month.expensesChf;
         const benchmarkToday = market.benchmark(date);
         if (benchmarkUnits != null && benchmarkToday) benchmarkUnits += savingsChf / benchmarkToday;
-        events.push({ type: 'month', date: date, salaryChf: month.salaryChf, expensesChf: month.expensesChf, amortizationChf: amortizationChf });
-        month = { salaryChf: 0, expensesChf: 0 };
+        events.push({
+          type: 'month', date: date, salaryChf: month.salaryChf, expensesChf: month.expensesChf, amortizationChf: amortizationChf,
+          lombardInterestChf: month.lombardInterestChf, borrowFeeChf: month.borrowFeeChf,
+        });
+        month = newMonth();
       }
 
       let netWorth = netWorthOn(date);
@@ -690,16 +1030,33 @@ const GameEngine = (() => {
       trader: { status: ['private', 'review', 'risk'][failedRules], shortSales: shortSales, volumeMultiple: volumeMultiple },
       dayTrades: openDayPositions(openDayLots),
       dayTradeProfitChf: dayTradeProfitChf,
+      loanChf: loanChf,
+      lendingValueChf: lendingValueOn(untilDate),
+      // Each short: units, what the sale got (soldChf) and its duty, the collateral held and what buying back costs now.
+      shorts: shortList().map((short) => {
+        const quantity = lotSum(short.lots, 'quantity');
+        const soldChf = short.lots.reduce((sum, lot) => sum + lot.quantity * lot.priceChf, 0);
+        return {
+          symbol: short.symbol, class: short.class, name: short.name, quantity: quantity, priceChf: soldChf / quantity, soldChf: soldChf,
+          dutyChf: lotSum(short.lots, 'dutyChf'), heldChf: lotSum(short.lots, 'heldChf'), valueChf: quantity * shortPriceOn(short, untilDate),
+        };
+      }),
+      // Each open option, with its price per unit at the last close (priceChf).
+      options: options.map((option) => {
+        const quote = market.quote(option.symbol, untilDate);
+        const priceChf = quote ? optionPrice(option.kind, quote.priceChf, option.strike, optionYears(untilDate, option.expiry), option.volatility) : option.premiumChf;
+        return Object.assign({}, option, { priceChf: priceChf });
+      }),
     };
   }
 
-  // Open day trades, one per buy with units left, in buy order: `at` and priceChf of the buy, amountChf at
-  // that price, costChf with the stamp duty paid.
+  // Open day trades, one per buy or short sale with units left, in that order: `at` and priceChf of the opening
+  // trade, short when it was a short sale, amountChf at that price (the cash held), costChf with the stamp duty paid.
   function openDayPositions(lots) {
     return lots.map((lot) => {
       const share = lot.quantity / lot.trade.quantity;
       return {
-        symbol: lot.trade.symbol, class: lot.trade.class, name: lot.trade.name, at: lot.trade.at, priceChf: lot.trade.priceChf, quantity: lot.quantity,
+        symbol: lot.trade.symbol, class: lot.trade.class, name: lot.trade.name, at: lot.trade.at, short: !!lot.trade.short, priceChf: lot.trade.priceChf, quantity: lot.quantity,
         amountChf: lot.trade.amountChf * share, costChf: (lot.trade.amountChf + lot.trade.stampDutyChf) * share, closesAt: lot.trade.closesAt,
       };
     });
@@ -766,14 +1123,18 @@ const GameEngine = (() => {
   }
 
   // The sell trade for `order` ({ fraction } of the holding, or { quantity }), or { error }.
+  // Units covering written calls cannot be sold: a fraction is of the units that are free.
   function sell(game, market, symbol, order, date, now) {
-    const position = replay(game, market, date, now).positions.find((item) => item.symbol === symbol);
+    const state = replay(game, market, date, now);
+    const position = state.positions.find((item) => item.symbol === symbol);
     if (!position) return { error: 'NOTHING TO SELL' };
     const quote = tradeQuote(market, symbol, date);
     if (quote.error) return quote;
-    const quantity = order.quantity != null ? order.quantity : position.quantity * Math.min(1, Math.max(0, order.fraction));
-    if (!(quantity > 0)) return { error: 'NOTHING TO SELL' };
+    const free = Math.max(0, uncoveredUnits(state, symbol));
+    const quantity = order.quantity != null ? order.quantity : free * Math.min(1, Math.max(0, order.fraction));
+    if (!(quantity > 0)) return { error: free > 0 ? 'NOTHING TO SELL' : 'ALL UNITS COVER WRITTEN CALLS' };
     if (quantity > position.quantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HOLD ' + position.quantity };
+    if (quantity > free + EMPTY_QUANTITY) return { error: 'ONLY ' + free + ' UNITS ARE NOT COVERING WRITTEN CALLS' };
     if (isTangible(position.class) && !Number.isInteger(Math.round(quantity * 1e6) / 1e6)) return { error: 'SELL WHOLE UNITS' };
     // The oldest units go first, each with its own wear. A house also pays tax
     // on its gain after the agent's fee, per unit and holding period, and pays
@@ -803,8 +1164,109 @@ const GameEngine = (() => {
     };
   }
 
+  // A trade at `now` on `date` that opens an option on a stock or ETF: `order` is { kind: 'call' | 'put', strike, expiry
+  // (from optionChain), written, quantity }. A bought option is paid at its price now; a written one gets that premium
+  // and must be covered: a call by units held and not covering another call, a put by its strike times the units in
+  // cash, held until it ends. Returns the trade, or { error }.
+  function openOption(game, market, asset, order, date, now) {
+    if (asset.class !== 'stock' && asset.class !== 'etf') return { error: 'OPTIONS ARE FOR STOCKS AND ETFS ONLY' };
+    const chain = optionChain(market, asset, date);
+    if (chain.error) return chain;
+    if (order.kind !== 'call' && order.kind !== 'put') return { error: 'UNKNOWN OPTION' };
+    if (!chain.strikes.includes(order.strike)) return { error: 'PICK A STRIKE' };
+    if (!chain.expiries.includes(order.expiry)) return { error: 'PICK AN EXPIRY' };
+    if (!(order.quantity > 0) || !isFinite(order.quantity)) return { error: 'ENTER A QUANTITY' };
+    const priceChf = optionPrice(order.kind, chain.priceChf, order.strike, optionYears(date, order.expiry), chain.volatility);
+    const amountChf = priceChf * order.quantity;
+    const state = replay(game, market, date, now);
+    if (!order.written && amountChf > state.cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    if (order.written && order.kind === 'put' && order.strike * order.quantity - amountChf > state.cash + 0.005) return { error: 'NOT ENOUGH CASH TO SECURE THE PUT' };
+    if (order.written && order.kind === 'call' && order.quantity > uncoveredUnits(state, asset.symbol) + EMPTY_QUANTITY) {
+      return { error: 'NOT ENOUGH UNITS TO COVER THE CALL' };
+    }
+    return {
+      date: date, at: now || date, side: order.written ? 'sell' : 'buy', symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
+      option: { kind: order.kind, strike: order.strike, expiry: order.expiry, written: !!order.written, volatility: chain.volatility },
+      quantity: order.quantity, priceChf: priceChf, amountChf: amountChf,
+    };
+  }
+
+  // The trade that closes `order` ({ fraction } or { quantity }) of the option opened at `optionAt`, at its price on
+  // `date`: selling back a bought one, buying back a written one. Returns the trade, or { error }.
+  function closeOption(game, market, optionAt, order, date, now) {
+    const state = replay(game, market, date, now);
+    const open = state.options.find((item) => item.at === optionAt);
+    if (!open) return { error: 'NO OPEN OPTION' };
+    const quote = tradeQuote(market, open.symbol, date);
+    if (quote.error) return quote;
+    const quantity = order.quantity != null ? order.quantity : open.quantity * Math.min(1, Math.max(0, order.fraction));
+    if (!(quantity > 0)) return { error: 'ENTER A QUANTITY' };
+    if (quantity > open.quantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HAVE ' + open.quantity };
+    const priceChf = optionPrice(open.kind, quote.priceChf, open.strike, optionYears(date, open.expiry), open.volatility);
+    const amountChf = priceChf * quantity;
+    if (open.written && amountChf > state.cash + open.heldChf * quantity / open.quantity + 0.005) return { error: 'NOT ENOUGH CASH' };
+    return {
+      date: date, at: now || date, side: open.written ? 'buy' : 'sell', symbol: open.symbol, class: open.class, name: open.name, optionAt: optionAt,
+      option: { kind: open.kind, strike: open.strike, expiry: open.expiry, written: open.written, volatility: open.volatility },
+      quantity: quantity, priceChf: priceChf, amountChf: amountChf,
+    };
+  }
+
+  // Units of a holding not already covering written calls.
+  function uncoveredUnits(state, symbol) {
+    const position = state.positions.find((item) => item.symbol === symbol);
+    const covering = state.options.filter((option) => option.symbol === symbol && option.written && option.kind === 'call')
+      .reduce((sum, option) => sum + option.quantity, 0);
+    return (position ? position.quantity : 0) - covering;
+  }
+
+  // A short sale of a stock or ETF at its last close on `date`: `order` is { amountChf } or { quantity }. The cash pays
+  // the duty and half the amount as extra collateral. Returns the trade (side 'sell', short), or { error }.
+  function openShort(game, market, asset, order, date, now) {
+    if (asset.class !== 'stock' && asset.class !== 'etf') return { error: 'ONLY STOCKS AND ETFS CAN BE SHORTED' };
+    const quote = tradeQuote(market, asset.symbol, date);
+    if (quote.error) return quote;
+    const quantity = order.quantity != null ? order.quantity : order.amountChf / quote.priceChf;
+    if (!(quantity > 0) || !isFinite(quantity)) return { error: order.quantity != null ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT' };
+    const amountChf = quantity * quote.priceChf;
+    const trade = {
+      date: date, side: 'sell', short: true, symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
+      quantity: quantity, priceChf: quote.priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(asset),
+    };
+    if (amountChf * (SHORT_COLLATERAL - 1) + trade.stampDutyChf > replay(game, market, date, now).cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    return trade;
+  }
+
+  // The buyback of `order` ({ fraction } of a short, or { quantity }) at the last close on `date`, or { error }.
+  function coverShort(game, market, symbol, order, date, now) {
+    const short = replay(game, market, date, now).shorts.find((item) => item.symbol === symbol);
+    if (!short) return { error: 'NOTHING TO BUY BACK' };
+    const quote = tradeQuote(market, symbol, date);
+    if (quote.error) return quote;
+    const quantity = order.quantity != null ? order.quantity : short.quantity * Math.min(1, Math.max(0, order.fraction));
+    if (!(quantity > 0)) return { error: 'NOTHING TO BUY BACK' };
+    if (quantity > short.quantity + EMPTY_QUANTITY) return { error: 'YOU ONLY SHORTED ' + short.quantity };
+    const amountChf = quantity * quote.priceChf;
+    return {
+      date: date, side: 'buy', short: true, symbol: symbol, class: short.class, name: short.name,
+      quantity: quantity, priceChf: quote.priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(short),
+    };
+  }
+
+  // A Lombard loan trade on `date`: { date, side: 'borrow' | 'repay', amountChf }, or { error }. Borrowing goes up to
+  // the lending value of the holdings; repaying up to what is owed, from the cash at hand.
+  function loanTrade(game, market, side, amountChf, date, now) {
+    if (!(amountChf > 0) || !isFinite(amountChf)) return { error: 'ENTER AN AMOUNT' };
+    const state = replay(game, market, date, now);
+    if (side === 'borrow' && amountChf > state.lendingValueChf - state.loanChf + 0.005) return { error: 'MORE THAN YOUR HOLDINGS LET YOU BORROW' };
+    if (side === 'repay' && amountChf > state.loanChf + 0.005) return { error: 'MORE THAN YOU OWE' };
+    if (side === 'repay' && amountChf > state.cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    return { date: date, side: side, amountChf: amountChf };
+  }
+
   // A day trade buy at the simulated `priceChf` at `now` (ISO time), while `session` ({ opensAt, closesAt }, ISO) is
-  // open. `order` is { amountChf } or { quantity }. Returns the trade, or { error }.
+  // open. `order` is { amountChf } or { quantity }; with { short: true } it is a short sale instead, which gains when
+  // the price falls. Either way its amount and stamp duty are paid from the cash. Returns the trade, or { error }.
   function openDayTrade(game, market, asset, order, priceChf, session, now) {
     if (isTangible(asset.class)) return { error: 'NOT FOR DAY TRADING' };
     const nowMs = Date.parse(now);
@@ -815,39 +1277,180 @@ const GameEngine = (() => {
     const amountChf = quantity * priceChf;
     const date = now.slice(0, 10);
     const trade = {
-      date: date, side: 'buy', intraday: true, at: now, closesAt: session.closesAt, symbol: asset.symbol, class: asset.class,
+      date: date, side: order.short ? 'sell' : 'buy', intraday: true, at: now, closesAt: session.closesAt, symbol: asset.symbol, class: asset.class,
       name: asset.name || asset.symbol, quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate(asset),
     };
+    if (order.short) trade.short = true;
     if (amountChf + trade.stampDutyChf > replay(game, market, date, now).cash + 0.005) return { error: 'NOT ENOUGH CASH' };
     return trade;
   }
 
-  // The day trade sale of `order` ({ fraction } of the open units, or { quantity }) at the simulated `priceChf`
-  // at `now` (ISO time), before its market closes. With order.lotAt (a buy's `at`) it sells from that buy only,
-  // else from the symbol's buys, first in, first out. Returns the trade, or { error }.
+  // The trade that closes `order` ({ fraction } of the open units, or { quantity }) at the simulated `priceChf` at
+  // `now` (ISO time), before its market closes: a sale for bought units, a buyback for shorted ones. With order.lotAt
+  // (the opening trade's `at`) it closes that trade only, else the symbol's buys, or short sales with order.short,
+  // first in, first out. Returns the trade, or { error }.
   function closeDayTrade(game, market, symbol, order, priceChf, now) {
     const date = now.slice(0, 10);
-    const lots = replay(game, market, date, now).dayTrades.filter((item) => item.symbol === symbol && (!order.lotAt || item.at === order.lotAt));
+    const lots = replay(game, market, date, now).dayTrades.filter((item) => item.symbol === symbol &&
+      (order.lotAt ? item.at === order.lotAt : item.short === !!order.short));
     if (!lots.length) return { error: 'NO OPEN DAY TRADE' };
     if (Date.parse(now) >= Date.parse(lots[0].closesAt)) return { error: 'MARKET CLOSED' };
     if (!(priceChf > 0)) return { error: 'NO PRICE FOR THIS ASSET' };
+    const short = lots[0].short;
     const openQuantity = lots.reduce((sum, lot) => sum + lot.quantity, 0);
     const quantity = order.quantity != null ? order.quantity : openQuantity * Math.min(1, Math.max(0, order.fraction));
-    if (!(quantity > 0)) return { error: 'NOTHING TO SELL' };
-    if (quantity > openQuantity + EMPTY_QUANTITY) return { error: 'YOU ONLY HOLD ' + openQuantity };
+    if (!(quantity > 0)) return { error: short ? 'NOTHING TO BUY BACK' : 'NOTHING TO SELL' };
+    if (quantity > openQuantity + EMPTY_QUANTITY) return { error: (short ? 'YOU ONLY SHORTED ' : 'YOU ONLY HOLD ') + openQuantity };
     const amountChf = quantity * priceChf;
     const trade = {
-      date: date, side: 'sell', intraday: true, at: now, symbol: symbol, class: lots[0].class, name: lots[0].name,
+      date: date, side: short ? 'buy' : 'sell', intraday: true, at: now, symbol: symbol, class: lots[0].class, name: lots[0].name,
       quantity: quantity, priceChf: priceChf, amountChf: amountChf, stampDutyChf: amountChf * stampDutyRate({ symbol: symbol, class: lots[0].class }),
     };
+    if (short) trade.short = true;
     if (order.lotAt) trade.lotAt = order.lotAt;
     return trade;
+  }
+
+  // Whether `priceChf` reaches an order's level (`levelChf`, by default its priceChf): a limit buys at or below it and
+  // sells at or above it; a stop-loss or trailing stop does the opposite, selling at or below it, or buying back a
+  // short at or above it.
+  function orderReached(order, priceChf, levelChf = order.priceChf) {
+    return (order.type === 'limit') === (order.side === 'buy') ? priceChf <= levelChf : priceChf >= levelChf;
+  }
+
+  // A test to feed an order's prices in time order: whether each one reaches its level. `test.level()` is the level
+  // so far. A trailing stop's level follows the best price since it was placed (order.referenceChf): trailPercent
+  // below the highest for a sell, above the lowest for a buyback.
+  function orderTrigger(order) {
+    let bestChf = order.referenceChf;
+    const level = () => {
+      if (order.type !== 'trail') return order.priceChf;
+      return order.side === 'sell' ? bestChf * (1 - order.trailPercent) : bestChf * (1 + order.trailPercent);
+    };
+    const test = (priceChf) => {
+      if (order.type === 'trail') bestChf = order.side === 'sell' ? Math.max(bestChf, priceChf) : Math.min(bestChf, priceChf);
+      return orderReached(order, priceChf, level());
+    };
+    test.level = level;
+    return test;
+  }
+
+  // A trailing stop's fields with its starting level and the price it trails (referenceChf); other orders' as they are.
+  function withTrailLevel(fields, priceChf) {
+    if (fields.type !== 'trail') return fields;
+    const factor = fields.side === 'sell' ? 1 - fields.trailPercent : 1 + fields.trailPercent;
+    return Object.assign({}, fields, { referenceChf: priceChf, priceChf: priceChf * factor });
+  }
+
+  // Whether an order closes something: one naming a day trade (lotAt), or a sale that is not a short sale.
+  function closesPosition(fields) {
+    return !!fields.lotAt || (fields.side === 'sell' && !fields.short);
+  }
+
+  // Why `fields` cannot be an order on `asset` while its price is `priceChf`, or null.
+  function orderError(asset, fields, priceChf) {
+    if (isTangible(asset.class)) return 'NO ORDERS FOR THIS ASSET';
+    // Stop-losses and trailing stops only close something; a buying one protects a short.
+    const known = (fields.side === 'buy' || fields.side === 'sell') &&
+      (fields.type === 'limit' || ((fields.type === 'stop' || fields.type === 'trail') && closesPosition(fields)));
+    if (!known) return 'UNKNOWN ORDER';
+    if (fields.type === 'trail' && !(fields.trailPercent > 0 && fields.trailPercent < 1)) return 'ENTER A TRAIL ABOVE 0% AND BELOW 100%';
+    if (!(fields.priceChf > 0) || !isFinite(fields.priceChf)) return 'ENTER A PRICE';
+    // A level the price already reaches would trade now: that is a normal buy or sale.
+    if (orderReached(fields, priceChf)) {
+      return (fields.type === 'stop' ? 'A STOP-LOSS' : 'A LIMIT ' + fields.side.toUpperCase()) + ' MUST BE ' +
+        (orderReached(fields, 0) ? 'BELOW' : 'ABOVE') + ' THE PRICE';
+    }
+    if (closesPosition(fields)) return fields.fraction > 0 && fields.fraction <= 1 ? null : 'NOTHING TO SELL';
+    const size = fields.quantity != null ? fields.quantity : fields.amountChf;
+    return size > 0 && isFinite(size) ? null : fields.quantity != null ? 'ENTER A QUANTITY' : 'ENTER AN AMOUNT';
+  }
+
+  // The order kept in game.orders, or { error } when it closes something not held (`held`) or a buy at its level
+  // costs more than the cash in `state`. `extra` holds what only a regular or a day order has.
+  function keptOrder(state, asset, fields, held, nothingHeldError, date, now, extra) {
+    const closing = closesPosition(fields);
+    if (closing && !held) return { error: nothingHeldError };
+    const amountChf = fields.quantity != null ? fields.quantity * fields.priceChf : fields.amountChf;
+    if (!closing && amountChf * (1 + stampDutyRate(asset)) > state.cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    const order = {
+      at: now, date: date, symbol: asset.symbol, class: asset.class, name: asset.name || asset.symbol,
+      side: fields.side, type: fields.type, priceChf: fields.priceChf,
+    };
+    if (closing) order.fraction = fields.fraction;
+    else if (fields.quantity != null) order.quantity = fields.quantity;
+    else order.amountChf = fields.amountChf;
+    if (!closing && fields.short) order.short = true;
+    if (fields.lotAt) order.lotAt = fields.lotAt;
+    if (fields.type === 'trail') Object.assign(order, { trailPercent: fields.trailPercent, referenceChf: fields.referenceChf });
+    return Object.assign(order, extra);
+  }
+
+  // A limit, stop-loss or trailing stop order placed at `now` on `date`, kept in game.orders until a newer close
+  // reaches its level (see orderFill); it then trades at that close through buy or sell, given the order itself as
+  // their order. `fields` is { side: 'buy' | 'sell', type: 'limit' | 'stop' | 'trail', priceChf (the level) or
+  // trailPercent (0.05 trails 5% behind the best close) } plus { amountChf } or { quantity } for a buy, or
+  // { fraction } of what is held when it fills for a sell. Returns the order, or { error }.
+  function placeOrder(game, market, asset, fields, date, now) {
+    // A limit order opening a short exists for day trades only (placeDayOrder); filled here it would sell the holding.
+    if (fields.short) return { error: 'UNKNOWN ORDER' };
+    const quote = tradeQuote(market, asset.symbol, date);
+    if (quote.error) return quote;
+    const leveled = withTrailLevel(fields, quote.priceChf);
+    const error = orderError(asset, leveled, quote.priceChf);
+    if (error) return { error: error };
+    const state = replay(game, market, date, now);
+    const held = state.positions.some((position) => position.symbol === asset.symbol);
+    return keptOrder(state, asset, leveled, held, 'NOTHING TO SELL', date, now, { quoteDate: quote.date });
+  }
+
+  // A day order like placeOrder's, at the live `priceChf` while `session` ({ opensAt, closesAt }, ISO) is open. It is
+  // kept until the simulated price reaches its level (GameIntraday.firstStepReaching), then trades at that price through
+  // openDayTrade or closeDayTrade, or it ends at the close. An order that closes a day trade names it (fields.lotAt):
+  // a sell closes a buy, a buy closes a short sale. A limit sell with fields.short opens a short sale at or above its level.
+  function placeDayOrder(game, market, asset, fields, priceChf, session, now) {
+    const nowMs = Date.parse(now);
+    if (!session || nowMs < Date.parse(session.opensAt) || nowMs >= Date.parse(session.closesAt)) return { error: 'MARKET CLOSED' };
+    if (!(priceChf > 0)) return { error: 'NO PRICE FOR THIS ASSET' };
+    const leveled = withTrailLevel(fields, priceChf);
+    const error = orderError(asset, leveled, priceChf);
+    if (error) return { error: error };
+    const date = now.slice(0, 10);
+    const state = replay(game, market, date, now);
+    const held = state.dayTrades.some((lot) => lot.symbol === asset.symbol && lot.at === fields.lotAt && lot.short === (fields.side === 'buy'));
+    return keptOrder(state, asset, leveled, held, 'NO OPEN DAY TRADE', date, now, { intraday: true, closesAt: session.closesAt });
+  }
+
+  // The closes a regular order has seen: from the order's own day up to `untilDate`, each day with a close newer than
+  // the last one seen, starting after the close it was placed against: [{ date, priceChf }] in date order.
+  function newCloses(market, order, untilDate) {
+    const closes = [];
+    let lastSeen = order.quoteDate;
+    for (let date = order.date; date <= untilDate; date = addDays(date, 1)) {
+      const quote = market.quote(order.symbol, date);
+      if (quote && quote.date > lastSeen) {
+        lastSeen = quote.date;
+        closes.push({ date: date, priceChf: quote.priceChf });
+      }
+    }
+    return closes;
+  }
+
+  // The first of an order's new closes (see newCloses) that reaches its level: { date, priceChf }, or null. The order
+  // trades on that day at that close.
+  function orderFill(market, order, untilDate) {
+    const reached = orderTrigger(order);
+    return newCloses(market, order, untilDate).find((close) => reached(close.priceChf)) || null;
   }
 
   return {
     DIFFICULTIES, LOCATIONS, HOUSE_LOCATIONS, CAR_KM_PER_YEAR, CAR_MILEAGE_SHARE, MORTGAGE_INTEREST_RATE, MIN_DOWN_PAYMENT, MAX_QUOTE_AGE_DAYS,
     newGame, yearlySalary, incomeTax, isTangible, stampDutyRate, dealerFeeRate, housePurchaseCostRate, wealthTax, propertyGainsTax,
     ownedYearlyChange, carMonthlyCosts, houseMonthlyCosts, monthlyBudget, replay, previewBuy, buy, sell, openDayTrade, closeDayTrade,
+    orderReached, orderTrigger, placeOrder, placeDayOrder, newCloses, orderFill, reinvestsOn,
+    LOMBARD_INTEREST_RATE, LOMBARD_LOAN_TO_VALUE, loanTrade,
+    SHORT_COLLATERAL, SHORT_MAINTENANCE, SHORT_BORROW_FEE_RATE, openShort, coverShort,
+    optionPrice, optionChain, openOption, closeOption,
     addDays, daysBetween,
   };
 })();
