@@ -932,6 +932,9 @@ const GameEngine = (() => {
       }
 
       expireOptions(date, year);
+      // The loan is checked at the day's prices before its trades and again after each one, so a trade added at the
+      // end of the day meets the same state it was checked against (a repay is not swallowed by that day's margin call).
+      callLoan(date, year);
       while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
         const trade = trades[tradeIndex++];
         if (trade.intraday) applyDayTrade(trade, year);
@@ -939,9 +942,9 @@ const GameEngine = (() => {
         else if (trade.option) applyOptionTrade(trade, year);
         else if (trade.short) applyShortTrade(trade, year);
         else applyHoldingTrade(trade, year);
+        callLoan(date, year);
       }
       revertDayLots(date, year);
-      callLoan(date, year);
       callShorts(date, year);
       month.lombardInterestChf += loanChf * LOMBARD_INTEREST_RATE / daysInYear(year);
       month.borrowFeeChf += shortList().reduce((sum, short) => sum + lotSum(short.lots, 'quantity') * shortPriceOn(short, date), 0) *
@@ -1254,14 +1257,16 @@ const GameEngine = (() => {
   }
 
   // A Lombard loan trade on `date`: { date, side: 'borrow' | 'repay', amountChf }, or { error }. Borrowing goes up to
-  // the lending value of the holdings; repaying up to what is owed, from the cash at hand.
+  // the lending value of the holdings; repaying up to what is owed, from the cash at hand. A repay within half a
+  // centime of what is owed (the rounded figure shown) pays the loan off exactly, so no fraction stays owed.
   function loanTrade(game, market, side, amountChf, date, now) {
     if (!(amountChf > 0) || !isFinite(amountChf)) return { error: 'ENTER AN AMOUNT' };
     const state = replay(game, market, date, now);
     if (side === 'borrow' && amountChf > state.lendingValueChf - state.loanChf + 0.005) return { error: 'MORE THAN YOUR HOLDINGS LET YOU BORROW' };
     if (side === 'repay' && amountChf > state.loanChf + 0.005) return { error: 'MORE THAN YOU OWE' };
-    if (side === 'repay' && amountChf > state.cash + 0.005) return { error: 'NOT ENOUGH CASH' };
-    return { date: date, side: side, amountChf: amountChf };
+    const tradeChf = side === 'repay' && Math.abs(amountChf - state.loanChf) <= 0.005 ? state.loanChf : amountChf;
+    if (side === 'repay' && tradeChf > state.cash + 0.005) return { error: 'NOT ENOUGH CASH' };
+    return { date: date, side: side, amountChf: tradeChf };
   }
 
   // A day trade buy at the simulated `priceChf` at `now` (ISO time), while `session` ({ opensAt, closesAt }, ISO) is

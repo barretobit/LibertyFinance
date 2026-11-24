@@ -688,10 +688,11 @@ function gameRenderHistory(state) {
         '<td class="text-end ' + gameSignClass(cashChange) + '">' + gameSignedMoney(cashChange, event.date) + '</td></tr>';
     }
     if (event.type === 'margin') {
+      // The sales show their proceeds on their own rows; both those and the cash go to the bank here.
       return '<tr><td>' + formatDate(event.date) + '</td><td><span class="game-badge game-badge-tax">MARGIN CALL</span></td>' +
         '<td colspan="3">LOAN ABOVE THE LENDING VALUE: ' + gameMoney(event.fromCashChf, event.date) + ' PAID FROM CASH' +
         (event.fromSalesChf > 0 ? ', ' + gameMoney(event.fromSalesChf, event.date) + ' FROM SELLING HOLDINGS' : '') + '</td>' +
-        '<td class="text-end game-neg">-' + gameMoney(event.fromCashChf, event.date) + '</td></tr>';
+        '<td class="text-end game-neg">-' + gameMoney(event.fromCashChf + event.fromSalesChf, event.date) + '</td></tr>';
     }
     if (event.type === 'month') {
       const cashChange = event.salaryChf - event.expensesChf - event.amortizationChf - (event.lombardInterestChf || 0) - (event.borrowFeeChf || 0);

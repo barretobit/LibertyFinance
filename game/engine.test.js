@@ -773,6 +773,38 @@ test('lombard loan: cash against holdings, monthly interest, a margin call takes
   assert.ok(owed.loanChf > 0 && owed.positions.length === 0, 'the rest is still owed');
 });
 
+test('lombard loan: a repay on a margin call day counts in full, the shown figure pays it off, the call row adds up', () => {
+  const market = fakeMarket({ VOO: { '2026-01-02': 500, '2026-03-02': 251.237 }, '^SSMI': { '2026-01-02': 10000 } });
+  const game = newGame('hard', '2026-01-02');
+  game.trades.push(GameEngine.buy(game, market, usEtf, { quantity: 10 }, '2026-01-02'));
+  game.trades.push(GameEngine.loanTrade(game, market, 'borrow', 3000, '2026-01-02'));
+  const called = GameEngine.replay(game, market, '2026-03-02');
+  assert.ok(called.events.some((event) => event.type === 'margin'), 'a margin call that day');
+  game.trades.push(GameEngine.loanTrade(game, market, 'repay', 1000, '2026-03-02'));
+  const repaid = GameEngine.replay(game, market, '2026-03-02');
+  assertNear(called.loanChf - repaid.loanChf, 1000, 'the loan falls by the repay');
+  assertNear(called.cash - repaid.cash, 1000, 'the cash pays it');
+
+  // "YOU OWE" rounds to the centime; repaying that figure clears the loan.
+  const shownChf = Math.round(repaid.loanChf * 100) / 100;
+  assert.ok(shownChf !== repaid.loanChf, 'the loan is not a round figure');
+  game.trades.push(GameEngine.loanTrade(game, market, 'repay', shownChf, '2026-03-02'));
+  assert.strictEqual(GameEngine.replay(game, market, '2026-03-02').loanChf, 0);
+
+  // Sales proceeds on their rows, then the margin row takes the cash and those proceeds: together the day's change.
+  const poor = newGame('hard', '2026-01-02');
+  poor.startCash = 5000;
+  poor.trades.push(GameEngine.buy(poor, market, usEtf, { quantity: 9.9 }, '2026-01-02'));
+  poor.trades.push(GameEngine.loanTrade(poor, market, 'borrow', 2900, '2026-01-02'));
+  poor.trades.push({ date: '2026-01-02', side: 'buy', symbol: 'VOO', class: 'etf', name: 'VOO', quantity: 5.8, priceChf: 500, amountChf: 2900, stampDutyChf: 0 });
+  const dayBefore = GameEngine.replay(poor, market, '2026-03-01');
+  const marginDay = GameEngine.replay(poor, market, '2026-03-02');
+  const margin = marginDay.events.find((event) => event.type === 'margin');
+  const salesChf = marginDay.events.filter((event) => event.marginCall).reduce((sum, event) => sum + event.amountChf - event.stampDutyChf, 0);
+  assert.ok(margin.fromCashChf > 0 && margin.fromSalesChf > 0, 'cash and sales both pay');
+  assertNear(salesChf - (margin.fromCashChf + margin.fromSalesChf), marginDay.cash - dayBefore.cash, 'rows add up to the cash change');
+});
+
 test('short holdings: 150% collateral, borrow fee and dividends paid, a gain when bought back lower', () => {
   const market = fakeMarket({ 'NESN.SW': { '2026-01-02': 100, '2026-02-02': 80 }, '^SSMI': { '2026-01-02': 10000 } }, {}, { 'NESN.SW': { '2026-01-20': 2 } });
   const game = newGame('medium', '2026-01-02');
