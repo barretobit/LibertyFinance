@@ -84,6 +84,15 @@ const GameSaves = (() => {
     return saves.sort((a, b) => String(a.game.name).localeCompare(String(b.game.name)));
   }
 
+  // Keeps a copy of a save before the file check cleans it, as "<name>-backup-<date>-<time>.json.bak" in the same
+  // folder. The .bak ending keeps it out of the list of games; renamed to end in .json it is a game again.
+  async function backup(file, game) {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+    const name = file.replace(/\.json$/i, '') + '-backup-' + stamp + '.json.bak';
+    await adapter.writeIn(FOLDER, name, JSON.stringify(game, null, 2));
+    return name;
+  }
+
   async function create(game) {
     const file = fileNameFor(game.name, await adapter.listIn(FOLDER));
     await write(file, game);
@@ -110,7 +119,7 @@ const GameSaves = (() => {
     try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch (error) { /* ignored */ }
   }
 
-  return { FOLDER, connect, folderName, migrate, fileNameFor, read, write, list, create, lastFile, setLastFile, importLegacy };
+  return { FOLDER, connect, folderName, migrate, fileNameFor, read, write, backup, list, create, lastFile, setLastFile, importLegacy };
 })();
 
 if (typeof module !== 'undefined') module.exports = GameSaves;

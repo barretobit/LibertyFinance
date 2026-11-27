@@ -574,6 +574,9 @@ const GameEngine = (() => {
   // benchmark puts the same money into the SMI on the same days.
   // `now` (optional ISO time) reverts the day trades of `untilDate` whose market
   // has closed by then; without it they stay open. Earlier days' are always reverted.
+  // skippedTrades lists the saved trades that close nothing (a save edited by hand, or left over from an older
+  // version), revertedTrades the day trades reverted with none of their units closed: neither changes the result.
+  // oversoldTrades lists the sales of more units than were held at the time, which are still counted.
   function replay(game, market, untilDate, now) {
     let cash = game.startCash;
     let moneyIn = game.startCash;
@@ -610,6 +613,9 @@ const GameEngine = (() => {
     // Open options, one per opening trade: { at, symbol, class, name, kind, strike, expiry, written, volatility,
     // quantity, premiumChf (per unit), heldChf (the cash securing a written put) }.
     let options = [];
+    const skippedTrades = [];
+    const revertedTrades = [];
+    const oversoldTrades = [];
 
     const positionList = () => Object.keys(positions).map((symbol) => positions[symbol]);
     const allLots = () => positionList().flatMap((position) => position.lots);
@@ -640,7 +646,7 @@ const GameEngine = (() => {
       // edited by hand) it is skipped, so it cannot make cash out of nothing.
       const closing = opens ? [] : openDayLots.filter((lot) => lot.trade.symbol === trade.symbol && !!lot.trade.short === !!trade.short &&
         (!trade.lotAt || lot.trade.at === trade.lotAt));
-      if (!opens && !closing.length) return;
+      if (!opens && !closing.length) { skippedTrades.push(trade); return; }
       feesPaid += trade.stampDutyChf;
       yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
       const event = Object.assign({ type: trade.side }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
@@ -679,6 +685,10 @@ const GameEngine = (() => {
       const gainsTaxChf = trade.gainsTaxChf || 0;
       const purchaseCostsChf = trade.purchaseCostsChf || 0;
       const mortgageChf = trade.mortgageChf || 0;
+      if (trade.side === 'sell') {
+        const held = positions[trade.symbol] ? positions[trade.symbol].quantity : 0;
+        if (trade.quantity > held + Math.max(EMPTY_QUANTITY, held * 1e-9)) oversoldTrades.push(trade);
+      }
       const result = applyTrade(positions, trade);
       feesPaid += trade.stampDutyChf + dealerFeeChf + purchaseCostsChf;
       taxesPaid += gainsTaxChf;
@@ -697,7 +707,7 @@ const GameEngine = (() => {
     // A short sale of a holding, or its buyback, first in, first out; every buyback counts as a quick sale. A buyback
     // with nothing shorted (a save edited by hand) is skipped.
     const applyShortTrade = (trade, year) => {
-      if (trade.side === 'buy' && !shorts[trade.symbol]) return;
+      if (trade.side === 'buy' && !shorts[trade.symbol]) { skippedTrades.push(trade); return; }
       feesPaid += trade.stampDutyChf;
       yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
       const event = Object.assign({ type: trade.side }, trade, { dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
@@ -754,7 +764,7 @@ const GameEngine = (() => {
     const applyOptionTrade = (trade, year) => {
       const option = trade.option;
       const open = trade.optionAt && options.find((item) => item.at === trade.optionAt);
-      if (trade.optionAt && !open) return;
+      if (trade.optionAt && !open) { skippedTrades.push(trade); return; }
       yearVolume[year] = (yearVolume[year] || 0) + trade.amountChf;
       const event = Object.assign({ type: trade.side }, trade, { stampDutyChf: 0, dealerFeeChf: 0, gainsTaxChf: 0, purchaseCostsChf: 0, mortgageChf: 0, mortgageRepaidChf: 0 });
       events.push(event);
@@ -869,8 +879,10 @@ const GameEngine = (() => {
         cash += (lot.trade.amountChf + lot.trade.stampDutyChf) * share;
         feesPaid -= lot.trade.stampDutyChf * share;
         yearVolume[year] -= lot.trade.amountChf * share;
-        if (share >= 1 - EMPTY_QUANTITY) events.splice(events.indexOf(lot.event), 1);
-        else {
+        if (share >= 1 - EMPTY_QUANTITY) {
+          events.splice(events.indexOf(lot.event), 1);
+          revertedTrades.push(lot.trade);
+        } else {
           lot.event.quantity -= lot.quantity;
           lot.event.amountChf -= lot.trade.amountChf * share;
           lot.event.stampDutyChf -= lot.trade.stampDutyChf * share;
@@ -1033,6 +1045,9 @@ const GameEngine = (() => {
       trader: { status: ['private', 'review', 'risk'][failedRules], shortSales: shortSales, volumeMultiple: volumeMultiple },
       dayTrades: openDayPositions(openDayLots),
       dayTradeProfitChf: dayTradeProfitChf,
+      skippedTrades: skippedTrades,
+      revertedTrades: revertedTrades,
+      oversoldTrades: oversoldTrades,
       loanChf: loanChf,
       lendingValueChf: lendingValueOn(untilDate),
       // Each short: units, what the sale got (soldChf) and its duty, the collateral held and what buying back costs now.

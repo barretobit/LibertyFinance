@@ -92,6 +92,8 @@ const GamePage = {
   sellOrder: null,
   // True while reached orders are being saved as trades.
   settlingOrders: false,
+  // The findings of the save file check (GameValidation.inspect) of the open game, null until CHECK FILE is pressed.
+  fileCheck: null,
 };
 // Day trading chart zooms: how much time the chart shows, null for the whole session.
 const GAME_DAY_ZOOMS = { '15M': 15 * 60000, '1H': 60 * 60000, '4H': 4 * 60 * 60000, DAY: null };
@@ -315,6 +317,58 @@ async function gameStartNew(difficulty) {
   gameRender();
 }
 
+// ---------- Save file check ----------
+
+// What the last check found, grouped: fixes first, each with how many and which, then the warnings.
+function gameRenderFileCheck() {
+  const container = document.getElementById('game-check-result');
+  const findings = GamePage.fileCheck;
+  if (!findings) { container.innerHTML = ''; return; }
+  if (!findings.length) { container.innerHTML = '<div class="game-check-clean">NOTHING FOUND: THIS FILE IS CLEAN</div>'; return; }
+  const shownDetails = 5;
+  const lines = GameValidation.summarize(findings).map((group) => {
+    const details = group.details.slice(0, shownDetails).map(escapeHtml).join(' · ') +
+      (group.details.length > shownDetails ? ' · ' + (group.details.length - shownDetails) + ' MORE' : '');
+    return '<li class="game-check-' + group.kind + '"><span class="game-check-count">' + group.count + '×</span> ' + escapeHtml(group.text) +
+      (group.changesResults ? ' <span class="game-check-moves">CHANGES YOUR NUMBERS</span>' : '') +
+      '<div class="game-check-details">' + details + '</div></li>';
+  });
+  const fixes = findings.filter((finding) => finding.kind === 'fix').length;
+  container.innerHTML = '<ul class="game-check-list">' + lines.join('') + '</ul>' + (fixes
+    ? '<button class="btn btn-gta btn-sm" id="game-clean-btn">CLEAN FILE</button>' +
+      '<div class="game-check-details mt-1">APPLIES THE ' + fixes + ' FIXES. A COPY OF THE FILE IS KEPT FIRST. WARNINGS STAY AS THEY ARE.</div>'
+    : '<div class="game-check-details">NOTHING TO CLEAN: THE WARNINGS NEED A LOOK FROM YOU.</div>');
+  if (fixes) document.getElementById('game-clean-btn').onclick = gameCleanFile;
+}
+
+function gameCheckFile() {
+  GamePage.fileCheck = GameValidation.inspect(GamePage.game, GamePage.market, new Date().toISOString());
+  gameRenderFileCheck();
+}
+
+// Applies the fixes to the open save, checked again now so orders filled since are counted, after keeping a copy.
+async function gameCleanFile() {
+  const game = GamePage.game;
+  const findings = GameValidation.inspect(game, GamePage.market, new Date().toISOString());
+  const fixes = findings.filter((finding) => finding.kind === 'fix').length;
+  if (!fixes) { gameCheckFile(); return; }
+  const fixed = GameValidation.repair(game, findings);
+  let backupFile;
+  try {
+    backupFile = await GameSaves.backup(GamePage.saveFile, game);
+    await GameSaves.write(GamePage.saveFile, fixed);
+  } catch (error) {
+    gameToast('COULD NOT CLEAN THE FILE: ' + (error.message || error));
+    return;
+  }
+  GamePage.game = fixed;
+  const save = GamePage.saves.find((item) => item.file === GamePage.saveFile);
+  if (save) save.game = fixed;
+  gameToast('FILE CLEANED: ' + fixes + ' FIXES. COPY KEPT AS ' + GameSaves.FOLDER + '/' + backupFile);
+  gameRender();
+  gameCheckFile();
+}
+
 // ---------- Rendering ----------
 
 function gameShow(view) {
@@ -335,6 +389,7 @@ function gameRenderHeader() {
   const folder = GameSaves.folderName();
   select.title = 'Saved as ' + (folder ? folder + '/' : '') + GameSaves.FOLDER + '/' + (GamePage.saveFile || '');
   document.getElementById('game-reset-btn').style.display = game && GamePage.view === 'board' ? '' : 'none';
+  document.getElementById('game-check-btn').style.display = game && GamePage.view === 'board' ? '' : 'none';
   document.getElementById('game-save-details').textContent = game
     ? GameEngine.DIFFICULTIES[game.difficulty].label + ' · SINCE ' + formatDate(game.startDate)
     : '';
@@ -1849,13 +1904,19 @@ function gameBindControls() {
   document.getElementById('game-save').onchange = (event) => { savesDialog().hide(); gameOpenSave(event.target.value); };
   document.getElementById('game-new-btn').onclick = () => { savesDialog().hide(); GamePage.view = 'start'; gameRender(); };
   document.getElementById('game-start-back').onclick = () => { GamePage.view = 'board'; gameRender(); };
+  // A check is about the file as it was when it ran, so the dialog opens without one.
+  document.getElementById('game-saves-modal').addEventListener('show.bs.modal', () => { GamePage.fileCheck = null; gameRenderFileCheck(); });
+  document.getElementById('game-check-btn').onclick = gameCheckFile;
   document.getElementById('game-reset-btn').onclick = async () => {
     const game = GamePage.game;
     if (!confirm('Start "' + game.name + '" again from today? All its trades and history are deleted.')) return;
     savesDialog().hide();
-    const before = { startDate: game.startDate, trades: game.trades };
+    // Orders and dividend settings belong to the old game too: kept, an order could fill into the new one.
+    const before = { startDate: game.startDate, trades: game.trades, orders: game.orders, reinvestPeriods: game.reinvestPeriods };
     game.startDate = todayIsoDate();
     game.trades = [];
+    game.orders = [];
+    delete game.reinvestPeriods;
     try {
       await gameWriteCurrent();
     } catch (error) {

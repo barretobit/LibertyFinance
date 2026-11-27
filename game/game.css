@@ -391,3 +391,30 @@
 .game-badge-tax { color: #ff3333; }
 .game-badge-month { color: var(--text-secondary); }
 .game-badge-dividend { color: #4da6ff; }
+
+/* Save file check in the Games dialog */
+.game-check-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 8px;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+.game-check-list li {
+  padding: 6px 0;
+  border-top: 1px solid var(--border-color);
+}
+.game-check-fix .game-check-count { color: var(--accent); }
+.game-check-warning .game-check-count,
+.game-check-moves { color: var(--danger); }
+.game-check-details {
+  color: var(--text-muted);
+  font-size: 11px;
+  word-break: break-word;
+}
+.game-check-clean {
+  margin-top: 12px;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
